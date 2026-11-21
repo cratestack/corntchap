@@ -181,6 +181,9 @@ enum TaskCmd {
         /// Only take work from this menu (milestone key).
         #[arg(long)]
         menu: Option<String>,
+        /// The station (st_…) this session is, as the wake prompt says: records which session holds the task.
+        #[arg(long)]
+        station: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -1058,13 +1061,20 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             project,
             labels,
             menu,
+            station,
             ..
-        } => out(&api
-            .post(
-                &format!("/projects/{}/claim-next", project.to_uppercase()),
-                menu::claim_next_body(&labels, menu.as_deref()),
-            )
-            .await?),
+        } => {
+            let mut body = menu::claim_next_body(&labels, menu.as_deref());
+            if let Some(st) = station {
+                body["station"] = json!(st);
+            }
+            out(&api
+                .post(
+                    &format!("/projects/{}/claim-next", project.to_uppercase()),
+                    body,
+                )
+                .await?)
+        }
         TaskCmd::Claim { id, .. } => {
             out(&api.post(&format!("/tasks/{id}/claim"), json!({})).await?)
         }
