@@ -106,6 +106,8 @@ pub enum Msg {
     Me(Result<String, String>),
     Projects(Result<Value, String>),
     Tasks(String, Result<Value, String>),
+    /// The menus of a project; failures are ignored (an older server has none).
+    Menus(String, Result<Value, String>),
     Detail(String, Result<Value, String>),
     Memories(String, Result<Value, String>),
     Memory(String, String, Result<Value, String>),
@@ -121,6 +123,8 @@ pub struct App {
     /// Project key the `tasks` list belongs to.
     pub tasks_for: Option<String>,
     pub sel_task: usize,
+    /// Menus (milestones) of the selected project.
+    pub menus: Vec<Value>,
     pub detail: Option<Value>,
     pub item_sel: Option<usize>,
     pub view: View,
@@ -150,6 +154,7 @@ impl App {
             tasks: vec![],
             tasks_for: None,
             sel_task: 0,
+            menus: vec![],
             detail: None,
             item_sel: None,
             view: View::Board,
@@ -297,6 +302,15 @@ impl App {
                     vec![]
                 }
             },
+            Msg::Menus(key, r) => {
+                if self.project_key().as_deref() == Some(&key) {
+                    self.menus = r
+                        .ok()
+                        .and_then(|v| v.as_array().cloned())
+                        .unwrap_or_default();
+                }
+                vec![]
+            }
             Msg::Detail(id, r) => {
                 match r {
                     Ok(v) if self.task_id().as_deref() == Some(&id) => {
@@ -403,6 +417,7 @@ impl App {
         self.sel_task = 0;
         self.item_sel = None;
         self.tasks.clear();
+        self.menus.clear();
         self.tasks_for = None;
         self.detail = None;
         self.sel_memory = 0;
@@ -837,6 +852,9 @@ fn draw_tasks(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             Span::raw(t["title"].as_str().unwrap_or("").to_string()),
             Span::styled(progress(t), th.fg(Color::Green)),
         ];
+        if let Some(m) = t["menu"].as_str() {
+            spans.push(Span::styled(format!("  ◆{m}"), th.fg(Color::Magenta)));
+        }
         if let Some(h) = t["claimed_by"].as_str() {
             spans.push(Span::styled(format!("  @{h}"), th.fg(Color::Yellow)));
         }
@@ -846,8 +864,15 @@ fn draw_tasks(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
         items.push(ListItem::new(Line::from(spans)));
     }
     let mut state = ListState::default().with_selected(sel_row);
+    let mut block = pane_block(th, title, on);
+    if let Some(line) = menus_line(&app.menus) {
+        block = block.title_bottom(Line::from(Span::styled(
+            format!(" {line} "),
+            th.fg(Color::Magenta),
+        )));
+    }
     let list = List::new(items)
-        .block(pane_block(th, title, on))
+        .block(block)
         .highlight_style(th.selected(on));
     f.render_stateful_widget(list, area, &mut state);
     if app.tasks.is_empty() && app.project_key().is_some() && app.tasks_for.is_some() {
@@ -856,6 +881,23 @@ fn draw_tasks(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             area.inner(ratatui::layout::Margin::new(2, 1)),
         );
     }
+}
+
+/// Compact progress of the open menus for the task pane's bottom border: `◆ mvp ██░░░░ 3/8 · beta …`.
+fn menus_line(menus: &[Value]) -> Option<String> {
+    let parts: Vec<String> = menus
+        .iter()
+        .filter(|m| m["status"] != "served")
+        .take(3)
+        .map(|m| {
+            format!(
+                "{} {}",
+                m["key"].as_str().unwrap_or("?"),
+                crate::ui::menu_bar(m, 6)
+            )
+        })
+        .collect();
+    (!parts.is_empty()).then(|| format!("◆ {}", parts.join(" · ")))
 }
 
 fn tags_text(m: &Value) -> Option<String> {
@@ -1032,6 +1074,13 @@ fn draw_detail(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
                     .map(|h| format!("  held by {h}"))
                     .unwrap_or_default(),
                 th.fg(Color::Yellow),
+            ),
+            Span::styled(
+                d["menu"]
+                    .as_str()
+                    .map(|m| format!("  menu {m}"))
+                    .unwrap_or_default(),
+                th.fg(Color::Magenta),
             ),
         ]),
     ];
@@ -1290,7 +1339,9 @@ fn dispatch(api: &Api, app: &App, tx: &UnboundedSender<Msg>, action: Action) {
                 let _ = tx.send(Msg::Projects(api.get("/projects").await.map_err(err)));
                 if let Some(k) = pk {
                     let r = api.get(&format!("/projects/{k}/tasks")).await.map_err(err);
-                    let _ = tx.send(Msg::Tasks(k, r));
+                    let _ = tx.send(Msg::Tasks(k.clone(), r));
+                    let r = api.get(&format!("/projects/{k}/menus")).await.map_err(err);
+                    let _ = tx.send(Msg::Menus(k, r));
                 }
                 if let Some(id) = tid {
                     let r = api.get(&format!("/tasks/{id}")).await.map_err(err);
@@ -1333,7 +1384,9 @@ fn dispatch(api: &Api, app: &App, tx: &UnboundedSender<Msg>, action: Action) {
         Action::LoadTasks(k) => {
             tokio::spawn(async move {
                 let r = api.get(&format!("/projects/{k}/tasks")).await.map_err(err);
-                let _ = tx.send(Msg::Tasks(k, r));
+                let _ = tx.send(Msg::Tasks(k.clone(), r));
+                let r = api.get(&format!("/projects/{k}/menus")).await.map_err(err);
+                let _ = tx.send(Msg::Menus(k, r));
             });
         }
         Action::LoadDetail(id) => {
@@ -1586,6 +1639,34 @@ mod tests {
             s.contains("as octo") && s.contains("not refreshed yet") || s.contains("refreshed"),
             "{s}"
         );
+    }
+
+    #[test]
+    fn tasks_and_detail_show_their_menu_and_the_pot_shows_menu_progress() {
+        let mut app = fixture();
+        app.update(Msg::Tasks(
+            "PAY".into(),
+            Ok(json!([{"id":"PAY-1","title":"Open one","status":"open","menu":"mvp","total_items":0,"open_items":0}])),
+        ));
+        app.update(Msg::Menus(
+            "PAY".into(),
+            Ok(json!([
+                {"key":"mvp","name":"MVP","status":"open","total":8,"done":3},
+                {"key":"old","name":"Old","status":"served","total":2,"done":2}
+            ])),
+        ));
+        let out = render(&app, 100, 24);
+        assert!(out.contains("◆mvp"), "{out}");
+        assert!(out.contains("mvp ██░░░░ 3/8"), "{out}");
+        assert!(!out.contains("old"), "served menus are not shown: {out}");
+        // a stale answer for another project is ignored
+        app.update(Msg::Menus("WEB".into(), Ok(json!([]))));
+        assert_eq!(app.menus.len(), 2);
+        app.update(Msg::Detail(
+            "PAY-1".into(),
+            Ok(json!({"id":"PAY-1","title":"Open one","status":"open","priority":1,"menu":"mvp"})),
+        ));
+        assert!(render(&app, 100, 24).contains("menu mvp"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 mod api;
+mod menu;
 mod opencode;
 mod pantry;
 mod relay;
@@ -72,10 +73,13 @@ enum Cmd {
     /// The pantry: what a pot's cooks and people have learned (conventions, gotchas, decisions, how-tos), saved under stable keys.
     #[command(subcommand, name = "pantry", alias = "memory")]
     Pantry(pantry::PantryCmd),
+    /// Menus (milestones): group a pot's tasks and watch them get served.
+    #[command(subcommand, name = "menu", alias = "milestone")]
+    Menu(menu::MenuCmd),
     /// The cooks (agents): create, set up, wake targets.
     #[command(subcommand, name = "cook", alias = "agent")]
     Agent(AgentCmd),
-    /// Keep the fire lit: the relay that wakes your local cooks when new work lands (subcommands: init, install, doctor, enroll).
+    /// Keep the fire lit: the relay that wakes your local cooks when new work lands (subcommands: init, install, uninstall, doctor, enroll).
     #[command(name = "fire", alias = "relay")]
     Relay {
         #[command(subcommand)]
@@ -94,6 +98,9 @@ enum TaskCmd {
         ready: bool,
         #[arg(long)]
         label: Option<String>,
+        /// Only tasks on this menu (`-` for tasks on no menu).
+        #[arg(long, allow_hyphen_values = true)]
+        menu: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -113,6 +120,27 @@ enum TaskCmd {
         parent: Option<String>,
         #[arg(long)]
         priority: Option<i64>,
+        /// Put it on this menu (milestone key).
+        #[arg(long)]
+        menu: Option<String>,
+    },
+    /// Change a task's title, body, labels (replaced), priority or menu.
+    Edit {
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        #[arg(long)]
+        priority: Option<i64>,
+        /// Move it to this menu ("" takes it off its menu).
+        #[arg(long, conflicts_with = "no_menu")]
+        menu: Option<String>,
+        /// Take it off its menu.
+        #[arg(long)]
+        no_menu: bool,
     },
     /// Show one task.
     Show {
@@ -138,6 +166,9 @@ enum TaskCmd {
         project: String,
         #[arg(long = "label")]
         labels: Vec<String>,
+        /// Only take work from this menu (milestone key).
+        #[arg(long)]
+        menu: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -359,6 +390,15 @@ enum RelayCmd {
     },
     /// Write a systemd user unit (Linux) or launchd agent (macOS).
     Install,
+    /// Put the fire out: stop and disable the service and delete the unit/agent `fire install` wrote.
+    Uninstall {
+        /// Also remove config.toml, relay-state.json and the relay credential (your own login stays).
+        #[arg(long)]
+        purge: bool,
+        /// Do not ask first.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// Consult the marabout about the fire: the server, the credential and each target.
     #[command(alias = "marabou")]
     Doctor,
@@ -407,6 +447,7 @@ async fn main() -> Result<()> {
             None => relay::run(Api::from_creds(true)?).await,
             Some(RelayCmd::Init { force }) => relay::init(force),
             Some(RelayCmd::Install) => relay::install(),
+            Some(RelayCmd::Uninstall { purge, yes }) => relay::uninstall(purge, yes),
             Some(RelayCmd::Doctor) => relay::doctor(false).await,
             Some(RelayCmd::Enroll { name }) => enroll(&name).await,
             Some(RelayCmd::Poke { cook, pot }) => relay::poke(&cook, &pot.to_uppercase()).await,
@@ -684,6 +725,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
             show(&api.get("/projects").await?, json, ui::projects_table);
         }
         Cmd::Pantry(p) => pantry::run(p, &api).await?,
+        Cmd::Menu(c) => menu::run(c, &api).await?,
         Cmd::Agent(a) => agent(a, &api).await?,
         Cmd::Login { .. } | Cmd::Logout { .. } | Cmd::Doctor | Cmd::Relay { .. } => unreachable!(),
     }
@@ -878,25 +920,16 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             status,
             ready,
             label,
+            menu,
             json,
         } => {
-            let mut q = vec![];
-            if let Some(s) = status {
-                q.push(format!("status={s}"));
-            }
-            if let Some(l) = label {
-                q.push(format!("label={l}"));
-            }
-            if ready {
-                q.push("ready_only=true".into());
-            }
-            let v = api
-                .get(&format!(
-                    "/projects/{}/tasks?{}",
-                    project.to_uppercase(),
-                    q.join("&")
-                ))
-                .await?;
+            let params =
+                menu::task_ls_params(status.as_deref(), label.as_deref(), menu.as_deref(), ready);
+            let r = api.raw(
+                reqwest::Method::GET,
+                &format!("/projects/{}/tasks", project.to_uppercase()),
+            );
+            let v = api.send(r.query(&params)).await?;
             show(&v, json, ui::tasks_table);
         }
         TaskCmd::Add {
@@ -908,9 +941,42 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             depends_on,
             parent,
             priority,
+            menu,
         } => {
-            let v = api.post(&format!("/projects/{}/tasks", project.to_uppercase()), json!({"title": title, "body": body, "items": items, "labels": labels, "depends_on": depends_on, "parent": parent, "priority": priority})).await?;
+            let v = api.post(&format!("/projects/{}/tasks", project.to_uppercase()), json!({"title": title, "body": body, "items": items, "labels": labels, "depends_on": depends_on, "parent": parent, "priority": priority, "menu": menu})).await?;
             ok_line(format!("created {}", s(&v, "id")));
+        }
+        TaskCmd::Edit {
+            id,
+            title,
+            body,
+            labels,
+            priority,
+            menu,
+            no_menu,
+        } => {
+            let b = menu::task_edit_body(
+                title.as_deref(),
+                body.as_deref(),
+                &labels,
+                priority,
+                menu.as_deref(),
+                no_menu,
+            );
+            if b.as_object().is_some_and(|m| m.is_empty()) {
+                return Err(anyhow!(
+                    "nothing to change: pass --title, --body, --label, --priority, --menu or --no-menu"
+                ));
+            }
+            let v = api.patch(&format!("/tasks/{id}"), b).await?;
+            ok_line(format!(
+                "{} updated{}",
+                s(&v, "id"),
+                v["menu"]
+                    .as_str()
+                    .map(|m| format!(" (menu {m})"))
+                    .unwrap_or_default()
+            ));
         }
         TaskCmd::Show { id, json } => {
             let v = api.get(&format!("/tasks/{id}")).await?;
@@ -935,11 +1001,14 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             ok_line(format!("{id} cancelled"));
         }
         TaskCmd::ClaimNext {
-            project, labels, ..
+            project,
+            labels,
+            menu,
+            ..
         } => out(&api
             .post(
                 &format!("/projects/{}/claim-next", project.to_uppercase()),
-                json!({"labels": labels}),
+                menu::claim_next_body(&labels, menu.as_deref()),
             )
             .await?),
         TaskCmd::Claim { id, .. } => {
