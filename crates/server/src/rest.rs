@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::{Error, Result},
+    pantry,
     service::{self, NewTask, TaskEdit},
     state::{AppState, Principal},
     stream,
@@ -34,6 +35,11 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/{key}/claim-next", post(claim_next))
         .route("/projects/{key}/digest", get(digest))
         .route("/projects/{key}/board", get(board))
+        .route("/projects/{key}/pantry", get(pantry_list).post(pantry_save))
+        .route(
+            "/projects/{key}/pantry/{mkey}",
+            get(pantry_get).put(pantry_put).delete(pantry_forget),
+        )
         .route("/tasks/{id}", get(task_get).patch(task_patch))
         .route("/tasks/{id}/claim", post(task_claim))
         .route("/tasks/{id}/heartbeat", post(task_heartbeat))
@@ -227,6 +233,74 @@ async fn digest(
 }
 async fn board(State(st): State<AppState>, Authn(p): Auth, Path(k): Path<String>) -> J {
     ok(json!({"markdown": service::board_markdown(&st.db, &p.worker()?, &k.to_uppercase()).await?}))
+}
+
+// ---- the pantry (shared memory per project) ----
+/// `?q=&kind=&tags=a,b&limit=`; `?format=markdown` returns the digest `{markdown}`.
+async fn pantry_list(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    let p = p.worker()?;
+    if q.get("format").map(String::as_str) == Some("markdown") {
+        return ok(json!({"markdown": pantry::digest(&st.db, &p, &k).await?}));
+    }
+    let r = pantry::Recall {
+        project: k,
+        query: q.get("q").cloned(),
+        kind: q.get("kind").cloned(),
+        tags: q
+            .get("tags")
+            .map(|t| t.split(',').map(|x| x.trim().to_string()).collect())
+            .unwrap_or_default(),
+        limit: q.get("limit").and_then(|v| v.parse().ok()),
+    };
+    ok(pantry::recall(&st.db, &p, r).await?)
+}
+fn remember_body(project: String, key: Option<String>, b: &Value) -> Result<pantry::Remember> {
+    Ok(pantry::Remember {
+        project,
+        key: key.or_else(|| s(b, "key")),
+        title: s(b, "title").unwrap_or_default(),
+        body: req_s(b, "body")?,
+        kind: s(b, "kind"),
+        tags: b.get("tags").map(|_| arr(b, "tags")),
+        task: s(b, "task"),
+        append: b["append"].as_bool().unwrap_or(false),
+        revision: i(b, "revision"),
+    })
+}
+async fn pantry_save(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(pantry::remember(&st.db, &p.worker()?, remember_body(k, None, &b)?).await?)
+}
+async fn pantry_put(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path((k, mk)): Path<(String, String)>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(pantry::remember(&st.db, &p.worker()?, remember_body(k, Some(mk), &b)?).await?)
+}
+async fn pantry_get(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path((k, mk)): Path<(String, String)>,
+) -> J {
+    ok(pantry::get(&st.db, &p.worker()?, &k, &mk).await?)
+}
+async fn pantry_forget(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path((k, mk)): Path<(String, String)>,
+) -> J {
+    ok(pantry::forget(&st.db, &p.worker()?, &k, &mk).await?)
 }
 
 async fn task_get(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {

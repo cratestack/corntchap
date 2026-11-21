@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     error::Error,
+    pantry,
     schema::cratestack_schema::{self, procedures::*},
     service,
     state::{AppState, Principal},
@@ -416,5 +417,83 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<cancel_task::Output, CratestackError> {
         let p = principal(ctx)?;
         typed(service::human_transition(&self.state.db, &p, &a.id, "cancel").await)
+    }
+
+    async fn memory_recall(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: memory_recall::Args,
+        _z: memory_recall::Authorized,
+    ) -> Result<memory_recall::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let r = pantry::Recall {
+            project: a.project,
+            query: a.query,
+            kind: a.kind,
+            tags: csv(&a.tags),
+            limit: a.limit,
+        };
+        typed(pantry::recall(&self.state.db, &p, r).await)
+    }
+
+    async fn memory_get(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: memory_get::Args,
+        _z: memory_get::Authorized,
+    ) -> Result<memory_get::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(pantry::get(&self.state.db, &p, &a.project, &a.key).await)
+    }
+
+    async fn memory_digest(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: memory_digest::Args,
+        _z: memory_digest::Authorized,
+    ) -> Result<memory_digest::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            pantry::digest(&self.state.db, &p, &a.project)
+                .await
+                .map(|m| serde_json::json!({"markdown": m})),
+        )
+    }
+
+    async fn memory_remember(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: memory_remember::Args,
+        _z: memory_remember::Authorized,
+    ) -> Result<memory_remember::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let tags = a.tags.as_ref().map(|_| csv(&a.tags));
+        let r = pantry::Remember {
+            project: a.project,
+            key: a.key,
+            title: a.title.unwrap_or_default(),
+            body: a.body,
+            kind: a.kind,
+            tags,
+            task: a.task,
+            append: a.append.unwrap_or(false),
+            revision: a.revision,
+        };
+        typed(pantry::remember(&self.state.db, &p, r).await)
+    }
+
+    async fn memory_forget(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: memory_forget::Args,
+        _z: memory_forget::Authorized,
+    ) -> Result<memory_forget::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(pantry::forget(&self.state.db, &p, &a.project, &a.key).await)
     }
 }

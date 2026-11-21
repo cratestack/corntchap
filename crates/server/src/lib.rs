@@ -7,6 +7,7 @@ pub mod error;
 pub mod jobs;
 pub mod mcp_compat;
 pub mod pages;
+pub mod pantry;
 pub mod procs;
 pub mod rest;
 pub mod service;
