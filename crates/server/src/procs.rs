@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 //! The cratestack procedure registry: each MCP tool is a thin adapter onto `service`.
 
-use cratestack::{CratestackContext, CratestackError, Json, Value};
+use cratestack::{CratestackContext, CratestackError, Value};
 use uuid::Uuid;
 
 use crate::{
@@ -37,7 +37,6 @@ fn lines(v: &Option<String>) -> Vec<String> {
 }
 
 type Db = cratestack_schema::Cratestack;
-type Res = Result<Json<Value>, CratestackError>;
 
 #[derive(Clone)]
 pub struct Procedures {
@@ -51,7 +50,7 @@ pub fn ctx_fields(p: &Principal) -> Vec<(String, Value)> {
         ("name".to_string(), Value::String(p.name.clone())),
         ("kind".to_string(), Value::String(p.kind.clone())),
         ("isAdmin".to_string(), Value::Bool(p.is_admin)),
-        ("maxLeases".to_string(), Value::Int(p.max_leases as i64)),
+        ("maxLeases".to_string(), Value::Int(p.max_leases)),
     ];
     if let Some(o) = p.owner_id {
         f.push(("ownerId".to_string(), Value::String(o.to_string())));
@@ -82,7 +81,7 @@ fn principal(ctx: &CratestackContext) -> Result<Principal, CratestackError> {
         kind: field_str(ctx, "kind").ok_or_else(bad)?,
         is_admin: matches!(ctx.auth_field("isAdmin"), Some(Value::Bool(true))),
         max_leases: match ctx.auth_field("maxLeases") {
-            Some(Value::Int(n)) => *n as i32,
+            Some(Value::Int(n)) => *n,
             _ => 1,
         },
         owner_id: field_str(ctx, "ownerId").and_then(|s| s.parse::<Uuid>().ok()),
@@ -109,8 +108,14 @@ pub fn map_err(e: Error) -> CratestackError {
     }
 }
 
-fn out(r: crate::error::Result<serde_json::Value>) -> Res {
-    r.map(|v| Json(Value::from_plain_json(v))).map_err(map_err)
+fn typed<T: serde::de::DeserializeOwned>(
+    r: crate::error::Result<serde_json::Value>,
+) -> Result<T, CratestackError> {
+    let v = r.map_err(map_err)?;
+    serde_json::from_value(v).map_err(|e| {
+        tracing::error!("typed procedure output does not match the schema: {e}");
+        CratestackError::Internal("internal error".into())
+    })
 }
 
 impl ProcedureRegistry for Procedures {
@@ -120,50 +125,52 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         _a: whoami::Args,
         _z: whoami::Authorized,
-    ) -> Res {
+    ) -> Result<whoami::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::whoami(&self.state.db, &p).await)
+        typed(service::whoami(&self.state.db, &p).await)
     }
 
-    async fn list_projects(
+    async fn project_overview(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        _a: list_projects::Args,
-        _z: list_projects::Authorized,
-    ) -> Res {
+        _a: project_overview::Args,
+        _z: project_overview::Authorized,
+    ) -> Result<project_overview::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::list_projects(&self.state.db, &p).await)
+        typed(service::list_projects(&self.state.db, &p).await)
     }
 
-    async fn list_tasks(
+    async fn project_tasks(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        a: list_tasks::Args,
-        _z: list_tasks::Authorized,
-    ) -> Res {
+        a: project_tasks::Args,
+        _z: project_tasks::Authorized,
+    ) -> Result<project_tasks::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::list_tasks(
-            &self.state.db,
-            &p,
-            &a.project.to_uppercase(),
-            a.status.as_deref(),
-            a.label.as_deref(),
-            a.readyOnly.unwrap_or(false),
+        typed(
+            service::list_tasks(
+                &self.state.db,
+                &p,
+                &a.project.to_uppercase(),
+                a.status.as_deref(),
+                a.label.as_deref(),
+                a.readyOnly.unwrap_or(false),
+            )
+            .await,
         )
-        .await)
     }
 
-    async fn get_task(
+    async fn task_detail(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        a: get_task::Args,
-        _z: get_task::Authorized,
-    ) -> Res {
+        a: task_detail::Args,
+        _z: task_detail::Authorized,
+    ) -> Result<task_detail::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::get_task(&self.state.db, &p, &a.id).await)
+        typed(service::get_task(&self.state.db, &p, &a.id).await)
     }
 
     async fn get_board(
@@ -172,9 +179,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: get_board::Args,
         _z: get_board::Authorized,
-    ) -> Res {
+    ) -> Result<get_board::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(
+        typed(
             service::board_markdown(&self.state.db, &p, &a.project.to_uppercase())
                 .await
                 .map(|m| serde_json::json!({"markdown": m})),
@@ -187,59 +194,65 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: get_task_markdown::Args,
         _z: get_task_markdown::Authorized,
-    ) -> Res {
+    ) -> Result<get_task_markdown::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::task_markdown_for(&self.state.db, &p, &a.id)
-            .await
-            .map(|m| serde_json::json!({"markdown": m})))
-    }
-
-    async fn create_task(
-        &self,
-        _db: &Db,
-        ctx: &CratestackContext,
-        a: create_task::Args,
-        _z: create_task::Authorized,
-    ) -> Res {
-        let p = principal(ctx)?;
-        out(service::create_task(
-            &self.state.db,
-            &p,
-            service::NewTask {
-                project: a.project.to_uppercase(),
-                title: a.title,
-                body: a.body.unwrap_or_default(),
-                items: lines(&a.items),
-                parent: a.parent,
-                depends_on: csv(&a.dependsOn),
-                labels: csv(&a.labels),
-                priority: a.priority.unwrap_or(0) as i32,
-            },
+        typed(
+            service::task_markdown_for(&self.state.db, &p, &a.id)
+                .await
+                .map(|m| serde_json::json!({"markdown": m})),
         )
-        .await)
     }
 
-    async fn update_task(
+    async fn task_create(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        a: update_task::Args,
-        _z: update_task::Authorized,
-    ) -> Res {
+        a: task_create::Args,
+        _z: task_create::Authorized,
+    ) -> Result<task_create::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            service::create_task(
+                &self.state.db,
+                &p,
+                service::NewTask {
+                    project: a.project.to_uppercase(),
+                    title: a.title,
+                    body: a.body.unwrap_or_default(),
+                    items: lines(&a.items),
+                    parent: a.parent,
+                    depends_on: csv(&a.dependsOn),
+                    labels: csv(&a.labels),
+                    priority: a.priority.unwrap_or(0),
+                },
+            )
+            .await,
+        )
+    }
+
+    async fn task_edit(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: task_edit::Args,
+        _z: task_edit::Authorized,
+    ) -> Result<task_edit::Output, CratestackError> {
         let p = principal(ctx)?;
         let labels = a.labels.as_ref().map(|_| csv(&a.labels));
-        out(service::update_task(
-            &self.state.db,
-            &p,
-            &a.id,
-            service::TaskEdit {
-                title: a.title,
-                body: a.body,
-                labels,
-                priority: a.priority.map(|n| n as i32),
-            },
+        typed(
+            service::update_task(
+                &self.state.db,
+                &p,
+                &a.id,
+                service::TaskEdit {
+                    title: a.title,
+                    body: a.body,
+                    labels,
+                    priority: a.priority,
+                },
+            )
+            .await,
         )
-        .await)
     }
 
     async fn claim_next(
@@ -248,15 +261,17 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: claim_next::Args,
         _z: claim_next::Authorized,
-    ) -> Res {
+    ) -> Result<claim_next::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::claim_next(
-            &self.state.db,
-            &p,
-            &a.project.to_uppercase(),
-            &csv(&a.labels),
+        typed(
+            service::claim_next(
+                &self.state.db,
+                &p,
+                &a.project.to_uppercase(),
+                &csv(&a.labels),
+            )
+            .await,
         )
-        .await)
     }
 
     async fn claim_task(
@@ -265,9 +280,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: claim_task::Args,
         _z: claim_task::Authorized,
-    ) -> Res {
+    ) -> Result<claim_task::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::claim_task(&self.state.db, &p, &a.id).await)
+        typed(service::claim_task(&self.state.db, &p, &a.id).await)
     }
 
     async fn heartbeat(
@@ -276,9 +291,11 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: heartbeat::Args,
         _z: heartbeat::Authorized,
-    ) -> Res {
+    ) -> Result<heartbeat::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::heartbeat(&self.state.db, &p, &a.id, a.epoch, a.ttlS.map(|n| n as f64)).await)
+        typed(
+            service::heartbeat(&self.state.db, &p, &a.id, a.epoch, a.ttlS.map(|n| n as f64)).await,
+        )
     }
 
     async fn check_item(
@@ -287,17 +304,11 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: check_item::Args,
         _z: check_item::Authorized,
-    ) -> Res {
+    ) -> Result<check_item::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::check_item(
-            &self.state.db,
-            &p,
-            &a.id,
-            Some(a.epoch),
-            a.position as i32,
-            a.done,
+        typed(
+            service::check_item(&self.state.db, &p, &a.id, Some(a.epoch), a.position, a.done).await,
         )
-        .await)
     }
 
     async fn comment(
@@ -306,9 +317,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: comment::Args,
         _z: comment::Authorized,
-    ) -> Res {
+    ) -> Result<comment::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::comment(&self.state.db, &p, &a.id, &a.body, a.epoch).await)
+        typed(service::comment(&self.state.db, &p, &a.id, &a.body, a.epoch).await)
     }
 
     async fn complete(
@@ -317,9 +328,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: complete::Args,
         _z: complete::Authorized,
-    ) -> Res {
+    ) -> Result<complete::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::complete(&self.state.db, &p, &a.id, a.epoch, &a.result).await)
+        typed(service::complete(&self.state.db, &p, &a.id, a.epoch, &a.result).await)
     }
 
     async fn release(
@@ -328,9 +339,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: release::Args,
         _z: release::Authorized,
-    ) -> Res {
+    ) -> Result<release::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::release(&self.state.db, &p, &a.id, a.epoch, &a.reason).await)
+        typed(service::release(&self.state.db, &p, &a.id, a.epoch, &a.reason).await)
     }
 
     async fn block(
@@ -339,9 +350,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: block::Args,
         _z: block::Authorized,
-    ) -> Res {
+    ) -> Result<block::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::block(&self.state.db, &p, &a.id, a.epoch, &a.reason).await)
+        typed(service::block(&self.state.db, &p, &a.id, a.epoch, &a.reason).await)
     }
 
     async fn changes_since(
@@ -350,17 +361,19 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: changes_since::Args,
         _z: changes_since::Authorized,
-    ) -> Res {
+    ) -> Result<changes_since::Output, CratestackError> {
         let p = principal(ctx)?;
         let project = a.project.map(|k| k.to_uppercase());
-        out(service::changes_since(
-            &self.state.db,
-            &p,
-            a.cursor,
-            project.as_deref(),
-            a.limit.unwrap_or(200),
+        typed(
+            service::changes_since(
+                &self.state.db,
+                &p,
+                a.cursor,
+                project.as_deref(),
+                a.limit.unwrap_or(200),
+            )
+            .await,
         )
-        .await)
     }
 
     async fn wait_for_work(
@@ -369,15 +382,39 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: wait_for_work::Args,
         _z: wait_for_work::Authorized,
-    ) -> Res {
+    ) -> Result<wait_for_work::Output, CratestackError> {
         let p = principal(ctx)?;
         let project = a.project.map(|k| k.to_uppercase());
-        out(stream::wait_for_work(
-            &self.state,
-            &p,
-            project.as_deref(),
-            a.timeoutS.unwrap_or(30),
+        typed(
+            stream::wait_for_work(
+                &self.state,
+                &p,
+                project.as_deref(),
+                a.timeoutS.unwrap_or(30),
+            )
+            .await,
         )
-        .await)
+    }
+
+    async fn unblock_task(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: unblock_task::Args,
+        _z: unblock_task::Authorized,
+    ) -> Result<unblock_task::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(service::human_transition(&self.state.db, &p, &a.id, "unblock").await)
+    }
+
+    async fn cancel_task(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: cancel_task::Args,
+        _z: cancel_task::Authorized,
+    ) -> Result<cancel_task::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(service::human_transition(&self.state.db, &p, &a.id, "cancel").await)
     }
 }

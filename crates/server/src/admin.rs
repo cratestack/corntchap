@@ -250,7 +250,7 @@ pub async fn create_principal(
     name: &str,
     agent_kind: Option<&str>,
     runtime: Option<&str>,
-    max_leases: Option<i32>,
+    max_leases: Option<i64>,
     owner: Option<&str>,
 ) -> Result<Value> {
     if !p.is_user() {

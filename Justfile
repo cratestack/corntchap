@@ -158,3 +158,11 @@ mcp-check-ts project="DEMO":
 install:
     cargo install --locked --path crates/cli
     cargo install --locked --path crates/server
+
+# Regenerate the TypeScript client (+ refine resource manifest) for the console from the schema.
+# `just gen-client --check` only reports drift (CI guard). Needs node/npx; the cratestack binary
+# is fetched by npm at the same version as the Rust crates.
+gen-client *flags:
+    npx --yes @cratestack/cli@0.20.6 generate-typescript \
+      --schema crates/server/schema/corntchap.cstack --out console/src/gen \
+      --package-name @corntchap/api --base-path /api/v2 --refine "$@"

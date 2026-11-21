@@ -56,7 +56,7 @@ pub struct Principal {
     pub name: String,
     pub owner_id: Option<Uuid>,
     pub is_admin: bool,
-    pub max_leases: i32,
+    pub max_leases: i64,
     pub runtime: Option<String>,
     pub agent_kind: Option<String>,
     /// The bearer token this request authenticated with (None for sessions and MCP contexts).

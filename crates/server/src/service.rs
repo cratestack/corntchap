@@ -63,12 +63,12 @@ pub async fn project_by_key(c: &mut PgConnection, p: &Principal, key: &str) -> R
         .ok_or_else(|| Error::NotFound(format!("project {key} not found")))
 }
 
-pub fn parse_task_ref(s: &str) -> Result<(String, i32)> {
+pub fn parse_task_ref(s: &str) -> Result<(String, i64)> {
     let (k, n) = s
         .trim()
         .rsplit_once('-')
         .ok_or_else(|| Error::Invalid(format!("bad task id {s:?}, expected like PAY-42")))?;
-    let n: i32 = n
+    let n: i64 = n
         .parse()
         .map_err(|_| Error::Invalid(format!("bad task id {s:?}, expected like PAY-42")))?;
     Ok((k.to_uppercase(), n))
@@ -79,7 +79,7 @@ pub struct TaskRef {
     pub id: Uuid,
     pub project_id: Uuid,
     pub key: String,
-    pub number: i32,
+    pub number: i64,
     pub status: String,
     pub claimed_by: Option<Uuid>,
     pub lease_epoch: i64,
@@ -242,7 +242,7 @@ pub struct NewTask {
     pub parent: Option<String>,
     pub depends_on: Vec<String>,
     pub labels: Vec<String>,
-    pub priority: i32,
+    pub priority: i64,
 }
 
 pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value> {
@@ -259,7 +259,7 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     for d in &n.depends_on {
         deps.push(task_by_ref(&mut tx, p, d).await?.id);
     }
-    let number: i32 = sqlx::query_scalar(
+    let number: i64 = sqlx::query_scalar(
         "update projects set next_number = next_number + 1 where id = $1 returning next_number - 1",
     )
     .bind(pr.id)
@@ -284,7 +284,7 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     for (i, text) in n.items.iter().enumerate() {
         sqlx::query("insert into items (task_id, position, text) values ($1,$2,$3)")
             .bind(id)
-            .bind(i as i32 + 1)
+            .bind(i as i64 + 1)
             .bind(text)
             .execute(&mut *tx)
             .await?;
@@ -316,7 +316,7 @@ pub struct TaskEdit {
     pub title: Option<String>,
     pub body: Option<String>,
     pub labels: Option<Vec<String>>,
-    pub priority: Option<i32>,
+    pub priority: Option<i64>,
 }
 
 pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Result<Value> {
@@ -386,7 +386,7 @@ pub async fn claim_next(
         .bind(p.id.to_string())
         .execute(&mut *tx)
         .await?;
-    if live_leases(&mut tx, p.id).await? >= p.max_leases as i64 {
+    if live_leases(&mut tx, p.id).await? >= p.max_leases {
         return Err(Error::MaxLeases);
     }
     let row: Option<(Uuid, i64, DateTime<Utc>)> = sqlx::query_as(
@@ -434,7 +434,7 @@ pub async fn claim_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
         .bind(p.id.to_string())
         .execute(&mut *tx)
         .await?;
-    if live_leases(&mut tx, p.id).await? >= p.max_leases as i64 {
+    if live_leases(&mut tx, p.id).await? >= p.max_leases {
         return Err(Error::MaxLeases);
     }
     let row: Option<(i64, DateTime<Utc>)> = sqlx::query_as(
@@ -521,7 +521,7 @@ pub async fn check_item(
     p: &Principal,
     r: &str,
     epoch: Option<i64>,
-    position: i32,
+    position: i64,
     done: bool,
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
@@ -818,7 +818,7 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
         Some(k) => Some(project_by_key(&mut c, p, k).await?.id),
         None => None,
     };
-    if live_leases(&mut c, p.id).await? >= p.max_leases as i64 {
+    if live_leases(&mut c, p.id).await? >= p.max_leases {
         return Ok(vec![]);
     }
     let sql = format!(

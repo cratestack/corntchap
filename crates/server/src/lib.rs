@@ -8,6 +8,7 @@ pub mod mcp_compat;
 pub mod procs;
 pub mod rest;
 pub mod service;
+pub mod sessions;
 pub mod state;
 pub mod stream;
 pub mod web;
