@@ -1,6 +1,6 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Navigate } from "react-router";
-import { Flame, Loader2, Plus, RotateCw, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { Check, ChevronsUpDown, Flame, Loader2, Plus, RotateCw, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DataTable, PageShell, TD, TH } from "@/components/page";
@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -22,7 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useProjects, useV1, useV1Call, type AgentRow, type MemberRow, type TeamRow, type UserRow } from "@/lib/data";
+import { useAgents, useProjects, useV1, useV1Call, type AgentRow, type MemberRow, type TeamRow, type UserRow } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useSession } from "@/lib/session";
@@ -441,26 +443,59 @@ function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
   );
 }
 
+interface Candidate {
+  /** What the API takes as `principal`: a user's login or a cook's name. */
+  principal: string;
+  label: string;
+  kind: "user" | "cook";
+}
+
 function AddMember({ team, onClose }: { team: string | null; onClose: () => void }) {
   const call = useV1Call();
-  const [who, setWho] = useState("");
+  const open = !!team;
+  const users = useV1<UserRow[]>("/users", { enabled: open });
+  const cooks = useAgents();
+  const members = useV1<MemberRow[]>(`/teams/${team}/members`, { enabled: open });
+  const [who, setWho] = useState<Candidate | null>(null);
+  const [pick, setPick] = useState(false);
   const [role, setRole] = useState("member");
   const [busy, setBusy] = useState(false);
+
+  const { people, cookList } = useMemo(() => {
+    const taken = new Set((members.data ?? []).map((m) => m.name));
+    const people: Candidate[] = (users.data ?? [])
+      .filter((u) => !u.disabled && !taken.has(u.name) && !(u.login && taken.has(u.login)))
+      .map((u) => ({ principal: u.login ?? u.name, label: u.login ?? u.name, kind: "user" as const }));
+    const cookList: Candidate[] = (cooks.data ?? [])
+      .filter((c) => !c.disabled && !taken.has(c.name))
+      .map((c) => ({ principal: c.name, label: c.name, kind: "cook" as const }));
+    return { people, cookList };
+  }, [users.data, cooks.data, members.data]);
+  const loading = users.isLoading || cooks.isLoading || members.isLoading;
+
+  useEffect(() => {
+    if (!open) {
+      setWho(null);
+      setRole("member");
+      setPick(false);
+    }
+  }, [open]);
+
   return (
     <FormDialog
-      open={!!team}
+      open={open}
       onOpenChange={(o) => !o && onClose()}
       title={`Add to ${team}`}
-      description="A user's login or a cook's name."
+      description="Pick a person or a cook that is not on this team yet."
       busy={busy}
       submitLabel="Add"
       disabled={!who}
       onSubmit={async () => {
+        if (!who) return;
         setBusy(true);
         try {
-          await call("POST", `/teams/${team}/members`, { principal: who, role });
-          toast.success(`${who} joined ${team}`);
-          setWho("");
+          await call("POST", `/teams/${team}/members`, { principal: who.principal, role });
+          toast.success(`${who.label} joined ${team}`);
           onClose();
         } catch (e) {
           toast.error("Could not add them", { description: errorMessage(e) });
@@ -470,8 +505,76 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
       }}
     >
       <div className="space-y-1.5">
-        <Label htmlFor="mem-who">Name</Label>
-        <Input id="mem-who" required autoFocus value={who} onChange={(e) => setWho(e.target.value)} placeholder="dev" />
+        <Label htmlFor="mem-who">Member</Label>
+        <Popover open={pick} onOpenChange={setPick}>
+          <PopoverTrigger asChild>
+            <Button
+              id="mem-who"
+              type="button"
+              variant="outline"
+              role="combobox"
+              aria-expanded={pick}
+              className="w-full justify-between px-3 font-normal"
+            >
+              {who ? (
+                <span className="flex min-w-0 items-center gap-2">
+                  <Avatar name={who.label} className="size-5 text-[10px]" />
+                  <span className="truncate">{who.label}</span>
+                  <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{who.kind === "cook" ? "cook" : "person"}</span>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">{loading ? "Loading…" : "Search people and cooks"}</span>
+              )}
+              <ChevronsUpDown className="size-4 shrink-0 opacity-50" aria-hidden="true" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0">
+            <Command>
+              <CommandInput placeholder="Search by login or name" />
+              <CommandList>
+                <CommandEmpty>{loading ? "Loading…" : "Nobody left to add."}</CommandEmpty>
+                {people.length > 0 && (
+                  <CommandGroup heading="People">
+                    {people.map((c) => (
+                      <CommandItem
+                        key={`u:${c.principal}`}
+                        value={`person ${c.label}`}
+                        onSelect={() => {
+                          setWho(c);
+                          setPick(false);
+                        }}
+                      >
+                        <Avatar name={c.label} className="size-5 text-[10px]" />
+                        <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                        <span className="text-[11px] text-muted-foreground">person</span>
+                        {who?.kind === c.kind && who.principal === c.principal && <Check className="size-4" aria-hidden="true" />}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+                {cookList.length > 0 && (
+                  <CommandGroup heading="Cooks">
+                    {cookList.map((c) => (
+                      <CommandItem
+                        key={`c:${c.principal}`}
+                        value={`cook ${c.label}`}
+                        onSelect={() => {
+                          setWho(c);
+                          setPick(false);
+                        }}
+                      >
+                        <Avatar name={c.label} className="size-5 text-[10px]" />
+                        <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                        <span className="text-[11px] text-muted-foreground">cook</span>
+                        {who?.kind === c.kind && who.principal === c.principal && <Check className="size-4" aria-hidden="true" />}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="mem-role">Role</Label>

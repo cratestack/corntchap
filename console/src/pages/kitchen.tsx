@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { EmptyState, RowSkeleton, BUCKET_DOT } from "@/components/bits";
 import { PaletteButton } from "@/components/shell";
+import { RefreshButton } from "@/components/refresh-button";
 import { EventFeed } from "@/components/event-feed";
 import { TaskCard, TaskGroup, groupTasks } from "@/components/task-views";
 import { TaskSheet } from "@/components/task-sheet";
@@ -248,6 +249,7 @@ function PotHeader({
         </div>
         <div className="flex items-center gap-2">
           <PaletteButton />
+          <RefreshButton />
           <Button onClick={onNew}>
             <Plus /> {base === "pantry" ? "Stock the pantry" : "New task"}
           </Button>

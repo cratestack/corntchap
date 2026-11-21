@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { PaletteButton } from "./shell";
+import { RefreshButton } from "./refresh-button";
 
 export function PageShell({
   title,
@@ -27,6 +28,7 @@ export function PageShell({
         </div>
         <div className="flex items-center gap-2">
           <PaletteButton />
+          <RefreshButton />
           {actions}
         </div>
       </header>

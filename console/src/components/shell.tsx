@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { logout, useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { useLive } from "@/lib/live";
-import { useAgents, useClaimedTasks, useProjects, useV1, type AgentRow } from "@/lib/data";
+import { useAgents, useClaimedTasks, useInvalidateAll, useProjects, useV1, type AgentRow } from "@/lib/data";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import { lastView } from "@/lib/views";
@@ -273,17 +273,26 @@ function SideLink({
 export function AppShell() {
   const { menuOpen, setMenuOpen, setPaletteOpen } = useUi();
   const loc = useLocation();
+  const invalidateAll = useInvalidateAll();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen(true);
+        return;
       }
+      // `r` refreshes, unless the person is typing or a modal dialog owns the keyboard
+      if (e.key.toLowerCase() !== "r" || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.closest("[role=combobox],[role=listbox]"))) return;
+      if (document.querySelector("[data-slot=dialog-content],[data-slot=alert-dialog-content]")) return;
+      e.preventDefault();
+      void invalidateAll();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setPaletteOpen]);
+  }, [setPaletteOpen, invalidateAll]);
 
   useEffect(() => setMenuOpen(false), [loc.pathname, setMenuOpen]);
 
