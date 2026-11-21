@@ -414,9 +414,11 @@ pub async fn claim_next(
     project: &str,
     labels: &[String],
     menu: Option<&str>,
+    station: Option<&str>,
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let pr = project_by_key(&mut tx, p, project).await?;
+    let st = crate::stations::for_claim(&mut tx, p, station, pr.id).await?;
     let menu = menu.map(crate::menus::slug).filter(|m| !m.is_empty());
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
         .bind(p.id.to_string())
@@ -437,7 +439,7 @@ pub async fn claim_next(
            order by t.priority desc, t.created_at
            for update skip locked limit 1)
          update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
-            lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now()
+            lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $6
          from next where t.id = next.id
          returning t.id, t.lease_epoch, t.lease_expires_at",
     )
@@ -446,6 +448,7 @@ pub async fn claim_next(
     .bind(pr.ttl_secs)
     .bind(labels)
     .bind(menu)
+    .bind(st)
     .fetch_optional(&mut *tx)
     .await?;
     let Some((id, epoch, exp)) = row else {
@@ -465,9 +468,15 @@ pub async fn claim_next(
     Ok(lease_view(t, epoch, exp))
 }
 
-pub async fn claim_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
+pub async fn claim_task(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    station: Option<&str>,
+) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
+    let st = crate::stations::for_claim(&mut tx, p, station, t.project_id).await?;
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
         .bind(p.id.to_string())
         .execute(&mut *tx)
@@ -477,7 +486,7 @@ pub async fn claim_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
     }
     let row: Option<(i64, DateTime<Utc>)> = sqlx::query_as(
         "update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
-            lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now()
+            lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $4
          where t.id = $1
            and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
            and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
@@ -487,6 +496,7 @@ pub async fn claim_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
     .bind(t.id)
     .bind(p.id)
     .bind(t.ttl_secs)
+    .bind(st)
     .fetch_optional(&mut *tx)
     .await?;
     let Some((epoch, exp)) = row else {
@@ -788,7 +798,8 @@ pub async fn human_transition(
         "update tasks set status = $3, updated_at = now(),
             result = case when $3 = 'cancelled' then $4 when $3 = 'open' and status = 'cancelled' then null else result end,
             lease_epoch = case when status = 'claimed' then lease_epoch + 1 else lease_epoch end,
-            claimed_by = case when $3 = 'cancelled' then null else claimed_by end,
+            claimed_by = case when $3 = 'cancelled' or status = 'blocked' then null else claimed_by end,
+            reserved_for = null,
             lease_expires_at = case when $3 = 'cancelled' then null else lease_expires_at end
          where id = $1 and status = any($2)",
     )

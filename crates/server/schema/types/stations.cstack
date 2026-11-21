@@ -1,0 +1,25 @@
+part of "../corntchap.cstack"
+
+// Stations: registered agent sessions.
+
+/// One agent session registered for a cook in a pot: wakes resume this very session.
+type StationView {
+  /// Station id, e.g. st_1a2b3c4d5e: pass it as `station` to claim_next / claim_task / ask.
+  id String
+  cook String
+  /// Pot key, e.g. PAY.
+  project String
+  /// opencode, claude-code, codex or other.
+  runtime String
+  /// The runtime's own session id.
+  session String
+  /// Where the session works (a checkout or a worktree) on the cook's machine.
+  directory String?
+  label String?
+  created_at String
+  last_woken_at String?
+  /// Tasks this station holds a live lease on.
+  holding String[]
+  /// Tasks parked on a question this station asked.
+  waiting String[]
+}

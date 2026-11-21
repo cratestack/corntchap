@@ -1,0 +1,67 @@
+part of "../corntchap.cstack"
+
+// The question pool (src/questions.rs).
+
+/// Ask the people of a pot (or one person or cook) a question.
+/// @param question The question, with the context needed to answer it without reading the code.
+/// @param project Pot key, e.g. PAY (or give task).
+/// @param task The task it is about, e.g. PAY-42.
+/// @param options Suggested answers, one per line, so the answer can be one click.
+/// @param to Address it to one person (login) or cook; default the pot's people.
+/// @param wait Park the task you hold until the answer: it stays yours (and your station's), the answer wakes you with a fresh lease. Stop working on it after asking.
+/// @param station Your station id (from the wake prompt), so the answer wakes this very session.
+mutation procedure questionAsk(question: String, project: String?, task: String?, options: String?, to: String?, wait: Boolean?, station: String?): QuestionView
+  @allow(auth() != null)
+  @mcp(tool: "ask", description: "Ask a question you cannot answer yourself (a product decision, a missing credential, an ambiguity) into the pot's question pool. People answer in the console, or your owner answers in a chat through their own agent. With wait=true on the task you hold, the task is parked for you and the answer wakes you with a fresh lease; stop working on it until then.")
+
+/// A pot's question pool.
+/// @param project Pot key, e.g. PAY.
+/// @param status open (default), answered, dismissed or all.
+procedure questionList(project: String, status: String?): QuestionView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_questions", description: "The pot's question pool: open questions by default, oldest first. In a chat with your owner, offer to go through them (pick_question).")
+
+/// Questions you asked.
+/// @param status open, answered, dismissed or all (default).
+procedure questionMine(status: String?): QuestionView[]
+  @allow(auth() != null)
+  @mcp(tool: "my_questions", description: "Questions you asked and their answers.")
+
+/// One question with its thread.
+/// @param id Question id, e.g. PAY-Q3.
+procedure questionGet(id: String): QuestionView
+  @allow(auth() != null)
+  @mcp(tool: "get_question", description: "One question with its answer and follow-up notes.")
+
+/// Take the next question to put to your owner.
+/// @param project Only this pot (default: any of yours).
+mutation procedure questionPick(project: String?): PickedQuestion
+  @allow(auth() != null)
+  @mcp(tool: "pick_question", description: "When you are in a chat with your owner (the person you work for): take the next open question from the pool that they can answer, held for you for 15 minutes so no other chat asks it. Ask them in the chat, then answer_question with their answer, or release_question if they cannot answer now. Questions addressed to you come first: answer those yourself.")
+
+/// Record the answer.
+/// @param id Question id, e.g. PAY-Q3.
+/// @param answer The answer. When you relay it from your owner's chat, write their answer, not yours: it is recorded in their name, via you.
+mutation procedure questionAnswer(id: String, answer: String): QuestionView
+  @allow(auth() != null)
+  @mcp(tool: "answer_question", description: "Answer a question: as a person; as a cook for a question addressed to you; or relaying your owner's answer from your chat (recorded as answered by them, via you). The asker is woken with the answer and gets its parked task back.")
+
+/// Put a picked question back in the pool.
+/// @param id Question id, e.g. PAY-Q3.
+mutation procedure questionRelease(id: String): QuestionView
+  @allow(auth() != null)
+  @mcp(tool: "release_question", description: "Put a question you picked back in the pool (your owner cannot answer it now).")
+
+/// Add to a question's thread.
+/// @param id Question id, e.g. PAY-Q3.
+/// @param note The follow-up: a clarification, or a question back to the asker.
+mutation procedure questionNote(id: String, note: String): QuestionView
+  @allow(auth() != null)
+  @mcp(tool: "comment_question", description: "Add a follow-up to a question's thread. A person's note wakes the cook that asked, so it can clarify.")
+
+/// Close a question without an answer.
+/// @param id Question id, e.g. PAY-Q3.
+/// @param reason Why it no longer needs an answer.
+mutation procedure questionDismiss(id: String, reason: String?): QuestionView
+  @allow(auth() != null)
+  @mcp(tool: "dismiss_question", description: "Close a question without an answer (people, or the cook that asked it). A parked task goes back to its cook.")

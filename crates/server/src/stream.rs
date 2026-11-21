@@ -93,7 +93,12 @@ pub async fn relay_stream(
                 last = seq;
                 let data = json!({
                     "seq": seq, "kind": "wake", "project": payload["project"], "task": null,
-                    "agent": payload["agent"], "at": at, "summary": "new work is ready",
+                    "agent": payload["agent"], "at": at,
+                    "summary": if payload["reason"].is_string() { "a message for you" } else { "new work is ready" },
+                    // a registered session to resume (else the relay's [[target]] for the agent)
+                    "station": payload["station"],
+                    // the prompt to send, when the server words it (answers to questions); else the relay's own
+                    "text": payload["text"], "reason": payload["reason"],
                 });
                 yield Ok(Event::default().id(seq.to_string()).event("wake").data(data.to_string()));
             }

@@ -13,10 +13,10 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::{Error, Result},
-    menus, pantry,
+    menus, pantry, questions,
     service::{self, NewTask, TaskEdit},
     state::{AppState, Principal},
-    stream,
+    stations, stream,
 };
 
 type Auth = Authn<Principal>;
@@ -58,6 +58,19 @@ pub fn routes() -> Router<AppState> {
         .route("/tasks/{id}/toss", post(task_cancel))
         .route("/tasks/{id}/restore", post(task_restore))
         .route("/changes", get(changes))
+        .route("/stations", get(stations_list).post(stations_add))
+        .route("/stations/{id}", delete(stations_remove))
+        .route(
+            "/projects/{key}/questions",
+            get(questions_list).post(questions_ask),
+        )
+        .route("/questions/mine", get(questions_mine))
+        .route("/questions/{id}", get(questions_get))
+        .route("/questions/{id}/answer", post(questions_answer))
+        .route("/questions/{id}/note", post(questions_note))
+        .route("/questions/{id}/dismiss", post(questions_dismiss))
+        .route("/questions/{id}/release", post(questions_release))
+        .route("/questions/pick", post(questions_pick))
         .route("/events/stream", get(stream::events_stream))
         .route("/wait", get(wait))
         .route("/agents", get(agents_list).post(agents_add))
@@ -232,12 +245,14 @@ async fn claim_next(
 ) -> J {
     let b = body.map(|Json(b)| b).unwrap_or_default();
     let menu = s(&b, "menu");
+    let station = s(&b, "station");
     ok(service::claim_next(
         &st.db,
         &p.worker()?,
         &k.to_uppercase(),
         &arr(&b, "labels"),
         menu.as_deref(),
+        station.as_deref(),
     )
     .await?)
 }
@@ -262,6 +277,118 @@ async fn grants_set(
     Json(b): Json<Value>,
 ) -> J {
     ok(admin::set_grants(&st.db, &p, &name, &arr(&b, "grants")).await?)
+}
+
+// ---- stations (registered agent sessions) ----
+async fn stations_list(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    ok(stations::list(
+        &st.db,
+        &p.worker()?,
+        q.get("project").map(|x| x.as_str()),
+        q.get("cook").map(|x| x.as_str()),
+    )
+    .await?)
+}
+async fn stations_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Value>) -> J {
+    let n = stations::NewStation {
+        cook: s(&b, "cook"),
+        project: req_s(&b, "project")?,
+        runtime: req_s(&b, "runtime")?,
+        session: req_s(&b, "session")?,
+        directory: s(&b, "directory"),
+        label: s(&b, "label"),
+    };
+    ok(stations::register(&st.db, &p.worker()?, n).await?)
+}
+async fn stations_remove(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
+    ok(stations::remove(&st.db, &p.worker()?, &id).await?)
+}
+
+// ---- the question pool ----
+async fn questions_list(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    ok(questions::list(
+        &st.db,
+        &p.worker()?,
+        &k,
+        q.get("status").map(|x| x.as_str()),
+    )
+    .await?)
+}
+async fn questions_ask(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    let a = questions::Ask {
+        project: Some(k),
+        body: req_s(&b, "question")?,
+        task: s(&b, "task"),
+        options: arr(&b, "options"),
+        to: s(&b, "to"),
+        wait: b["wait"].as_bool().unwrap_or(false),
+        station: s(&b, "station"),
+    };
+    ok(questions::ask(&st.db, &p.worker()?, a).await?)
+}
+async fn questions_mine(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    ok(questions::mine(&st.db, &p.worker()?, q.get("status").map(|x| x.as_str())).await?)
+}
+async fn questions_get(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
+    ok(questions::get(&st.db, &p.worker()?, &id).await?)
+}
+async fn questions_answer(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(questions::answer(&st.db, &p.worker()?, &id, &req_s(&b, "answer")?, false).await?)
+}
+async fn questions_note(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(questions::note(&st.db, &p.worker()?, &id, &req_s(&b, "note")?).await?)
+}
+async fn questions_dismiss(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    body: Option<Json<Value>>,
+) -> J {
+    let reason = body.and_then(|Json(b)| s(&b, "reason")).unwrap_or_default();
+    ok(questions::answer(&st.db, &p.worker()?, &id, &reason, true).await?)
+}
+async fn questions_release(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+) -> J {
+    ok(questions::release(&st.db, &p.worker()?, &id).await?)
+}
+async fn questions_pick(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    body: Option<Json<Value>>,
+) -> J {
+    let project = body.and_then(|Json(b)| s(&b, "project"));
+    ok(questions::pick(&st.db, &p.worker()?, project.as_deref()).await?)
 }
 
 // ---- menus (milestones) ----
@@ -400,7 +527,7 @@ async fn task_patch(
     .await?)
 }
 async fn task_claim(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
-    ok(service::claim_task(&st.db, &p.worker()?, &id).await?)
+    ok(service::claim_task(&st.db, &p.worker()?, &id, None).await?)
 }
 async fn task_heartbeat(
     State(st): State<AppState>,

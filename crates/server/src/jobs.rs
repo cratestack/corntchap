@@ -292,13 +292,24 @@ impl Dispatcher {
         };
         match c.typ.as_str() {
             "relay" => {
+                // Wake an idle station (that very session) when the cook has any in this pot;
+                // when all of them are busy, they pick the work up themselves.
+                let station =
+                    match crate::stations::pick_for_wake(&mut conn, c.agent_id, project).await {
+                        Ok((true, None)) => return,
+                        Ok((_, st)) => st,
+                        Err(e) => {
+                            tracing::warn!("station lookup failed: {e}");
+                            None
+                        }
+                    };
                 let _ = emit(
                     &mut conn,
                     Some(project),
                     None,
                     "wake",
                     None,
-                    json!({"agent": c.agent, "agent_id": c.agent_id, "project": key}),
+                    json!({"agent": c.agent, "agent_id": c.agent_id, "project": key, "station": station}),
                 )
                 .await;
             }
