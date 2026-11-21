@@ -8,10 +8,12 @@ BIN=${BIN_DIR:-target/debug}
 DB=ct_e2e_$$
 PORT=${PORT:-18080}
 WORK=$(mktemp -d)
-cleanup() { kill ${SERVER_PID:-} ${RELAY_PID:-} 2>/dev/null || true; psql "$ADMIN_URL" -qc "drop database if exists $DB" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
+cleanup() { kill ${SERVER_PID:-} ${RELAY_PID:-} 2>/dev/null || true; psqlc "drop database if exists $DB" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
 
-psql "$ADMIN_URL" -qc "create database $DB"
+# Use a local psql if there is one, else the compose Postgres container (nothing to install).
+psqlc() { if command -v psql >/dev/null; then psql "$ADMIN_URL" -qc "$1"; else docker compose exec -T db psql -U corn -d postgres -qc "$1"; fi; }
+psqlc "create database $DB"
 export DATABASE_URL="${ADMIN_URL%/*}/$DB" BIND=127.0.0.1:$PORT PUBLIC_URL=http://127.0.0.1:$PORT RUST_LOG=warn
 export CORNTCHAP_CONFIG_DIR=$WORK/cfg CORNTCHAP_NO_BROWSER=1
 SERVER=http://127.0.0.1:$PORT

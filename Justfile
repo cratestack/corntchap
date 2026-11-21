@@ -56,8 +56,12 @@ up:
 
 # ---- Quick start: just setup && just init <github-login> && just serve (then, in another shell: just login && just seed) ----
 
-# Start Postgres (compose) and apply the schema.
-setup: db
+# Trust mise.toml and install the toolchain (skipped when mise is not installed).
+deps:
+    if command -v mise >/dev/null; then mise trust -y && mise install; else echo "mise not found: install Rust 1.100+ yourself (https://mise.jdx.dev)"; fi
+
+# Toolchain, Postgres (compose) and the schema.
+setup: deps db
     DATABASE_URL=${DATABASE_URL:-{{dev_url}}} cargo run -q -p corntchap -- migrate
 
 # Create the first admin (a GitHub login); prints a 7-day bootstrap token.
