@@ -2,42 +2,87 @@ part of "../corntchap.cstack"
 
 // Task writes and the lease protocol: claim, heartbeat, check, comment, complete, release, block.
 
+/// Create a task.
+/// @param project Project key, e.g. PAY.
+/// @param title One line saying what is to be done.
+/// @param body Details in markdown: context, acceptance criteria.
+/// @param items Checklist, one item per line.
+/// @param parent Parent task id: this becomes a subtask, and the parent is not ready until its subtasks are done.
+/// @param dependsOn Comma-separated task ids that must be done before this one is ready.
+/// @param labels Comma-separated labels (claim_next can filter on them).
+/// @param priority Higher is picked first by claim_next (default 0).
 mutation procedure taskCreate(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated.")
 
+/// Edit a task's text, priority or labels.
+/// @param id Task id, e.g. PAY-42.
+/// @param title New title.
+/// @param body New body (markdown).
+/// @param priority New priority; higher is picked first.
+/// @param labels Comma-separated; replaces the task's labels.
 mutation procedure taskEdit(id: String, title: String?, body: String?, priority: Int?, labels: String?): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "update_task", description: "Edit title, body, priority or labels (labels is comma-separated and replaces the set). Not status. Agents may only edit a task they currently hold.")
 
+/// Take the best ready task in a project.
+/// @param project Project key, e.g. PAY.
+/// @param labels Comma-separated: only accept tasks carrying one of these labels.
 mutation procedure claimNext(project: String, labels: String?): ClaimResult
   @allow(auth() != null)
   @mcp(tool: "claim_next", description: "Atomically take the best ready task in a project. Returns the task and a lease {epoch, expires_at}, or {none: true}. Optional labels (comma-separated) restricts which tasks you accept.")
 
+/// Claim one named task.
+/// @param id Task id, e.g. PAY-42.
 mutation procedure claimTask(id: String): ClaimResult
   @allow(auth() != null)
   @mcp(tool: "claim_task", description: "Claim one named task. Returns the task and a lease {epoch, expires_at}.")
 
+/// Extend a lease.
+/// @param id Task id, e.g. PAY-42.
+/// @param epoch The lease epoch claim_next / claim_task returned for this task.
+/// @param ttlS New lease length in seconds (default: the project's lease TTL).
 mutation procedure heartbeat(id: String, epoch: Int, ttlS: Int?): LeaseRenewal
   @allow(auth() != null)
   @mcp(tool: "heartbeat", description: "Extend your lease. Any call carrying the epoch also extends it, so you rarely need this.")
 
+/// Tick or untick a checklist item.
+/// @param id Task id, e.g. PAY-42.
+/// @param epoch The lease epoch claim_next / claim_task returned for this task.
+/// @param position 1-based position of the item in the checklist.
+/// @param done true to tick, false to untick.
 mutation procedure checkItem(id: String, epoch: Int, position: Int, done: Boolean): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "check_item", description: "Tick (or untick) checklist item `position` (1-based). Needs your live lease epoch.")
 
+/// Comment on a task.
+/// @param id Task id, e.g. PAY-42.
+/// @param body The note, in markdown: progress, findings, a handoff for whoever picks it up next.
+/// @param epoch Your lease epoch, if you hold the task: also extends the lease.
 mutation procedure comment(id: String, body: String, epoch: Int?): OkResult
   @allow(auth() != null)
   @mcp(tool: "comment", description: "Add a note or handoff to a task. No lease needed; pass epoch to also extend yours.")
 
+/// Finish a task.
+/// @param id Task id, e.g. PAY-42.
+/// @param epoch The lease epoch claim_next / claim_task returned for this task.
+/// @param result What you did and where: summary, PR or commit links, follow-ups.
 mutation procedure complete(id: String, epoch: Int, result: String): TaskView
   @allow(auth() != null)
   @mcp(tool: "complete", description: "Mark the task done. Fails with lease_lost if the epoch is stale: then stop and report, your work is not counted.")
 
+/// Give a task back.
+/// @param id Task id, e.g. PAY-42.
+/// @param epoch The lease epoch claim_next / claim_task returned for this task.
+/// @param reason Why, and what the next agent should know.
 mutation procedure release(id: String, epoch: Int, reason: String): TaskView
   @allow(auth() != null)
   @mcp(tool: "release", description: "Give the task back (status open) for someone else.")
 
+/// Block a task until a human looks at it.
+/// @param id Task id, e.g. PAY-42.
+/// @param epoch The lease epoch claim_next / claim_task returned for this task.
+/// @param reason What is blocking and what you need from a human.
 mutation procedure block(id: String, epoch: Int, reason: String): TaskView
   @allow(auth() != null)
   @mcp(tool: "block", description: "Mark the task blocked; it waits for a human to unblock it.")

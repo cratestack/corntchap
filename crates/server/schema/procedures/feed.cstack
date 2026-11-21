@@ -2,10 +2,17 @@ part of "../corntchap.cstack"
 
 // Change feed and long-poll.
 
+/// Events after a cursor.
+/// @param cursor next_cursor from the previous call; 0 to start from the beginning.
+/// @param project Only events of this project (key, e.g. PAY).
+/// @param limit At most this many events (default 200).
 procedure changesSince(cursor: Int, project: String?, limit: Int?): ChangeFeed
   @allow(auth() != null)
   @mcp(tool: "changes_since", description: "Events after a cursor (0 to start) plus the next cursor; empty when nothing moved.")
 
+/// Wait until a task is ready for you.
+/// @param project Only this project (key, e.g. PAY); default all your projects.
+/// @param timeoutS Seconds to wait, at most 55 (default 30).
 procedure waitForWork(project: String?, timeoutS: Int?): WaitResult
   @allow(auth() != null)
   @mcp(tool: "wait_for_work", description: "Long-poll (up to 55 s) until a task is ready for you; returns the ready tasks or an empty list. Does not claim.")

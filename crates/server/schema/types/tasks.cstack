@@ -25,47 +25,73 @@ type TaskLinkView {
   status String
 }
 
+/// A task as lists show it.
 type TaskView {
+  /// Task id, e.g. PAY-42.
   id String
   project String
   number Int
   title String
   body String
+  /// Higher is picked first by claim_next.
   priority Int
   labels String[]
+  /// open, claimed, blocked, done or cancelled.
   status String
+  /// Parent task id when this is a subtask.
   parent String?
+  /// Task ids that must be done before this one is ready.
   depends_on String[]
+  /// The agent holding the lease.
   claimed_by String?
+  /// Fencing token of the current lease: pass it to every lease call; a newer claim makes older epochs stale.
   lease_epoch Int
+  /// When the lease lapses unless extended (RFC 3339).
   lease_expires_at String?
+  /// The task is claimed and its lease has not expired.
   lease_live Boolean?
+  /// Open, with every dependency and subtask done: claim_next may hand it out.
   ready Boolean?
+  /// Unticked checklist items.
   open_items Int
   total_items Int
+  /// The summary passed to complete.
   result String?
   created_at String
   updated_at String
 }
 
+/// A task with its checklist, comments, dependencies and subtasks.
 type TaskDetail {
+  /// Task id, e.g. PAY-42.
   id String
   project String
   number Int
   title String
   body String
+  /// Higher is picked first by claim_next.
   priority Int
   labels String[]
+  /// open, claimed, blocked, done or cancelled.
   status String
+  /// Parent task id when this is a subtask.
   parent String?
+  /// Task ids that must be done before this one is ready.
   depends_on String[]
+  /// The agent holding the lease.
   claimed_by String?
+  /// Fencing token of the current lease: pass it to every lease call; a newer claim makes older epochs stale.
   lease_epoch Int
+  /// When the lease lapses unless extended (RFC 3339).
   lease_expires_at String?
+  /// The task is claimed and its lease has not expired.
   lease_live Boolean?
+  /// Open, with every dependency and subtask done: claim_next may hand it out.
   ready Boolean?
+  /// Unticked checklist items.
   open_items Int
   total_items Int
+  /// The summary passed to complete.
   result String?
   created_at String
   updated_at String
@@ -80,9 +106,12 @@ type LeaseView {
   expires_at String
 }
 
+/// What claim_next / claim_task return.
 type ClaimResult {
   task TaskDetail?
+  /// Your lease: keep the epoch, every lease call needs it.
   lease LeaseView?
+  /// Nothing is ready for you right now.
   none Boolean?
 }
 

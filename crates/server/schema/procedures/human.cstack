@@ -2,8 +2,12 @@ part of "../corntchap.cstack"
 
 // Human-only transitions (no MCP tool): blocked -> open, open/blocked -> cancelled.
 
+/// Unblock a blocked task (people only).
+/// @param id Task id, e.g. PAY-42.
 mutation procedure unblockTask(id: String): TaskView
   @allow(auth() != null)
 
+/// Cancel an open or blocked task (people only).
+/// @param id Task id, e.g. PAY-42.
 mutation procedure cancelTask(id: String): TaskView
   @allow(auth() != null)
