@@ -16,6 +16,8 @@ type ChangePayload {
   key String?
   /// memory.saved: true when the memory was new.
   created Boolean?
+  /// menu.* events and task.created: the menu's key.
+  menu String?
 }
 
 type ChangeView {

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     error::Error,
-    pantry,
+    menus, pantry,
     schema::cratestack_schema::{self, procedures::*},
     service,
     state::{AppState, Principal},
@@ -158,6 +158,7 @@ impl ProcedureRegistry for Procedures {
                 a.status.as_deref(),
                 a.label.as_deref(),
                 a.readyOnly.unwrap_or(false),
+                a.menu.as_deref(),
             )
             .await,
         )
@@ -225,6 +226,7 @@ impl ProcedureRegistry for Procedures {
                     depends_on: csv(&a.dependsOn),
                     labels: csv(&a.labels),
                     priority: a.priority.unwrap_or(0),
+                    menu: a.menu,
                 },
             )
             .await,
@@ -250,6 +252,7 @@ impl ProcedureRegistry for Procedures {
                     body: a.body,
                     labels,
                     priority: a.priority,
+                    menu: a.menu,
                 },
             )
             .await,
@@ -270,6 +273,7 @@ impl ProcedureRegistry for Procedures {
                 &p,
                 &a.project.to_uppercase(),
                 &csv(&a.labels),
+                a.menu.as_deref(),
             )
             .await,
         )
@@ -495,5 +499,61 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<memory_forget::Output, CratestackError> {
         let p = principal(ctx)?;
         typed(pantry::forget(&self.state.db, &p, &a.project, &a.key).await)
+    }
+
+    async fn menu_list(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: menu_list::Args,
+        _z: menu_list::Authorized,
+    ) -> Result<menu_list::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            menus::list(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.includeServed.unwrap_or(false),
+            )
+            .await,
+        )
+    }
+
+    async fn menu_create(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: menu_create::Args,
+        _z: menu_create::Authorized,
+    ) -> Result<menu_create::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let n = menus::NewMenu {
+            project: a.project,
+            name: a.name,
+            key: a.key,
+            description: a.description,
+            due_on: a.dueOn,
+            position: a.position,
+        };
+        typed(menus::create(&self.state.db, &p, n).await)
+    }
+
+    async fn menu_update(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: menu_update::Args,
+        _z: menu_update::Authorized,
+    ) -> Result<menu_update::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let e = menus::MenuEdit {
+            name: a.name,
+            description: a.description,
+            due_on: a.dueOn,
+            position: a.position,
+            status: a.status,
+        };
+        typed(menus::update(&self.state.db, &p, &a.project, &a.key, e).await)
     }
 }

@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::{Error, Result},
-    pantry,
+    menus, pantry,
     service::{self, NewTask, TaskEdit},
     state::{AppState, Principal},
     stream,
@@ -35,6 +35,11 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/{key}/claim-next", post(claim_next))
         .route("/projects/{key}/digest", get(digest))
         .route("/projects/{key}/board", get(board))
+        .route("/projects/{key}/menus", get(menus_list).post(menus_add))
+        .route(
+            "/projects/{key}/menus/{mkey}",
+            axum::routing::patch(menus_edit),
+        )
         .route("/projects/{key}/pantry", get(pantry_list).post(pantry_save))
         .route(
             "/projects/{key}/pantry/{mkey}",
@@ -188,6 +193,7 @@ async fn tasks_list(
         q.get("status").map(|x| x.as_str()),
         q.get("label").map(|x| x.as_str()),
         ready,
+        q.get("menu").map(|x| x.as_str()),
     )
     .await?)
 }
@@ -209,6 +215,7 @@ async fn tasks_add(
             depends_on: arr(&b, "depends_on"),
             labels: arr(&b, "labels"),
             priority: i(&b, "priority").unwrap_or(0),
+            menu: s(&b, "menu"),
         },
     )
     .await?)
@@ -219,8 +226,16 @@ async fn claim_next(
     Path(k): Path<String>,
     body: Option<Json<Value>>,
 ) -> J {
-    let labels = body.map(|Json(b)| arr(&b, "labels")).unwrap_or_default();
-    ok(service::claim_next(&st.db, &p.worker()?, &k.to_uppercase(), &labels).await?)
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let menu = s(&b, "menu");
+    ok(service::claim_next(
+        &st.db,
+        &p.worker()?,
+        &k.to_uppercase(),
+        &arr(&b, "labels"),
+        menu.as_deref(),
+    )
+    .await?)
 }
 async fn digest(
     State(st): State<AppState>,
@@ -233,6 +248,49 @@ async fn digest(
 }
 async fn board(State(st): State<AppState>, Authn(p): Auth, Path(k): Path<String>) -> J {
     ok(json!({"markdown": service::board_markdown(&st.db, &p.worker()?, &k.to_uppercase()).await?}))
+}
+
+// ---- menus (milestones) ----
+/// `?all=true` includes served menus.
+async fn menus_list(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    let all = q.get("all").is_some_and(|v| v == "true" || v == "1");
+    ok(menus::list(&st.db, &p.worker()?, &k, all).await?)
+}
+async fn menus_add(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    let n = menus::NewMenu {
+        project: k,
+        name: req_s(&b, "name")?,
+        key: s(&b, "key"),
+        description: s(&b, "description"),
+        due_on: s(&b, "due_on"),
+        position: i(&b, "position"),
+    };
+    ok(menus::create(&st.db, &p.worker()?, n).await?)
+}
+async fn menus_edit(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path((k, mk)): Path<(String, String)>,
+    Json(b): Json<Value>,
+) -> J {
+    let e = menus::MenuEdit {
+        name: s(&b, "name"),
+        description: s(&b, "description"),
+        due_on: s(&b, "due_on"),
+        position: i(&b, "position"),
+        status: s(&b, "status"),
+    };
+    ok(menus::update(&st.db, &p.worker()?, &k, &mk, e).await?)
 }
 
 // ---- the pantry (shared memory per project) ----
@@ -322,6 +380,7 @@ async fn task_patch(
             body: s(&b, "body"),
             labels,
             priority: i(&b, "priority"),
+            menu: s(&b, "menu"),
         },
     )
     .await?)

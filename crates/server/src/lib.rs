@@ -6,6 +6,7 @@ pub mod console;
 pub mod error;
 pub mod jobs;
 pub mod mcp_compat;
+pub mod menus;
 pub mod pages;
 pub mod pantry;
 pub mod procs;

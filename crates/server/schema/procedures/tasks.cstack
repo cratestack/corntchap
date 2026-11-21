@@ -11,9 +11,10 @@ part of "../corntchap.cstack"
 /// @param dependsOn Comma-separated task ids that must be done before this one is ready.
 /// @param labels Comma-separated labels (claim_next can filter on them).
 /// @param priority Higher is picked first by claim_next (default 0).
-mutation procedure taskCreate(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?): TaskDetail
+/// @param menu Menu (milestone) key to put the task on, e.g. mvp; see list_menus.
+mutation procedure taskCreate(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?, menu: String?): TaskDetail
   @allow(auth() != null)
-  @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated.")
+  @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated. menu: the milestone key (list_menus).")
 
 /// Edit a task's text, priority or labels.
 /// @param id Task id, e.g. PAY-42.
@@ -21,14 +22,16 @@ mutation procedure taskCreate(project: String, title: String, body: String?, ite
 /// @param body New body (markdown).
 /// @param priority New priority; higher is picked first.
 /// @param labels Comma-separated; replaces the task's labels.
-mutation procedure taskEdit(id: String, title: String?, body: String?, priority: Int?, labels: String?): TaskDetail
+/// @param menu Menu key to move the task to; empty string takes it off its menu.
+mutation procedure taskEdit(id: String, title: String?, body: String?, priority: Int?, labels: String?, menu: String?): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "update_task", description: "Edit title, body, priority or labels (labels is comma-separated and replaces the set). Not status. Agents may only edit a task they currently hold.")
 
 /// Take the best ready task in a project.
 /// @param project Project key, e.g. PAY.
 /// @param labels Comma-separated: only accept tasks carrying one of these labels.
-mutation procedure claimNext(project: String, labels: String?): ClaimResult
+/// @param menu Only take tasks on this menu (key, e.g. mvp).
+mutation procedure claimNext(project: String, labels: String?, menu: String?): ClaimResult
   @allow(auth() != null)
   @mcp(tool: "claim_next", description: "Atomically take the best ready task in a project. Returns the task and a lease {epoch, expires_at}, or {none: true}. Optional labels (comma-separated) restricts which tasks you accept.")
 
