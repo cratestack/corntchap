@@ -33,6 +33,18 @@ type ChangeFeed {
   next_cursor Int
 }
 
+/// A task you could claim now (wait_for_work). Read it in full with get_task.
+type ReadyTask {
+  /// Task id, e.g. PAY-42.
+  id String
+  project String
+  title String
+  /// Higher is picked first by claim_next.
+  priority Int
+  labels String[]
+}
+
 type WaitResult {
-  ready TaskView[]
+  /// Claimable tasks, best first (at most 20); empty when the wait timed out.
+  ready ReadyTask[]
 }

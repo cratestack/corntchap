@@ -78,7 +78,9 @@ impl Principal {
     pub fn worker(self) -> crate::error::Result<Principal> {
         if self.is_relay() {
             Err(crate::error::Error::Forbidden(
-                "relays cannot read or change tasks".into(),
+                "this is a fire (relay) token: fires only carry wake-ups and cannot read or change tasks. \
+                 Give the agent its cook token instead (corntchap-cli cook rotate <name>, or Cooks > MCP config in the console)"
+                    .into(),
             ))
         } else {
             Ok(self)

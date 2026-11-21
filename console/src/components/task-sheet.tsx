@@ -27,6 +27,7 @@ import { BUCKETS, bucketOf, fmtAgo, useNow, taskNote } from "@/lib/format";
 import { useSession } from "@/lib/session";
 import { useOpenTask } from "@/lib/nav";
 import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, SectionLabel } from "./bits";
+import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
 import { PRIORITIES } from "./new-task";
@@ -110,8 +111,9 @@ function TaskDetailBody({ id }: { id: string }) {
 
   return (
     <div className="flex min-h-full flex-col">
-      <header className="border-b border-border px-6 pt-6 pb-4">
-        <div className="flex flex-wrap items-center gap-2.5 pr-8">
+      <header className="relative border-b border-border px-6 pt-6 pb-4">
+        <RefreshButton size="icon-sm" className="absolute top-3 right-11 size-7" />
+        <div className="flex flex-wrap items-center gap-2.5 pr-16">
           <IdChip id={t.id} className="text-[13px]" />
           <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-[11.5px] font-medium">
             <span className={cn("size-2 rounded-full", BUCKET_DOT[bucket], bucket === "claimed" && "live-dot")} aria-hidden="true" />

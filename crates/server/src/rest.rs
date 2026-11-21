@@ -433,7 +433,12 @@ async fn changes(
     Authn(p): Auth,
     Query(q): Query<HashMap<String, String>>,
 ) -> J {
-    let cursor = q.get("cursor").and_then(|v| v.parse().ok()).unwrap_or(0);
+    // `since` is accepted too: the digest takes it, and agents guess it.
+    let cursor = q
+        .get("cursor")
+        .or_else(|| q.get("since"))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(200);
     let project = q.get("project").map(|k| k.to_uppercase());
     ok(service::changes_since(&st.db, &p.worker()?, cursor, project.as_deref(), limit).await?)

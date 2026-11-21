@@ -19,6 +19,12 @@ pub struct Target {
     pub adapter: String,
     pub url: Option<String>,
     pub directory: Option<String>,
+    /// opencode: HTTP basic user (default "opencode").
+    pub username: Option<String>,
+    /// opencode: server password (prefer `password_env`).
+    pub password: Option<String>,
+    /// opencode: name of an environment variable holding the server password.
+    pub password_env: Option<String>,
     pub command: Option<Vec<String>>,
     pub cwd: Option<String>,
     pub timeout: Option<String>,
@@ -68,12 +74,14 @@ pub const TEMPLATE: &str = r##"# corntchap relay configuration.
 # Optional: connect to this server instead of the one stored by `corntchap-cli login`.
 # server = "https://corntchap.example.com"
 
-# --- OpenCode: prompts the newest session of a running `opencode serve` ---------------------------
+# --- OpenCode: prompts the newest session in `directory` of a running OpenCode -------------------
+# The server is found on its own (desktop app, TUI or `opencode serve`, whatever port it took);
+# set `url` only to pin one. A password-protected server: password_env = "MY_OPENCODE_PASSWORD".
 # [[target]]
 # agent     = "opencode-laptop"
 # adapter   = "opencode"
-# url       = "http://127.0.0.1:4096"
 # directory = "~/code/payments"       # session directory to wake
+# url       = "http://127.0.0.1:4096" # optional
 
 # --- Codex: runs `codex exec resume --last` with the prompt on stdin -----------------------------
 # [[target]]
@@ -102,7 +110,7 @@ pub const TEMPLATE: &str = r##"# corntchap relay configuration.
 pub fn target_block(agent: &str, kind: &str) -> String {
     match kind {
         "opencode" => format!(
-            "[[target]]\nagent     = \"{agent}\"\nadapter   = \"opencode\"\nurl       = \"http://127.0.0.1:4096\"   # `opencode serve`\ndirectory = \"~/code/your-project\"\n"
+            "[[target]]\nagent     = \"{agent}\"\nadapter   = \"opencode\"\ndirectory = \"~/code/your-project\"\n# url = \"http://127.0.0.1:4096\"   # optional: the running OpenCode is found on its own\n"
         ),
         "codex" => format!(
             "[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"codex\", \"exec\", \"resume\", \"--last\", \"-\"]\ncwd     = \"~/code/your-project\"\ntimeout = \"45m\"\n"
@@ -240,7 +248,7 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs(total))
 }
 
-fn expand(p: &str) -> String {
+pub fn expand(p: &str) -> String {
     shellexpand::tilde(p).into_owned()
 }
 
@@ -359,11 +367,26 @@ async fn report(api: &Api, agent: &str, project: &str, event: &str, exit: Option
         .await;
 }
 
+/// `fire poke`: run one target now, without the server.
+pub async fn poke(cook: &str, pot: &str) -> Result<()> {
+    let cfg = load_config()?;
+    let t = cfg.target.iter().find(|t| t.agent == cook).ok_or_else(|| {
+        anyhow!(
+            "no [[target]] with agent = {cook:?} in {}",
+            config_path().display()
+        )
+    })?;
+    match run_target(t, pot).await {
+        0 => Ok(()),
+        code => bail!("{cook}: the wake did not go through (exit {code})"),
+    }
+}
+
 /// Returns an exit code (0 ok, -1 skipped/failed to start).
 pub async fn run_target(t: &Target, project: &str) -> i32 {
     let prompt = PROMPT.replace("{project}", project);
     let res = match t.adapter.as_str() {
-        "opencode" => opencode(t, &prompt).await,
+        "opencode" => crate::opencode::prompt(t, &prompt).await,
         "exec" => exec(t, &prompt).await,
         "webhook" => webhook(t, &prompt, project).await,
         other => Err(anyhow!("unknown adapter {other}")),
@@ -412,48 +435,6 @@ async fn exec(t: &Target, prompt: &str) -> Result<i32> {
             bail!("timed out after {limit:?}, killed")
         }
     }
-}
-
-async fn opencode(t: &Target, prompt: &str) -> Result<i32> {
-    let base = t
-        .url
-        .as_deref()
-        .ok_or_else(|| anyhow!("opencode target needs url"))?
-        .trim_end_matches('/')
-        .to_string();
-    let http = reqwest::Client::new();
-    let dir = t.directory.as_deref().map(expand);
-    let mut q = http.get(format!("{base}/session"));
-    if let Some(d) = &dir {
-        q = q.query(&[("directory", d)]);
-    }
-    let sessions: Vec<Value> = q.send().await?.error_for_status()?.json().await?;
-    let session = sessions
-        .iter()
-        .filter(|s| {
-            dir.as_deref()
-                .map(|d| s["directory"].as_str() == Some(d))
-                .unwrap_or(true)
-        })
-        .max_by_key(|s| s["time"]["updated"].as_i64().unwrap_or(0))
-        .ok_or_else(|| anyhow!("no OpenCode session for that directory"))?;
-    let id = session["id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("session without id"))?;
-    // Skip when the session is busy; the next wake retries.
-    if let Ok(r) = http.get(format!("{base}/session/status")).send().await
-        && let Ok(v) = r.json::<Value>().await
-        && v.get(id).and_then(|s| s["type"].as_str()) == Some("busy")
-    {
-        eprintln!("relay: opencode session {id} is busy, skipping");
-        return Ok(0);
-    }
-    http.post(format!("{base}/session/{id}/prompt_async"))
-        .json(&json!({"parts": [{"type": "text", "text": prompt}]}))
-        .send()
-        .await?
-        .error_for_status()?;
-    Ok(0)
 }
 
 async fn webhook(t: &Target, prompt: &str, project: &str) -> Result<i32> {
@@ -564,21 +545,27 @@ pub async fn doctor(full: bool) -> Result<()> {
                     t.cwd.as_deref().unwrap_or(".")
                 );
             }
-            "opencode" => {
-                let url = t.url.clone().unwrap_or_default();
-                let ok = http
-                    .get(format!("{}/session/status", url.trim_end_matches('/')))
-                    .send()
-                    .await
-                    .map(|r| r.status().is_success())
-                    .unwrap_or(false);
-                println!(
-                    "{}   {}: would POST prompt_async to {url} for {}",
-                    if ok { "ok  " } else { "FAIL" },
+            "opencode" => match crate::opencode::resolve(t).await {
+                Ok(ep) => println!(
+                    "{}   {}: OpenCode at {} ({}{}), {} session(s) in {}",
+                    if ep.sessions.is_empty() {
+                        "FAIL"
+                    } else {
+                        "ok  "
+                    },
                     t.agent,
-                    t.directory.as_deref().unwrap_or("(any directory)")
-                );
-            }
+                    ep.base,
+                    ep.source,
+                    if ep.auth.is_some() {
+                        ", with password"
+                    } else {
+                        ""
+                    },
+                    ep.sessions.len(),
+                    t.directory.as_deref().unwrap_or("any directory")
+                ),
+                Err(e) => println!("FAIL {}: {e:#}", t.agent),
+            },
             "webhook" => println!(
                 "ok     {}: would POST to {}",
                 t.agent,
