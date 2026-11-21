@@ -1,0 +1,31 @@
+part of "../corntchap.cstack"
+
+// Menus: a project's milestones.
+
+/// A menu (milestone) of a project, e.g. MVP, with its progress.
+type MenuView {
+  /// Stable key, unique in the project (e.g. mvp).
+  key String
+  /// Project key, e.g. PAY.
+  project String
+  /// Display name, e.g. MVP.
+  name String
+  description String
+  /// Target date, YYYY-MM-DD.
+  due_on String?
+  /// open (being cooked) or served (shipped).
+  status String
+  /// Order among the project's menus (lower first).
+  position Int
+  served_at String?
+  created_at String
+  updated_at String
+  /// Tasks on the menu, cancelled ones excluded.
+  total Int
+  done Int
+  open Int
+  claimed Int
+  blocked Int
+  /// done / total, 0 to 1.
+  progress Float
+}

@@ -1,10 +1,12 @@
 // "+ View" stub: a saved view is a base view (list/board/activity/pantry) plus its filter chips, kept per pot in localStorage.
-export type BaseView = "list" | "board" | "activity" | "pantry";
+export type BaseView = "list" | "board" | "activity" | "pantry" | "menus";
 
 export interface Filters {
   status?: string;
   label?: string;
   holder?: string;
+  /** a menu key, or "-" for tasks on no menu */
+  menu?: string;
   q?: string;
 }
 
@@ -39,7 +41,7 @@ export function saveViews(pot: string, views: SavedView[]) {
 export function lastView(pot: string): BaseView {
   try {
     const v = localStorage.getItem(`corntchap.lastview.${pot}`);
-    if (v === "list" || v === "board" || v === "activity" || v === "pantry") return v;
+    if (v === "list" || v === "board" || v === "activity" || v === "pantry" || v === "menus") return v;
   } catch {
     /* ignore */
   }

@@ -1,0 +1,33 @@
+part of "../corntchap.cstack"
+
+// Menus: a project's milestones (see src/menus.rs).
+
+/// A project's menus with their progress.
+/// @param project Project key, e.g. PAY.
+/// @param includeServed Also list menus already served (shipped).
+procedure menuList(project: String, includeServed: Boolean?): MenuView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_menus", description: "The project's menus (milestones such as MVP), open ones first, each with done/total progress. Put tasks on a menu with create_task/update_task `menu`, and focus claim_next on one with its `menu` filter.")
+
+/// Create a menu.
+/// @param project Project key, e.g. PAY.
+/// @param name Display name, e.g. MVP or v1.2.
+/// @param key Stable key; derived from the name when omitted (MVP -> mvp).
+/// @param description What this menu delivers.
+/// @param dueOn Target date, YYYY-MM-DD.
+/// @param position Order among the project's menus (lower first); default after the last one.
+mutation procedure menuCreate(project: String, name: String, key: String?, description: String?, dueOn: String?, position: Int?): MenuView
+  @allow(auth() != null)
+  @mcp(tool: "create_menu", description: "Create a menu (milestone) in a project, e.g. MVP. Tasks are put on it with create_task or update_task `menu`.")
+
+/// Edit, serve or reopen a menu.
+/// @param project Project key, e.g. PAY.
+/// @param key The menu's key, e.g. mvp.
+/// @param name New display name.
+/// @param description New description.
+/// @param dueOn New target date YYYY-MM-DD; empty string clears it.
+/// @param position New order among the project's menus.
+/// @param status served when it shipped, open to reopen it.
+mutation procedure menuUpdate(project: String, key: String, name: String?, description: String?, dueOn: String?, position: Int?, status: String?): MenuView
+  @allow(auth() != null)
+  @mcp(tool: "update_menu", description: "Edit a menu: name, description, due date, order, or status (served when it shipped, open to reopen it).")

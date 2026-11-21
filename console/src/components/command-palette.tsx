@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { BookMarked, ChefHat, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
+import { BookMarked, ChefHat, Soup, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -16,6 +16,7 @@ import { useTheme } from "@/lib/theme";
 import { logout, useSession } from "@/lib/session";
 import { lastView } from "@/lib/views";
 import { useOpenTask } from "@/lib/nav";
+import { useMenus } from "./menus";
 import { BUCKETS, bucketOf } from "@/lib/format";
 
 export function CommandPalette() {
@@ -28,6 +29,8 @@ export function CommandPalette() {
   const projects = useProjects();
   const pot = /^\/pots\/([^/]+)/.exec(loc.pathname)?.[1]?.toUpperCase();
   const tasks = useProc("projectTasks", { project: pot ?? "" }, { enabled: !!pot && paletteOpen });
+
+  const menus = useMenus(pot ?? "", !!pot && paletteOpen);
 
   const run = (fn: () => void) => () => {
     setPaletteOpen(false);
@@ -55,10 +58,33 @@ export function CommandPalette() {
               <BookMarked /> Search the pantry in {pot}
             </CommandItem>
           )}
+          {pot && (
+            <CommandItem value="new menu milestone create add" onSelect={run(() => navigate(`/pots/${pot}/menus?new=1`))}>
+              <Plus /> New menu in {pot}
+            </CommandItem>
+          )}
           <CommandItem value="new task add create" onSelect={run(() => openNewTask(pot))}>
             <Plus /> New task{pot ? ` in ${pot}` : ""}
           </CommandItem>
         </CommandGroup>
+        {pot && menus.open.length > 0 && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading={`Switch menu in ${pot}`}>
+              <CommandItem value="switch menu all menus" onSelect={run(() => navigate(`/pots/${pot}/list`))}>
+                <Soup /> All menus
+              </CommandItem>
+              {menus.open.map((m) => (
+                <CommandItem key={m.key} value={`switch menu ${m.key} ${m.name}`} onSelect={run(() => navigate(`/pots/${pot}/list?menu=${encodeURIComponent(m.key)}`))}>
+                  <Soup /> {m.name}
+                  <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+                    {m.done}/{m.total}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        )}
         <CommandSeparator />
         <CommandGroup heading="Pots">
           {(projects.data ?? []).map((p) => (

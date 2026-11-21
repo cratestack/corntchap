@@ -17,7 +17,8 @@ procedure projectOverview(): ProjectSummary[]
 /// @param status Only tasks in this status: open, claimed, blocked, done or cancelled.
 /// @param label Only tasks carrying this label.
 /// @param readyOnly Only tasks you could claim now (open, dependencies and subtasks done).
-procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?): TaskView[]
+/// @param menu Only tasks on this menu (key, e.g. mvp); - for tasks on no menu.
+procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?, menu: String?): TaskView[]
   @allow(auth() != null)
   @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts. Optional status/label filters; readyOnly limits to claimable tasks.")
 

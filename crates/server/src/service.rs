@@ -29,6 +29,7 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
        where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))),
   'open_items', (select count(*) from items i where i.task_id = t.id and not i.done),
   'total_items', (select count(*) from items i where i.task_id = t.id),
+  'menu', (select m.key from menus m where m.id = t.menu_id),
   'result', t.result, 'created_at', t.created_at, 'updated_at', t.updated_at)"#;
 
 /// Project visibility predicate; $N = is_admin, $M = principal id.
@@ -212,6 +213,7 @@ pub async fn list_tasks(
     status: Option<&str>,
     label: Option<&str>,
     ready_only: bool,
+    menu: Option<&str>,
 ) -> Result<Value> {
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, project).await?;
@@ -220,6 +222,8 @@ pub async fn list_tasks(
          where t.project_id = $1
            and ($2::text is null or t.status = $2)
            and ($3::text is null or $3 = any(t.labels))
+           and ($5::text is null or ($5 = '-' and t.menu_id is null)
+                or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
            and (not $4 or (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
                  where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))))
          order by t.priority desc, t.number"
@@ -229,6 +233,13 @@ pub async fn list_tasks(
         .bind(status)
         .bind(label)
         .bind(ready_only)
+        .bind(menu.map(|m| {
+            if m.trim() == "-" {
+                "-".to_string()
+            } else {
+                crate::menus::slug(m)
+            }
+        }))
         .fetch_all(&mut *c)
         .await?;
     Ok(Value::Array(rows))
@@ -243,6 +254,8 @@ pub struct NewTask {
     pub depends_on: Vec<String>,
     pub labels: Vec<String>,
     pub priority: i64,
+    /// Menu key (milestone) to put the task on.
+    pub menu: Option<String>,
 }
 
 pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value> {
@@ -259,6 +272,10 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     for d in &n.depends_on {
         deps.push(task_by_ref(&mut tx, p, d).await?.id);
     }
+    let menu = match n.menu.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => Some(crate::menus::open_menu_id(&mut tx, pr.id, &pr.key, m).await?),
+        None => None,
+    };
     let number: i64 = sqlx::query_scalar(
         "update projects set next_number = next_number + 1 where id = $1 returning next_number - 1",
     )
@@ -267,8 +284,8 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     .await?;
     let id = Uuid::new_v4();
     sqlx::query(
-        "insert into tasks (id, project_id, number, title, body, priority, labels, parent_id, status, created_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9)",
+        "insert into tasks (id, project_id, number, title, body, priority, labels, parent_id, status, created_by, menu_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10)",
     )
     .bind(id)
     .bind(pr.id)
@@ -279,6 +296,7 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     .bind(&n.labels)
     .bind(parent)
     .bind(p.id)
+    .bind(menu)
     .execute(&mut *tx)
     .await?;
     for (i, text) in n.items.iter().enumerate() {
@@ -304,7 +322,7 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
         Some(id),
         "task.created",
         Some(p.id),
-        json!({"title": n.title.trim(), "labels": n.labels}),
+        json!({"title": n.title.trim(), "labels": n.labels, "menu": n.menu.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(crate::menus::slug)}),
     )
     .await?;
     let out = task_full(&mut tx, id).await?;
@@ -317,6 +335,8 @@ pub struct TaskEdit {
     pub body: Option<String>,
     pub labels: Option<Vec<String>>,
     pub priority: Option<i64>,
+    /// Some("") takes the task off its menu.
+    pub menu: Option<String>,
 }
 
 pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Result<Value> {
@@ -347,6 +367,18 @@ pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Re
     .bind(e.priority)
     .execute(&mut *tx)
     .await?;
+    if let Some(m) = e.menu.as_deref().map(str::trim) {
+        let menu = if m.is_empty() {
+            None
+        } else {
+            Some(crate::menus::open_menu_id(&mut tx, t.project_id, &t.key, m).await?)
+        };
+        sqlx::query("update tasks set menu_id = $2 where id = $1")
+            .bind(t.id)
+            .bind(menu)
+            .execute(&mut *tx)
+            .await?;
+    }
     emit(
         &mut tx,
         Some(t.project_id),
@@ -379,9 +411,11 @@ pub async fn claim_next(
     p: &Principal,
     project: &str,
     labels: &[String],
+    menu: Option<&str>,
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let pr = project_by_key(&mut tx, p, project).await?;
+    let menu = menu.map(crate::menus::slug).filter(|m| !m.is_empty());
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
         .bind(p.id.to_string())
         .execute(&mut *tx)
@@ -397,6 +431,7 @@ pub async fn claim_next(
              and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
                              where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
              and (cardinality($4::text[]) = 0 or t.labels && $4::text[])
+             and ($5::text is null or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
            order by t.priority desc, t.created_at
            for update skip locked limit 1)
          update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
@@ -408,6 +443,7 @@ pub async fn claim_next(
     .bind(p.id)
     .bind(pr.ttl_secs)
     .bind(labels)
+    .bind(menu)
     .fetch_optional(&mut *tx)
     .await?;
     let Some((id, epoch, exp)) = row else {
@@ -890,6 +926,9 @@ fn task_markdown(t: &Value) -> String {
     let mut meta = vec![];
     if let Some(by) = t["claimed_by"].as_str() {
         meta.push(format!("claimed by {by}"));
+    }
+    if let Some(m) = t["menu"].as_str() {
+        meta.push(format!("menu {m}"));
     }
     if t["priority"].as_i64().unwrap_or(0) != 0 {
         meta.push(format!("priority {}", t["priority"]));

@@ -31,6 +31,8 @@ import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
 import { PRIORITIES } from "./new-task";
+import { MenuChip, useMenus } from "./menus";
+import { projectOfTask } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
 export function TaskSheet({ id, onClose }: { id: string | null; onClose: () => void }) {
@@ -138,6 +140,15 @@ function TaskDetailBody({ id }: { id: string }) {
             )}
             {t.status === "claimed" && <LeaseTimer task={t} />}
           </div>
+        )}
+        {!editing && (
+          <MenuPicker
+            taskId={t.id}
+            current={t.menu ?? null}
+            closed={closed}
+            disabled={!!busy}
+            save={(menu) => run("move it to that menu", () => call("taskEdit", { id: t.id, menu }), menu ? "Moved to the menu" : "Taken off the menu")}
+          />
         )}
         {note && !editing && <p className="mt-2 text-[12.5px] text-muted-foreground">{note}</p>}
 
@@ -299,6 +310,47 @@ function TaskDetailBody({ id }: { id: string }) {
           await call("complete", { id: t.id, epoch, result });
         }}
       />
+    </div>
+  );
+}
+
+function MenuPicker({
+  taskId,
+  current,
+  closed,
+  disabled,
+  save,
+}: {
+  taskId: string;
+  current: string | null;
+  closed: boolean;
+  disabled: boolean;
+  save: (menu: string) => void;
+}) {
+  const menus = useMenus(projectOfTask(taskId));
+  const name = current ? (menus.names[current] ?? current) : null;
+  if (closed || (menus.open.length === 0 && !current)) {
+    return name ? <div className="mt-3"><MenuChip name={name} /></div> : null;
+  }
+  const options = [...menus.open, ...menus.menus.filter((m) => m.key === current && m.status === "served")];
+  return (
+    <div className="mt-3 flex items-center gap-2">
+      <Label htmlFor="t-menu" className="text-[12px] font-normal text-muted-foreground">
+        Menu
+      </Label>
+      <Select value={current ?? "-"} onValueChange={(v) => save(v === "-" ? "" : v)} disabled={disabled}>
+        <SelectTrigger id="t-menu" size="sm" className="h-7 min-w-36 gap-2 rounded-full text-[12.5px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="-">No menu</SelectItem>
+          {options.map((m) => (
+            <SelectItem key={m.key} value={m.key}>
+              {m.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

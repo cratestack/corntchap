@@ -84,18 +84,43 @@ impl Credentials {
         }
         Ok(before)
     }
+
+    /// Delete only `relay_token` from credentials.toml (the user's login stays). Returns whether one
+    /// was stored. A file that cannot be parsed is left alone and reported rather than overwritten.
+    pub fn drop_relay_token() -> Result<bool> {
+        let path = cred_path();
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let mut disk: Credentials = toml::from_str(&text).map_err(|e| {
+            anyhow!(
+                "{} is not valid TOML ({e}); left untouched, remove relay_token by hand",
+                path.display()
+            )
+        })?;
+        if disk.relay_token.take().is_none() {
+            return Ok(false);
+        }
+        write_creds(&path, &disk)?;
+        Ok(true)
+    }
 }
 
+/// Write via a temp file and rename, so a crash never leaves a half-written credentials file.
 fn write_creds(path: &std::path::Path, c: &Credentials) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    fs::write(path, toml::to_string_pretty(c)?)?;
+    let tmp = path.with_extension("toml.tmp");
+    fs::write(&tmp, toml::to_string_pretty(c)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
     }
+    fs::rename(&tmp, path)?;
     Ok(())
 }
 
@@ -195,6 +220,10 @@ impl Api {
     }
     pub async fn post(&self, path: &str, body: Value) -> Result<Value> {
         self.send(self.req(reqwest::Method::POST, path).json(&body))
+            .await
+    }
+    pub async fn patch(&self, path: &str, body: Value) -> Result<Value> {
+        self.send(self.req(reqwest::Method::PATCH, path).json(&body))
             .await
     }
     pub async fn delete(&self, path: &str) -> Result<Value> {

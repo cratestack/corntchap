@@ -37,6 +37,7 @@ model Task {
   createdAt DateTime @readonly @map("created_at")
   updatedAt DateTime @readonly @map("updated_at")
   claimedRef String? @server_only @map("claimed_ref")
+  menuId Uuid? @readonly @map("menu_id")
   project Project @relation(fields:[projectId],references:[id])
   items Item[] @relation(fields:[id],references:[taskId])
   comments Comment[] @relation(fields:[id],references:[taskId])
@@ -88,4 +89,25 @@ model TaskDep {
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "task-deps")
+}
+
+/// A project's menu (milestone), read-only here: create and edit it with the menu procedures.
+model Menu {
+  id Uuid @id @default(uuid())
+  projectId Uuid @readonly @map("project_id")
+  key String @readonly
+  name String @readonly
+  description String @readonly
+  /// open or served.
+  status String @readonly
+  position Int @readonly
+  createdAt DateTime @readonly @map("created_at")
+  updatedAt DateTime @readonly @map("updated_at")
+  servedAt DateTime? @readonly @map("served_at")
+  project Project @relation(fields:[projectId],references:[id])
+
+  @@map("menus")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "menus")
 }

@@ -237,6 +237,75 @@ pub fn progress(t: &Value) -> String {
     }
 }
 
+/// Small text progress bar: `████░░░░ 3/8`. Never shows a full bar until everything is done.
+pub fn bar(done: i64, total: i64, width: usize) -> String {
+    let (done, total) = (done.max(0), total.max(0));
+    let filled = if total == 0 {
+        0
+    } else {
+        ((done.min(total) as usize * width) / total as usize).min(width)
+    };
+    format!(
+        "{}{} {done}/{total}",
+        "█".repeat(filled),
+        "░".repeat(width - filled)
+    )
+}
+
+/// Progress bar text for a menu JSON (`done` of `total` tasks).
+pub fn menu_bar(m: &Value, width: usize) -> String {
+    bar(
+        m["done"].as_i64().unwrap_or(0),
+        m["total"].as_i64().unwrap_or(0),
+        width,
+    )
+}
+
+pub fn menus_table(v: &Value) -> String {
+    let rows = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|m| {
+            let served = m["status"] == "served";
+            let count = |k: &str| {
+                let n = m[k].as_i64().unwrap_or(0);
+                if n == 0 {
+                    dim_cell("-")
+                } else {
+                    plain(n.to_string())
+                }
+            };
+            vec![
+                plain(s(m, "key")),
+                plain(s(m, "name")),
+                colored(
+                    s(m, "status"),
+                    if served { Color::Green } else { Color::Cyan },
+                ),
+                plain(menu_bar(m, 8)),
+                m["due_on"]
+                    .as_str()
+                    .map(plain)
+                    .unwrap_or_else(|| dim_cell("-")),
+                count("open"),
+                count("claimed"),
+                match m["blocked"].as_i64().unwrap_or(0) {
+                    0 => dim_cell("-"),
+                    n => colored(n.to_string(), Color::Red),
+                },
+            ]
+        })
+        .collect();
+    table(
+        &[
+            "key", "name", "status", "progress", "due", "open", "claimed", "blocked",
+        ],
+        rows,
+        "no menus: add one with `menu add <POT> <NAME>`",
+    )
+}
+
 pub fn tasks_table(v: &Value) -> String {
     let rows = v
         .as_array()
@@ -249,6 +318,10 @@ pub fn tasks_table(v: &Value) -> String {
                 plain(t["priority"].to_string()),
                 plain(progress(t)),
                 plain(s(t, "title")),
+                t["menu"]
+                    .as_str()
+                    .map(plain)
+                    .unwrap_or_else(|| dim_cell("-")),
                 t["claimed_by"]
                     .as_str()
                     .map(plain)
@@ -257,7 +330,7 @@ pub fn tasks_table(v: &Value) -> String {
         })
         .collect();
     table(
-        &["id", "status", "pri", "items", "title", "held by"],
+        &["id", "status", "pri", "items", "title", "menu", "held by"],
         rows,
         "no tasks",
     )
@@ -469,6 +542,9 @@ pub fn task_detail(v: &Value) -> String {
     if let Some(b) = v["claimed_by"].as_str() {
         meta.push(format!("held by {b}"));
     }
+    if let Some(m) = v["menu"].as_str() {
+        meta.push(format!("menu {m}"));
+    }
     if let Some(l) = v["labels"].as_array().filter(|l| !l.is_empty()) {
         meta.push(format!(
             "labels {}",
@@ -546,6 +622,41 @@ mod tests {
             cols.windows(2).all(|w| w[0] == w[1]),
             "title column aligned: {t}"
         );
+    }
+
+    #[test]
+    fn bar_renders_fractions_and_never_fills_early() {
+        assert_eq!(bar(3, 8, 8), "███░░░░░ 3/8");
+        assert_eq!(bar(0, 0, 8), "░░░░░░░░ 0/0");
+        assert_eq!(bar(7, 8, 8), "███████░ 7/8");
+        assert_eq!(bar(8, 8, 8), "████████ 8/8");
+        assert_eq!(bar(1, 8, 8), "█░░░░░░░ 1/8");
+    }
+
+    #[test]
+    fn menus_table_shows_bar_due_and_counts() {
+        let v = json!([
+            {"key":"mvp","name":"MVP","status":"open","due_on":"2026-12-01","total":8,"done":3,"open":4,"claimed":1,"blocked":0},
+            {"key":"beta","name":"Beta","status":"served","total":0,"done":0,"open":0,"claimed":0,"blocked":2}
+        ]);
+        let t = menus_table(&v);
+        assert!(
+            t.contains("███░░░░░ 3/8") && t.contains("2026-12-01"),
+            "{t}"
+        );
+        assert!(t.contains("PROGRESS") && t.contains("BLOCKED") && t.contains("served"));
+        assert!(menus_table(&json!([])).starts_with("no menus"));
+    }
+
+    #[test]
+    fn task_table_and_detail_show_the_menu() {
+        let v = json!([{"id":"P-1","status":"open","priority":0,"title":"T","menu":"mvp"}]);
+        assert!(tasks_table(&v).contains("mvp"));
+        let d =
+            task_detail(&json!({"id":"P-1","title":"T","status":"open","priority":0,"menu":"mvp"}));
+        assert!(d.contains("menu mvp"));
+        let d = task_detail(&json!({"id":"P-1","title":"T","status":"open","priority":0}));
+        assert!(!d.contains("menu"));
     }
 
     #[test]
