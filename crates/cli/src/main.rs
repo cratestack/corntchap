@@ -4,6 +4,7 @@ mod opencode;
 mod pantry;
 mod relay;
 mod setup;
+mod station;
 mod tui;
 mod ui;
 
@@ -79,6 +80,9 @@ enum Cmd {
     /// The cooks (agents): create, set up, wake targets.
     #[command(subcommand, name = "cook", alias = "agent")]
     Agent(AgentCmd),
+    /// Stations: the agent sessions (OpenCode, Claude Code, Codex) the fire wakes. `station scan` registers a repo's sessions.
+    #[command(subcommand, name = "station", alias = "stations")]
+    Station(station::StationCmd),
     /// Keep the fire lit: the relay that wakes your local cooks when new work lands (subcommands: init, install, uninstall, doctor, enroll).
     #[command(name = "fire", alias = "relay")]
     Relay {
@@ -747,6 +751,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         Cmd::Pantry(p) => pantry::run(p, &api).await?,
         Cmd::Menu(c) => menu::run(c, &api).await?,
         Cmd::Agent(a) => agent(a, &api).await?,
+        Cmd::Station(c) => station::run(c, &api).await?,
         Cmd::Login { .. } | Cmd::Logout { .. } | Cmd::Doctor | Cmd::Relay { .. } => unreachable!(),
     }
     Ok(())
@@ -797,7 +802,7 @@ async fn agent_setup(
     print!("{}", setup::mcp_snippet(kind, &api.server, &token));
     if runtime == "local" {
         println!(
-            "\nRelay: paste this into {} (run `corntchap-cli fire init` first if it does not exist),\nthen `corntchap-cli fire doctor`:\n",
+            "\nWake it per session: from inside your repo run `corntchap-cli station scan` (registers its sessions as stations, no config needed), then `corntchap-cli fire doctor`.\nOptional fallback for wakes that name no station: paste this into {} (`corntchap-cli fire init` writes the file):\n",
             relay::config_path().display()
         );
         println!("{}", relay::target_block(&n, kind));

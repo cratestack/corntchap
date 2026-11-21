@@ -12,7 +12,11 @@ use crate::api::{Api, Credentials, config_dir};
 
 pub const PROMPT: &str = "New work is ready in {project}. Call claim_next with project {project}, finish the task, then call it again until it returns none.";
 
-#[derive(Deserialize, Clone, Debug)]
+/// The work prompt for a woken station: it must pass its id to claim_next so the server knows which
+/// session holds the task.
+pub const STATION_PROMPT: &str = "New work is ready in {project}. You are station {station}: pass station {station} to claim_next (and claim_task / ask). Call claim_next with project {project} and station {station}, finish the task, then call it again until it returns none.";
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 pub struct Target {
     pub agent: String,
     /// "opencode" | "exec" | "webhook"
@@ -38,22 +42,36 @@ pub struct RelayConfig {
     pub target: Vec<Target>,
 }
 
+impl Target {
+    /// A target with nothing but its adapter: the starting point for a station's runtime defaults.
+    pub fn blank(agent: &str, adapter: &str) -> Target {
+        Target {
+            agent: agent.into(),
+            adapter: adapter.into(),
+            url: None,
+            directory: None,
+            username: None,
+            password: None,
+            password_env: None,
+            command: None,
+            cwd: None,
+            timeout: None,
+        }
+    }
+}
+
 pub fn config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
 pub fn load_config() -> Result<RelayConfig> {
     let p = config_path();
-    let s = std::fs::read_to_string(&p).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow!(
-                "{} does not exist yet. Run `corntchap-cli fire init` to write a commented template, then edit it.",
-                p.display()
-            )
-        } else {
-            anyhow!("reading {}: {e}", p.display())
-        }
-    })?;
+    let s = match std::fs::read_to_string(&p) {
+        Ok(s) => s,
+        // no config.toml is fine: stations need no [[target]]
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(RelayConfig::default()),
+        Err(e) => return Err(anyhow!("reading {}: {e}", p.display())),
+    };
     let cfg: RelayConfig =
         toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))?;
     for t in &cfg.target {
@@ -66,24 +84,32 @@ pub fn load_config() -> Result<RelayConfig> {
 
 /// The commented starter config written by `relay init`.
 pub const TEMPLATE: &str = r##"# corntchap relay configuration.
-# One [[target]] per local agent the relay may wake. `agent` is the agent's name on the server
-# (see `corntchap-cli cook ls`); it must also have a relay wake target:
-#   corntchap-cli cook wake add <agent> --type relay
+#
+# Normally you need NO [[target]] at all. Register the agent sessions you work in as stations,
+# from inside a repo (all its worktrees are covered):
+#   corntchap-cli station scan
+# and the fire wakes exactly that session (OpenCode, Claude Code or Codex) in its own folder when
+# work lands. A cook needs a relay wake target: corntchap-cli cook wake add <cook> --type relay
 # Check everything with: corntchap-cli fire doctor
+#
+# A [[target]] is only a fallback (a wake that names no station) or a webhook, and may refine how a
+# station's runtime is reached (an OpenCode password_env, a custom command containing {session}).
+# `agent` is the cook's name on the server (see `corntchap-cli cook ls`).
 
 # Optional: connect to this server instead of the one stored by `corntchap-cli login`.
 # server = "https://corntchap.example.com"
 
-# --- OpenCode: prompts the newest session in `directory` of a running OpenCode -------------------
-# The server is found on its own (desktop app, TUI or `opencode serve`, whatever port it took);
-# set `url` only to pin one. A password-protected server: password_env = "MY_OPENCODE_PASSWORD".
+# --- OpenCode: prompts the newest session in `directory` of a running OpenCode (no station) -----
+# The server is found on its own (OpenCode v2's `opencode service status`, else the desktop app,
+# TUI or `opencode serve`, whatever port it took); set `url` only to pin one. A password-protected
+# 1.x server: password_env = "MY_OPENCODE_PASSWORD".
 # [[target]]
 # agent     = "opencode-laptop"
 # adapter   = "opencode"
 # directory = "~/code/payments"       # session directory to wake
 # url       = "http://127.0.0.1:4096" # optional
 
-# --- Codex: runs `codex exec resume --last` with the prompt on stdin -----------------------------
+# --- Codex: runs `codex exec resume --last` with the prompt on stdin (no station) ----------------
 # [[target]]
 # agent   = "codex-laptop"
 # adapter = "exec"
@@ -91,7 +117,7 @@ pub const TEMPLATE: &str = r##"# corntchap relay configuration.
 # cwd     = "~/code/payments"
 # timeout = "45m"
 
-# --- Claude Code: runs `claude -p --continue` with the prompt on stdin ---------------------------
+# --- Claude Code: runs `claude -p --continue` with the prompt on stdin (no station) --------------
 # [[target]]
 # agent   = "claude-laptop"
 # adapter = "exec"
@@ -110,16 +136,16 @@ pub const TEMPLATE: &str = r##"# corntchap relay configuration.
 pub fn target_block(agent: &str, kind: &str) -> String {
     match kind {
         "opencode" => format!(
-            "[[target]]\nagent     = \"{agent}\"\nadapter   = \"opencode\"\ndirectory = \"~/code/your-project\"\n# url = \"http://127.0.0.1:4096\"   # optional: the running OpenCode is found on its own\n"
+            "# Optional: stations (`corntchap-cli station scan`) wake the exact session; this is only the fallback.\n[[target]]\nagent     = \"{agent}\"\nadapter   = \"opencode\"\n# directory = \"~/code/your-project\"   # optional: only for wakes that name no station\n# url = \"http://127.0.0.1:4096\"   # optional: the running OpenCode is found on its own\n"
         ),
         "codex" => format!(
-            "[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"codex\", \"exec\", \"resume\", \"--last\", \"-\"]\ncwd     = \"~/code/your-project\"\ntimeout = \"45m\"\n"
+            "# Optional: stations (`corntchap-cli station scan`) wake the exact session; this is only the fallback.\n[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"codex\", \"exec\", \"resume\", \"--last\", \"-\"]\n# cwd   = \"~/code/your-project\"\ntimeout = \"45m\"\n"
         ),
         "claude-code" => format!(
-            "[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"claude\", \"-p\", \"--continue\"]\ncwd     = \"~/code/your-project\"\ntimeout = \"45m\"\n"
+            "# Optional: stations (`corntchap-cli station scan`) wake the exact session; this is only the fallback.\n[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"claude\", \"-p\", \"--continue\"]\n# cwd   = \"~/code/your-project\"\ntimeout = \"45m\"\n"
         ),
         _ => format!(
-            "[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"your-agent-cli\"]   # the prompt arrives on stdin\ncwd     = \"~/code/your-project\"\ntimeout = \"45m\"\n"
+            "# Optional: stations (`corntchap-cli station scan`) wake the exact session; this is only the fallback.\n[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"your-agent-cli\"]   # the prompt arrives on stdin\n# cwd   = \"~/code/your-project\"\ntimeout = \"45m\"\n"
         ),
     }
 }
@@ -139,7 +165,7 @@ pub fn init(force: bool) -> Result<()> {
     std::fs::write(&p, TEMPLATE)?;
     crate::ui::ok_line(format!("wrote {}", p.display()));
     println!(
-        "Uncomment and edit the [[target]] entries, then run `corntchap-cli fire doctor`.\nTip: `corntchap-cli cook setup <name> --kind opencode|codex|claude-code` prints the matching block."
+        "Nothing else is needed: from inside a repo run `corntchap-cli station scan` to register your agent sessions as stations, then `corntchap-cli fire doctor`.\n[[target]] entries are optional (fallback / webhook); `corntchap-cli cook setup <name> --kind opencode|codex|claude-code` prints a matching block."
     );
     Ok(())
 }
@@ -252,24 +278,175 @@ pub fn expand(p: &str) -> String {
     shellexpand::tilde(p).into_owned()
 }
 
+/// The session a wake names (a registered station).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Station {
+    pub id: String,
+    pub runtime: String,
+    pub session: String,
+    pub directory: Option<String>,
+    pub label: Option<String>,
+}
+
+/// One `wake` event.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Wake {
+    pub agent: String,
+    pub project: String,
+    pub station: Option<Station>,
+    /// The prompt the server worded (e.g. the answer to the cook's question); sent verbatim.
+    pub text: Option<String>,
+}
+
+pub fn parse_wake(v: &Value) -> Option<Wake> {
+    let str_of = |x: &Value, k: &str| {
+        x[k].as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    let station = v["station"].as_object().and_then(|_| {
+        let st = &v["station"];
+        Some(Station {
+            id: str_of(st, "id")?,
+            runtime: str_of(st, "runtime")?,
+            session: str_of(st, "session")?,
+            directory: str_of(st, "directory"),
+            label: str_of(st, "label"),
+        })
+    });
+    Some(Wake {
+        agent: str_of(v, "agent")?,
+        project: str_of(v, "project")?,
+        station,
+        text: v["text"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .map(String::from),
+    })
+}
+
+/// Wakes run one at a time per station (else per cook), so two sessions of one cook are independent.
+pub fn wake_key(w: &Wake) -> String {
+    match &w.station {
+        Some(s) => format!("station:{}", s.id),
+        None => format!("agent:{}", w.agent),
+    }
+}
+
+/// What to say: the server's own wording when present, else the work prompt (naming the station).
+pub fn wake_prompt(w: &Wake) -> String {
+    if let Some(t) = &w.text {
+        return t.clone();
+    }
+    match &w.station {
+        Some(s) => STATION_PROMPT
+            .replace("{project}", &w.project)
+            .replace("{station}", &s.id),
+        None => PROMPT.replace("{project}", &w.project),
+    }
+}
+
+/// How a wake is delivered.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Plan {
+    /// Prompt this session of an OpenCode server; `target` only refines reaching the server.
+    OpenCode {
+        target: Target,
+        session: String,
+    },
+    /// Run a command with the prompt on stdin.
+    Exec {
+        agent: String,
+        command: Vec<String>,
+        cwd: Option<String>,
+        timeout: Option<String>,
+    },
+    /// No station: the cook's `[[target]]`, as before.
+    Target(Target),
+    Skip(String),
+}
+
+fn fill(arg: &str, s: &Station) -> String {
+    arg.replace("{session}", &s.session)
+        .replace("{directory}", s.directory.as_deref().unwrap_or("."))
+}
+
+/// Decide the adapter, command/cwd and session for a wake. Built-in defaults per runtime need no
+/// `[[target]]`; one for the cook may refine them (OpenCode password/url, a custom command that
+/// contains `{session}`, a timeout), but the session and directory always come from the station.
+pub fn plan(w: &Wake, targets: &[Target]) -> Plan {
+    let target = targets.iter().find(|t| t.agent == w.agent);
+    let Some(s) = &w.station else {
+        return match target {
+            Some(t) => Plan::Target(t.clone()),
+            None => Plan::Skip(format!(
+                "{}: woken without a station and no [[target]] in config.toml: register a session with `corntchap-cli station scan`",
+                w.agent
+            )),
+        };
+    };
+    let exec = |default: &[&str]| {
+        let custom = target
+            .filter(|t| t.adapter == "exec")
+            .and_then(|t| t.command.as_ref())
+            .filter(|c| !c.is_empty() && c.iter().any(|a| a.contains("{session}")));
+        let command: Vec<String> = match custom {
+            Some(c) => c.iter().map(|a| fill(a, s)).collect(),
+            None => default.iter().map(|a| fill(a, s)).collect(),
+        };
+        Plan::Exec {
+            agent: w.agent.clone(),
+            command,
+            cwd: s
+                .directory
+                .clone()
+                .or_else(|| target.and_then(|t| t.cwd.clone())),
+            timeout: target.and_then(|t| t.timeout.clone()),
+        }
+    };
+    match s.runtime.as_str() {
+        "opencode" => {
+            let mut t = target
+                .filter(|t| t.adapter == "opencode")
+                .cloned()
+                .unwrap_or_else(|| Target::blank(&w.agent, "opencode"));
+            t.directory = None; // the session decides, not the folder
+            Plan::OpenCode {
+                target: t,
+                session: s.session.clone(),
+            }
+        }
+        "claude-code" => exec(&["claude", "-p", "--resume", "{session}"]),
+        "codex" => exec(&["codex", "exec", "resume", "{session}", "-"]),
+        other => match target {
+            Some(t) => Plan::Target(t.clone()),
+            None => Plan::Skip(format!(
+                "{}: station {} has runtime {other:?}, which the fire cannot resume by itself: add a [[target]] for it in config.toml",
+                w.agent, s.id
+            )),
+        },
+    }
+}
+
 #[derive(Default)]
 struct RunState {
     running: bool,
-    pending: Vec<String>, // projects woken while a run was in flight
+    pending: Vec<Wake>, // wakes that came while a run was in flight
 }
 
 type States = Arc<Mutex<HashMap<String, RunState>>>;
 
 pub async fn run(mut api: Api) -> Result<()> {
     let cfg = load_config()?;
-    if cfg.target.is_empty() {
-        bail!(
-            "no [[target]] in {}; see `corntchap-cli fire doctor`",
-            config_path().display()
-        );
-    }
     if let Some(sv) = &cfg.server {
         api.server = sv.trim_end_matches('/').to_string();
+    }
+    if cfg.target.is_empty() {
+        eprintln!(
+            "relay: no [[target]] in {}: waking registered stations only (`corntchap-cli station scan`)",
+            config_path().display()
+        );
     }
     let states: States = Arc::new(Mutex::new(HashMap::new()));
     let mut last_id: Option<String> = load_last_id(&api.server);
@@ -322,47 +499,52 @@ async fn stream_once(
 }
 
 async fn on_wake(api: &Api, cfg: &RelayConfig, states: &States, wake: &Value) {
-    let (Some(agent), Some(project)) = (wake["agent"].as_str(), wake["project"].as_str()) else {
+    let Some(w) = parse_wake(wake) else {
         return;
     };
-    let Some(target) = cfg.target.iter().find(|t| t.agent == agent).cloned() else {
-        return; // no target for that agent: ignore
-    };
+    if let Plan::Skip(why) = plan(&w, &cfg.target) {
+        eprintln!("relay: {why}");
+        return;
+    }
+    let key = wake_key(&w);
     {
         let mut g = states.lock().await;
-        let st = g.entry(agent.to_string()).or_default();
+        let st = g.entry(key.clone()).or_default();
         if st.running {
             // Coalesce into one follow-up run when the current one ends.
-            if !st.pending.iter().any(|p| p == project) {
-                st.pending.push(project.to_string());
+            if !st.pending.contains(&w) {
+                st.pending.push(w);
             }
             return;
         }
         st.running = true;
     }
-    let (api, states, project) = (api.clone(), states.clone(), project.to_string());
+    let (api, states, targets) = (api.clone(), states.clone(), cfg.target.clone());
     tokio::spawn(async move {
-        let mut project = project;
+        let mut w = w;
         loop {
-            report(&api, &target.agent, &project, "started", None).await;
-            let code = run_target(&target, &project).await;
-            report(&api, &target.agent, &project, "finished", Some(code)).await;
+            report(&api, &w, "started", None).await;
+            let code = run_wake(&w, &targets).await;
+            report(&api, &w, "finished", Some(code)).await;
             let mut g = states.lock().await;
-            let st = g.entry(target.agent.clone()).or_default();
+            let st = g.entry(key.clone()).or_default();
             if st.pending.is_empty() {
                 st.running = false;
                 return;
             }
-            project = st.pending.remove(0);
+            w = st.pending.remove(0);
         }
     });
 }
 
-async fn report(api: &Api, agent: &str, project: &str, event: &str, exit: Option<i32>) {
+async fn report(api: &Api, w: &Wake, event: &str, exit: Option<i32>) {
     let _ = api
         .post(
             "/relay/runs",
-            json!({"agent": agent, "project": project, "event": event, "exit_code": exit}),
+            json!({
+                "agent": w.agent, "project": w.project, "event": event, "exit_code": exit,
+                "station": w.station.as_ref().map(|s| s.id.clone()),
+            }),
         )
         .await;
 }
@@ -372,7 +554,7 @@ pub async fn poke(cook: &str, pot: &str) -> Result<()> {
     let cfg = load_config()?;
     let t = cfg.target.iter().find(|t| t.agent == cook).ok_or_else(|| {
         anyhow!(
-            "no [[target]] with agent = {cook:?} in {}",
+            "no [[target]] with agent = {cook:?} in {} (stations are woken by the server; poke only tries a [[target]])",
             config_path().display()
         )
     })?;
@@ -382,16 +564,51 @@ pub async fn poke(cook: &str, pot: &str) -> Result<()> {
     }
 }
 
+/// Deliver one wake; returns an exit code (0 ok, -1 skipped/failed to start).
+pub async fn run_wake(w: &Wake, targets: &[Target]) -> i32 {
+    let prompt = wake_prompt(w);
+    let who = match &w.station {
+        Some(s) => format!("{} ({})", w.agent, s.id),
+        None => w.agent.clone(),
+    };
+    let res = match plan(w, targets) {
+        Plan::Skip(why) => Err(anyhow!("{why}")),
+        Plan::OpenCode { target, session } => {
+            crate::opencode::prompt_station(&target, &session, &prompt).await
+        }
+        Plan::Exec {
+            agent,
+            command,
+            cwd,
+            timeout,
+        } => {
+            exec_command(
+                &agent,
+                &command,
+                cwd.as_deref(),
+                timeout.as_deref(),
+                &prompt,
+            )
+            .await
+        }
+        Plan::Target(t) => deliver_target(&t, &prompt, &w.project).await,
+    };
+    match res {
+        Ok(code) => {
+            eprintln!("relay: {who} finished ({code})");
+            code
+        }
+        Err(e) => {
+            eprintln!("relay: {who}: {e:#}");
+            -1
+        }
+    }
+}
+
 /// Returns an exit code (0 ok, -1 skipped/failed to start).
 pub async fn run_target(t: &Target, project: &str) -> i32 {
     let prompt = PROMPT.replace("{project}", project);
-    let res = match t.adapter.as_str() {
-        "opencode" => crate::opencode::prompt(t, &prompt).await,
-        "exec" => exec(t, &prompt).await,
-        "webhook" => webhook(t, &prompt, project).await,
-        other => Err(anyhow!("unknown adapter {other}")),
-    };
-    match res {
+    match deliver_target(t, &prompt, project).await {
         Ok(code) => {
             eprintln!("relay: {} finished ({code})", t.agent);
             code
@@ -403,30 +620,62 @@ pub async fn run_target(t: &Target, project: &str) -> i32 {
     }
 }
 
-async fn exec(t: &Target, prompt: &str) -> Result<i32> {
-    let cmd = t
-        .command
-        .as_ref()
-        .filter(|c| !c.is_empty())
-        .ok_or_else(|| anyhow!("exec target needs command"))?;
+async fn deliver_target(t: &Target, prompt: &str, project: &str) -> Result<i32> {
+    match t.adapter.as_str() {
+        "opencode" => crate::opencode::prompt(t, prompt).await,
+        "exec" => {
+            let cmd = t
+                .command
+                .as_ref()
+                .filter(|c| !c.is_empty())
+                .ok_or_else(|| anyhow!("exec target needs command"))?;
+            exec_command(
+                &t.agent,
+                cmd,
+                t.cwd.as_deref(),
+                t.timeout.as_deref(),
+                prompt,
+            )
+            .await
+        }
+        "webhook" => webhook(t, prompt, project).await,
+        other => Err(anyhow!("unknown adapter {other}")),
+    }
+}
+
+async fn exec_command(
+    agent: &str,
+    cmd: &[String],
+    cwd: Option<&str>,
+    timeout: Option<&str>,
+    prompt: &str,
+) -> Result<i32> {
     let mut c = Command::new(expand(&cmd[0]));
     c.args(cmd[1..].iter().map(|a| expand(a)));
-    if let Some(cwd) = &t.cwd {
-        c.current_dir(expand(cwd));
+    if let Some(cwd) = cwd {
+        let dir = expand(cwd);
+        if !std::path::Path::new(&dir).is_dir() {
+            bail!(
+                "directory {dir} does not exist: re-scan with `corntchap-cli station scan` (or remove the station)"
+            );
+        }
+        c.current_dir(dir);
     }
     c.stdin(Stdio::piped()).kill_on_drop(true);
-    eprintln!("relay: starting {}: {}", t.agent, cmd.join(" "));
+    eprintln!(
+        "relay: starting {agent}: {}{}",
+        cmd.join(" "),
+        cwd.map(|d| format!(" (in {d})")).unwrap_or_default()
+    );
     let mut child = c.spawn().with_context(|| format!("starting {}", cmd[0]))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(prompt.as_bytes()).await?;
         drop(stdin); // prompt on stdin
     }
-    let limit = t
-        .timeout
-        .as_deref()
+    let limit = timeout
         .map(parse_duration)
         .transpose()
-        .map_err(|e| anyhow!("target {}: {e}", t.agent))?
+        .map_err(|e| anyhow!("target {agent}: {e}"))?
         .unwrap_or(Duration::from_secs(45 * 60));
     match tokio::time::timeout(limit, child.wait()).await {
         Ok(status) => Ok(status?.code().unwrap_or(-1)),
@@ -530,7 +779,10 @@ pub async fn doctor(full: bool) -> Result<()> {
         }
     };
     if cfg.target.is_empty() {
-        println!("FAIL no [[target]] entries in {}", config_path().display());
+        println!(
+            "--   no [[target]] in {} (fine: stations are woken by the server)",
+            config_path().display()
+        );
     }
     for t in &cfg.target {
         match t.adapter.as_str() {
@@ -547,14 +799,15 @@ pub async fn doctor(full: bool) -> Result<()> {
             }
             "opencode" => match crate::opencode::resolve(t).await {
                 Ok(ep) => println!(
-                    "{}   {}: OpenCode at {} ({}{}), {} session(s) in {}",
-                    if ep.sessions.is_empty() {
+                    "{}   {}: OpenCode at {} ({}, {}{}), {} session(s) in {}",
+                    if t.directory.is_some() && ep.sessions.is_empty() {
                         "FAIL"
                     } else {
                         "ok  "
                     },
                     t.agent,
                     ep.base,
+                    ep.api.label(),
                     ep.source,
                     if ep.auth.is_some() {
                         ", with password"
@@ -574,10 +827,11 @@ pub async fn doctor(full: bool) -> Result<()> {
             other => println!("FAIL {}: unknown adapter {other}", t.agent),
         }
     }
+    crate::station::doctor(&server).await;
     Ok(())
 }
 
-fn which(cmd: &str) -> bool {
+pub fn which(cmd: &str) -> bool {
     if cmd.contains('/') {
         return std::path::Path::new(cmd).exists();
     }
@@ -948,5 +1202,133 @@ mod tests {
         let blk = target_block("a", "codex");
         let c: RelayConfig = toml::from_str(&blk).unwrap();
         assert_eq!(c.target[0].adapter, "exec");
+    }
+
+    fn wake(v: Value) -> Wake {
+        parse_wake(&v).unwrap()
+    }
+
+    fn st(runtime: &str, dir: Option<&str>) -> Value {
+        json!({"id": "st_abc", "runtime": runtime, "session": "sess-1", "directory": dir, "label": null})
+    }
+
+    #[test]
+    fn wake_without_a_station_uses_the_cooks_target_or_is_skipped() {
+        let w = wake(json!({"agent": "c", "project": "PAY", "station": null}));
+        assert_eq!(wake_prompt(&w), PROMPT.replace("{project}", "PAY"));
+        assert_eq!(wake_key(&w), "agent:c");
+        assert!(matches!(plan(&w, &[]), Plan::Skip(_)));
+        let t = Target::blank("c", "exec");
+        assert_eq!(plan(&w, std::slice::from_ref(&t)), Plan::Target(t));
+    }
+
+    #[test]
+    fn station_wakes_need_no_target() {
+        let w = wake(
+            json!({"agent": "c", "project": "PAY", "station": st("claude-code", Some("/w/pay"))}),
+        );
+        assert_eq!(wake_key(&w), "station:st_abc");
+        assert_eq!(
+            plan(&w, &[]),
+            Plan::Exec {
+                agent: "c".into(),
+                command: ["claude", "-p", "--resume", "sess-1"]
+                    .map(String::from)
+                    .to_vec(),
+                cwd: Some("/w/pay".into()),
+                timeout: None,
+            }
+        );
+        let w =
+            wake(json!({"agent": "c", "project": "PAY", "station": st("codex", Some("/w/pay"))}));
+        assert_eq!(
+            plan(&w, &[]),
+            Plan::Exec {
+                agent: "c".into(),
+                command: ["codex", "exec", "resume", "sess-1", "-"]
+                    .map(String::from)
+                    .to_vec(),
+                cwd: Some("/w/pay".into()),
+                timeout: None,
+            }
+        );
+        let w = wake(
+            json!({"agent": "c", "project": "PAY", "station": st("opencode", Some("/w/pay"))}),
+        );
+        match plan(&w, &[]) {
+            Plan::OpenCode { target, session } => {
+                assert_eq!(session, "sess-1");
+                assert_eq!(target.directory, None);
+            }
+            p => panic!("{p:?}"),
+        }
+        let w = wake(json!({"agent": "c", "project": "PAY", "station": st("other", None)}));
+        assert!(matches!(plan(&w, &[]), Plan::Skip(m) if m.contains("[[target]]")));
+    }
+
+    #[test]
+    fn a_target_refines_but_never_replaces_session_and_directory() {
+        let mut oc = Target::blank("c", "opencode");
+        oc.password_env = Some("PW".into());
+        oc.directory = Some("/somewhere/else".into());
+        let w = wake(
+            json!({"agent": "c", "project": "PAY", "station": st("opencode", Some("/w/pay"))}),
+        );
+        match plan(&w, &[oc]) {
+            Plan::OpenCode { target, session } => {
+                assert_eq!(target.password_env.as_deref(), Some("PW"));
+                assert_eq!(target.directory, None);
+                assert_eq!(session, "sess-1");
+            }
+            p => panic!("{p:?}"),
+        }
+        // a custom command is used only when it names {session}; the old `--continue` one is not
+        let mut ex = Target::blank("c", "exec");
+        ex.command = Some(vec!["claude".into(), "-p".into(), "--continue".into()]);
+        ex.cwd = Some("/old".into());
+        ex.timeout = Some("10m".into());
+        let w = wake(
+            json!({"agent": "c", "project": "PAY", "station": st("claude-code", Some("/w/pay"))}),
+        );
+        let Plan::Exec {
+            command,
+            cwd,
+            timeout,
+            ..
+        } = plan(&w, std::slice::from_ref(&ex))
+        else {
+            panic!()
+        };
+        assert_eq!(command, ["claude", "-p", "--resume", "sess-1"]);
+        assert_eq!(cwd.as_deref(), Some("/w/pay"));
+        assert_eq!(timeout.as_deref(), Some("10m"));
+        ex.command = Some(vec!["my-claude".into(), "--resume={session}".into()]);
+        let Plan::Exec { command, .. } = plan(&w, &[ex]) else {
+            panic!()
+        };
+        assert_eq!(command, ["my-claude", "--resume=sess-1"]);
+    }
+
+    #[test]
+    fn station_prompt_names_the_station_and_server_text_wins() {
+        let w = wake(json!({"agent": "c", "project": "PAY", "station": st("codex", None)}));
+        let p = wake_prompt(&w);
+        assert!(p.contains("You are station st_abc"), "{p}");
+        assert!(p.contains("pass station st_abc to claim_next"), "{p}");
+        assert!(p.contains("project PAY and station st_abc"), "{p}");
+        let w = wake(json!({
+            "agent": "c", "project": "PAY", "station": st("codex", None),
+            "text": "The answer to your question is: yes.", "reason": "answer"
+        }));
+        assert_eq!(wake_prompt(&w), "The answer to your question is: yes.");
+    }
+
+    #[test]
+    fn two_stations_of_one_cook_have_separate_keys() {
+        let a = wake(json!({"agent": "c", "project": "P", "station": st("codex", None)}));
+        let mut s2 = st("codex", None);
+        s2["id"] = json!("st_two");
+        let b = wake(json!({"agent": "c", "project": "P", "station": s2}));
+        assert_ne!(wake_key(&a), wake_key(&b));
     }
 }

@@ -466,6 +466,67 @@ pub fn agents_table(v: &Value) -> String {
     )
 }
 
+/// Stations: one agent session each, with the tasks it holds or waits on.
+pub fn stations_table(v: &Value) -> String {
+    let list = |x: &Value, k: &str| {
+        x[k].as_array().filter(|a| !a.is_empty()).map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+    };
+    let rows = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|x| {
+            let tasks = match (list(x, "holding"), list(x, "waiting")) {
+                (None, None) => "-".to_string(),
+                (h, w) => format!(
+                    "{}{}",
+                    h.map(|h| format!("holding {h}")).unwrap_or_default(),
+                    w.map(|w| format!(" waiting {w}")).unwrap_or_default()
+                )
+                .trim()
+                .to_string(),
+            };
+            vec![
+                plain(s(x, "id")),
+                plain(s(x, "cook")),
+                plain(s(x, "project")),
+                plain(s(x, "runtime")),
+                plain(
+                    x["label"]
+                        .as_str()
+                        .or_else(|| x["directory"].as_str())
+                        .unwrap_or("-"),
+                ),
+                plain(tasks),
+                dim_cell(
+                    x["last_woken_at"]
+                        .as_str()
+                        .map(age)
+                        .unwrap_or_else(|| "never".into()),
+                ),
+            ]
+        })
+        .collect();
+    table(
+        &[
+            "id",
+            "cook",
+            "pot",
+            "runtime",
+            "label",
+            "tasks",
+            "last woken",
+        ],
+        rows,
+        "no stations (register your sessions with `station scan`, run inside a repo)",
+    )
+}
+
 /// Wake targets, each tagged with the agent it belongs to.
 pub fn wake_table(targets: &[(String, Value)]) -> String {
     let rows = targets
