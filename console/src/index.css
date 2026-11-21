@@ -1,0 +1,213 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/bricolage-grotesque/index.css";
+@import "@fontsource-variable/inter/index.css";
+@import "@fontsource/space-mono/400.css";
+@import "@fontsource/space-mono/700.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * corntchap console tokens (docs/design.md, "Tokens"), mapped onto shadcn's CSS variables.
+ * One deliberate split: shadcn's `--accent` means "hover/selected surface", while the design's
+ * saffron "accent" is a *live signal* colour. Saffron therefore lives in `--corn` (utility `bg-corn`);
+ * `--accent` is the quiet hover tint.
+ */
+:root {
+  --radius: 10px;
+  --radius-column: 14px;
+  --radius-big: 12px;
+
+  --background: #fbf5e9; /* cassava cream */
+  --foreground: #16130f;
+  --card: #fffaf0;
+  --card-foreground: #16130f;
+  --popover: #fffaf0;
+  --popover-foreground: #16130f;
+  --muted: #f1e7d3;
+  --muted-foreground: #6a5f53;
+  --column: #f6ecd9;
+  --border: #e7dcc6;
+  --input: #d9ccb2;
+  --ring: #15183a;
+
+  --primary: #c8502c; /* terracotta */
+  --primary-foreground: #fffaf0;
+  --secondary: #f1e7d3;
+  --secondary-foreground: #16130f;
+  --accent: #efe3cb;
+  --accent-foreground: #16130f;
+
+  --corn: #f2b33d; /* saffron: Ready + live signals */
+  --corn-foreground: #16130f;
+  --corn-text: #9b5a00; /* lease timer text on cream */
+  --success: #1f7a72; /* ndole */
+  --success-foreground: #fffaf0;
+  --destructive: #9b2f17;
+  --destructive-foreground: #fffaf0;
+  --waiting: #15183a;
+
+  --ink: #16130f;
+  --sidebar: #15183a;
+  --sidebar-panel: #1f2350;
+  --sidebar-foreground: #f3ecdd;
+  --sidebar-muted: #a9acd0;
+  --sidebar-border: #2b3066;
+  --primary-shadow: 2px 2px 0 0 var(--ink);
+  --primary-border: var(--ink);
+}
+
+.dark {
+  --background: #0f1129;
+  --foreground: #f3ecdd;
+  --card: #161a3d;
+  --card-foreground: #f3ecdd;
+  --popover: #161a3d;
+  --popover-foreground: #f3ecdd;
+  --muted: #1d2148;
+  --muted-foreground: #a9acd0;
+  --column: #131637;
+  --border: #262a55;
+  --input: #323765;
+  --ring: #f2b33d;
+
+  --primary: #e0663f;
+  --primary-foreground: #160d09;
+  --secondary: #1d2148;
+  --secondary-foreground: #f3ecdd;
+  --accent: #232857;
+  --accent-foreground: #f3ecdd;
+
+  --corn: #f2b33d;
+  --corn-foreground: #16130f;
+  --corn-text: #f2b33d;
+  --success: #3fb3a4;
+  --success-foreground: #0a1a18;
+  --destructive: #f0605a;
+  --destructive-foreground: #1a0907;
+  --waiting: #a9acd0;
+
+  --ink: #f3ecdd;
+  --sidebar: #0a0c1f;
+  --sidebar-panel: #14173a;
+  --sidebar-border: #1d2148;
+  --primary-shadow: none;
+  --primary-border: transparent;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-column: var(--column);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-corn: var(--corn);
+  --color-corn-foreground: var(--corn-foreground);
+  --color-corn-text: var(--corn-text);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-waiting: var(--waiting);
+  --color-ink: var(--ink);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-panel: var(--sidebar-panel);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius-big);
+  --radius-2xl: var(--radius-column);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/60;
+  }
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-background text-foreground text-[13.5px] leading-relaxed;
+    font-feature-settings: "cv11", "ss01";
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: -0.015em;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--corn) 55%, transparent);
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
+@layer utilities {
+  .font-display { font-family: var(--font-display); font-weight: 800; letter-spacing: -0.015em; }
+  .label-caps {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+}
+
+/* live signals: a soft pulse on saffron dots (lease ticking, cook awake, fire lit) */
+@keyframes corn-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--corn) 70%, transparent); }
+  70% { box-shadow: 0 0 0 6px color-mix(in oklab, var(--corn) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--corn) 0%, transparent); }
+}
+.live-dot { animation: corn-pulse 2s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+  * { scroll-behavior: auto !important; }
+}
+
+/* skeleton shimmer in the cream palette */
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+/* markdown body */
+.prose-ct { font-size: 14px; line-height: 1.65; }
+.prose-ct > * + * { margin-top: 0.75em; }
+.prose-ct h1, .prose-ct h2, .prose-ct h3 { font-size: 1.05em; margin-top: 1.2em; }
+.prose-ct ul { list-style: disc; padding-left: 1.25em; }
+.prose-ct ol { list-style: decimal; padding-left: 1.25em; }
+.prose-ct a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.prose-ct code { font-family: var(--font-mono); font-size: 0.86em; background: var(--muted); padding: 0.1em 0.35em; border-radius: 5px; }
+.prose-ct pre { background: var(--muted); padding: 0.8em 1em; border-radius: var(--radius); overflow-x: auto; }
+.prose-ct pre code { background: none; padding: 0; }
+.prose-ct blockquote { border-left: 3px solid var(--corn); padding-left: 0.9em; color: var(--muted-foreground); }
+.prose-ct table { border-collapse: collapse; }
+.prose-ct th, .prose-ct td { border: 1px solid var(--border); padding: 0.3em 0.6em; }

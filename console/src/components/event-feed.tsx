@@ -1,0 +1,127 @@
+import { memo, useMemo } from "react";
+import type { ChangeView } from "@corntchap/api";
+import {
+  Ban,
+  CheckCheck,
+  CirclePlay,
+  Flame,
+  Hourglass,
+  MessageSquare,
+  Plus,
+  Square,
+  SquareCheck,
+  Undo2,
+  Unlock,
+  Pencil,
+  type LucideIcon,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { fmtAgo, useNow } from "@/lib/format";
+import { Avatar } from "./bits";
+import { useOpenTask } from "@/lib/nav";
+
+interface Described {
+  icon: LucideIcon;
+  tone: string;
+  verb: string;
+  detail?: string | undefined;
+}
+
+export function describe(e: ChangeView): Described {
+  const p = e.payload ?? {};
+  switch (e.kind) {
+    case "task.created":
+      return { icon: Plus, tone: "text-primary", verb: "added", detail: p.title ?? undefined };
+    case "task.claimed":
+      return { icon: Flame, tone: "text-corn-text", verb: "put on the fire", detail: p.epoch ? `epoch ${p.epoch}` : undefined };
+    case "item.checked":
+      return {
+        icon: p.done === false ? Square : SquareCheck,
+        tone: "text-success",
+        verb: p.done === false ? "unticked item" : "ticked item",
+        detail: p.position ? `#${p.position}` : undefined,
+      };
+    case "task.commented":
+      return { icon: MessageSquare, tone: "text-muted-foreground", verb: "commented on" };
+    case "task.completed":
+      return { icon: CheckCheck, tone: "text-success", verb: "served", detail: p.result ?? undefined };
+    case "task.released":
+      return { icon: Undo2, tone: "text-muted-foreground", verb: "put back", detail: p.reason ?? undefined };
+    case "task.blocked":
+      return { icon: Hourglass, tone: "text-waiting", verb: "stalled", detail: p.reason ?? undefined };
+    case "task.unblocked":
+      return { icon: Unlock, tone: "text-primary", verb: "unblocked" };
+    case "task.cancelled":
+      return { icon: Ban, tone: "text-destructive", verb: "cancelled" };
+    case "task.updated":
+      return { icon: Pencil, tone: "text-muted-foreground", verb: "edited" };
+    case "task.lease_expired":
+      return { icon: Hourglass, tone: "text-corn-text", verb: "lease ran out on" };
+    default:
+      return { icon: CirclePlay, tone: "text-muted-foreground", verb: e.kind.replace(/[._]/g, " ") };
+  }
+}
+
+const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: boolean; now: number }) {
+  const open = useOpenTask();
+  const d = describe(e);
+  const Icon = d.icon;
+  const actor = e.actor ?? "the kitchen";
+  return (
+    <li className="flex gap-3 py-2.5">
+      <span className="relative mt-0.5">
+        <Avatar name={actor} className="size-6 text-[11px]" />
+        <span className="absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full bg-card ring-1 ring-border">
+          <Icon className={cn("size-2.5", d.tone)} aria-hidden="true" />
+        </span>
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[13.5px]")}>
+          <span className="font-semibold">{actor}</span> <span className="text-muted-foreground">{d.verb}</span>{" "}
+          {e.task && (
+            <button
+              type="button"
+              onClick={() => open(e.task!)}
+              className="rounded font-mono text-[12px] font-bold underline-offset-2 hover:underline focus-visible:underline"
+            >
+              {e.task}
+            </button>
+          )}
+          {d.detail && <span className="text-muted-foreground"> · {d.detail}</span>}
+        </p>
+        <p className="mt-0.5 font-mono text-[10.5px] text-muted-foreground">
+          {fmtAgo(e.at, now)}
+          {!compact && <span> · {e.project}</span>}
+        </p>
+      </div>
+    </li>
+  );
+});
+
+export function EventFeed({
+  events,
+  compact = false,
+  limit,
+  empty,
+}: {
+  events: ChangeView[];
+  compact?: boolean;
+  limit?: number;
+  empty?: string;
+}) {
+  const now = useNow();
+  const shown = useMemo(() => {
+    const newestFirst = [...events].reverse();
+    return limit ? newestFirst.slice(0, limit) : newestFirst;
+  }, [events, limit]);
+  if (shown.length === 0) {
+    return <p className="py-6 text-center text-muted-foreground">{empty ?? "Nothing has happened yet."}</p>;
+  }
+  return (
+    <ul className="divide-y divide-border">
+      {shown.map((e) => (
+        <Item key={e.seq} e={e} compact={compact} now={now} />
+      ))}
+    </ul>
+  );
+}

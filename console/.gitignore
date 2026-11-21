@@ -1,0 +1,7 @@
+node_modules
+dist
+.vite
+*.tsbuildinfo
+.eslintcache
+src/gen/
+screenshots/
