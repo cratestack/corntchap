@@ -56,6 +56,7 @@ pub fn routes() -> Router<AppState> {
         .route("/tasks/{id}/unblock", post(task_unblock))
         .route("/tasks/{id}/cancel", post(task_cancel))
         .route("/changes", get(changes))
+        .route("/events/stream", get(stream::events_stream))
         .route("/wait", get(wait))
         .route("/agents", get(agents_list).post(agents_add))
         .route("/agents/{name}/rotate", post(rotate))

@@ -1,10 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ChangeView } from "@corntchap/api";
-import { client, errorStatus, redirectToLogin } from "./api";
+import { CONSOLE_HEADER, client, errorStatus, redirectToLogin } from "./api";
 import { useInvalidateAll } from "./data";
 
-const POLL_MS = 3000;
 const KEEP = 400;
+/** Coalesce bursts of events (a claim emits several) into one refetch. */
+const INVALIDATE_MS = 250;
 
 export type LiveStatus = "connecting" | "live" | "offline";
 
@@ -18,8 +19,10 @@ interface LiveState {
 const Ctx = createContext<LiveState>({ events: [], status: "connecting", ready: false });
 
 /**
- * Polls the `changesSince` procedure every ~3 s. New events extend the activity feed and invalidate every query
- * (all data queries are small, so touching everything is cheaper than mapping event kinds to resources).
+ * Catches up once with `changesSince`, then follows `/api/v1/events/stream` (SSE read through `fetch`, so the
+ * console header and session cookie go along), resuming from the last seen event after any disconnect. New
+ * events extend the activity feed and invalidate every query (all data queries are small, so touching
+ * everything is cheaper than mapping event kinds to resources).
  */
 export function LiveProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<ChangeView[]>([]);
@@ -30,49 +33,100 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const invalidate = useInvalidateAll();
 
   useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const abort = new AbortController();
+    let flush: ReturnType<typeof setTimeout> | undefined;
+    let pending: ChangeView[] = [];
 
-    async function poll() {
-      try {
-        const fresh: ChangeView[] = [];
-        // drain: the server returns at most 500 events per call
-        for (let i = 0; i < 30; i++) {
-          const feed = await client.procedures.changesSince({ cursor: cursor.current, limit: 500 });
-          if (feed.events.length === 0) break;
-          fresh.push(...feed.events);
-          cursor.current = feed.next_cursor;
-          if (feed.events.length < 500) break;
-        }
-        if (stopped) return;
-        setStatus("live");
-        if (fresh.length) {
-          setEvents((prev) => [...prev, ...fresh].slice(-KEEP));
-          if (primed.current) void invalidate();
-        }
-        if (!primed.current) {
-          primed.current = true;
-          setReady(true);
-        }
-      } catch (e) {
-        if (errorStatus(e) === 401) redirectToLogin();
-        if (!stopped) setStatus("offline");
+    const push = (e: ChangeView) => {
+      if (e.seq <= cursor.current) return;
+      cursor.current = e.seq;
+      pending.push(e);
+      clearTimeout(flush);
+      flush = setTimeout(() => {
+        const batch = pending;
+        pending = [];
+        setEvents((prev) => [...prev, ...batch].slice(-KEEP));
+        void invalidate();
+      }, INVALIDATE_MS);
+    };
+
+    async function catchUp() {
+      const fresh: ChangeView[] = [];
+      for (let i = 0; i < 30; i++) {
+        const feed = await client.procedures.changesSince({ cursor: cursor.current, limit: 500 });
+        if (feed.events.length === 0) break;
+        fresh.push(...feed.events);
+        cursor.current = feed.next_cursor;
+        if (feed.events.length < 500) break;
       }
-      if (!stopped) timer = setTimeout(poll, document.hidden ? POLL_MS * 5 : POLL_MS);
+      setEvents((prev) => [...prev, ...fresh].slice(-KEEP));
+      primed.current = true;
+      setReady(true);
     }
 
-    void poll();
-    const onVisible = () => {
-      if (!document.hidden) {
-        clearTimeout(timer);
-        void poll();
+    async function follow() {
+      const res = await fetch(`/api/v1/events/stream?cursor=${cursor.current}`, {
+        headers: { ...CONSOLE_HEADER, accept: "text/event-stream" },
+        credentials: "same-origin",
+        signal: abort.signal,
+      });
+      if (res.status === 401) {
+        redirectToLogin();
+        return;
       }
-    };
-    document.addEventListener("visibilitychange", onVisible);
+      if (!res.ok || !res.body) throw new Error(`event stream: HTTP ${res.status}`);
+      setStatus("live");
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buf = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        buf += value.replace(/\r\n/g, "\n");
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          let id = "";
+          let data = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("id:")) id = line.slice(3).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          if (id && data) {
+            try {
+              push(JSON.parse(data) as ChangeView);
+            } catch {
+              /* a malformed frame is skipped; the next one carries on */
+            }
+          }
+        }
+      }
+    }
+
+    void (async () => {
+      let delay = 1000;
+      while (!abort.signal.aborted) {
+        try {
+          if (!primed.current) await catchUp();
+          await follow();
+          delay = 1000;
+        } catch (e) {
+          if (abort.signal.aborted) return;
+          if (errorStatus(e) === 401) {
+            redirectToLogin();
+            return;
+          }
+        }
+        if (abort.signal.aborted) return;
+        setStatus("offline");
+        await new Promise((r) => setTimeout(r, delay));
+        delay = Math.min(delay * 2, 15000);
+      }
+    })();
+
     return () => {
-      stopped = true;
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisible);
+      abort.abort();
+      clearTimeout(flush);
     };
   }, [invalidate]);
 

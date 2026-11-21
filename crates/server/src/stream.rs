@@ -107,6 +107,76 @@ pub async fn relay_stream(
     ))
 }
 
+/// The live change feed for people, agents and tools that can hold a connection (the console,
+/// `kitchen`): every event the caller may see, replayed from `Last-Event-ID` (or `?cursor=`,
+/// default: from now) and then streamed as it happens, in one connection so nothing falls into
+/// the gap between catching up and subscribing. Each SSE event has `id` = seq, `event` = kind,
+/// `data` = the same JSON `changes_since` returns per event. Agents over MCP, which cannot hold
+/// a stream, use `changes_since` plus the fire's wakes instead.
+pub async fn events_stream(
+    State(state): State<AppState>,
+    auth: authkestra::axum::Auth<Principal>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Sse<impl Stream<Item = std::result::Result<Event, Infallible>>>> {
+    let p = auth.0.worker()?;
+    let project = q.get("project").map(|k| k.to_uppercase());
+    if let Some(k) = &project {
+        // fail fast (404) instead of streaming nothing for a project the caller cannot see
+        let mut c = state.db.acquire().await?;
+        service::project_by_key(&mut c, &p, k).await?;
+    }
+    let from_header = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok());
+    let from_query = q
+        .get("cursor")
+        .or_else(|| q.get("since"))
+        .and_then(|v| v.parse::<i64>().ok());
+    let mut last: i64 = match from_header.or(from_query) {
+        Some(n) => n,
+        None => {
+            sqlx::query_scalar("select coalesce(max(seq), 0) from events")
+                .fetch_one(&state.db)
+                .await?
+        }
+    };
+    let mut rx = state.events.subscribe();
+    let s = async_stream::stream! {
+        yield Ok(Event::default().event("ready").data(json!({"cursor": last}).to_string()));
+        loop {
+            // drain everything after `last` (pages of 200), then wait for the next NOTIFY
+            loop {
+                let page = service::changes_since(&state.db, &p, last, project.as_deref(), 200).await;
+                let Ok(page) = page else {
+                    yield Ok(Event::default().event("error").data(json!({"error": "access lost"}).to_string()));
+                    return;
+                };
+                let events = page["events"].as_array().cloned().unwrap_or_default();
+                for e in &events {
+                    let seq = e["seq"].as_i64().unwrap_or(last);
+                    last = last.max(seq);
+                    yield Ok(Event::default()
+                        .id(seq.to_string())
+                        .event(e["kind"].as_str().unwrap_or("event"))
+                        .data(e.to_string()));
+                }
+                if events.len() < 200 {
+                    break;
+                }
+            }
+            // Lagged or closed channels just mean "re-read"; a timeout bounds missed NOTIFYs.
+            let _ = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await;
+        }
+    };
+    Ok(Sse::new(s).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
 #[derive(serde::Deserialize)]
 pub struct RunReport {
     pub agent: String,
