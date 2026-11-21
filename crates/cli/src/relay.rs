@@ -591,7 +591,7 @@ pub fn install() -> Result<()> {
     let exe = std::env::current_exe()?;
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
     if cfg!(target_os = "macos") {
-        let path = home.join("Library/LaunchAgents/dev.corntchap.relay.plist");
+        let path = unit_path(Platform::Mac, &home);
         std::fs::create_dir_all(path.parent().unwrap())?;
         std::fs::write(
             &path,
@@ -607,7 +607,7 @@ pub fn install() -> Result<()> {
             path.display()
         );
     } else {
-        let path = home.join(".config/systemd/user/corntchap-relay.service");
+        let path = unit_path(Platform::Linux, &home);
         std::fs::create_dir_all(path.parent().unwrap())?;
         std::fs::write(
             &path,
@@ -624,9 +624,285 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+// ---- fire uninstall ----
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Platform {
+    Linux,
+    Mac,
+}
+
+impl Platform {
+    pub fn current() -> Platform {
+        if cfg!(target_os = "macos") {
+            Platform::Mac
+        } else {
+            Platform::Linux
+        }
+    }
+}
+
+const SYSTEMD_UNIT: &str = "corntchap-relay";
+const LAUNCHD_LABEL: &str = "dev.corntchap.relay";
+
+/// Where `fire install` writes the service definition.
+pub fn unit_path(platform: Platform, home: &std::path::Path) -> PathBuf {
+    match platform {
+        Platform::Mac => home.join(format!("Library/LaunchAgents/{LAUNCHD_LABEL}.plist")),
+        Platform::Linux => home.join(format!(".config/systemd/user/{SYSTEMD_UNIT}.service")),
+    }
+}
+
+/// One thing `fire uninstall` does, in order.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Step {
+    /// Run a command; if it fails and `alt` is set, run that instead. Failures are tolerated.
+    Run {
+        cmd: Vec<String>,
+        alt: Option<Vec<String>>,
+    },
+    /// Delete a file (a missing file means it was never there).
+    Remove(PathBuf),
+    /// Drop `relay_token` from credentials.toml, keeping the user's own login.
+    DropRelayToken(PathBuf),
+}
+
+fn argv(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|p| p.to_string()).collect()
+}
+
+/// The ordered plan of `fire uninstall`; pure, so it can be tested without touching the system.
+/// `uid` is the numeric user id launchd needs for `bootout gui/<uid>/<label>`.
+pub fn uninstall_plan(
+    platform: Platform,
+    home: &std::path::Path,
+    cfg_dir: &std::path::Path,
+    uid: &str,
+    purge: bool,
+) -> Vec<Step> {
+    let unit = unit_path(platform, home);
+    let mut steps = match platform {
+        Platform::Linux => vec![
+            Step::Run {
+                cmd: argv(&["systemctl", "--user", "stop", SYSTEMD_UNIT]),
+                alt: None,
+            },
+            Step::Run {
+                cmd: argv(&["systemctl", "--user", "disable", SYSTEMD_UNIT]),
+                alt: None,
+            },
+            Step::Remove(unit),
+            Step::Run {
+                cmd: argv(&["systemctl", "--user", "daemon-reload"]),
+                alt: None,
+            },
+        ],
+        Platform::Mac => vec![
+            Step::Run {
+                cmd: argv(&[
+                    "launchctl",
+                    "bootout",
+                    &format!("gui/{uid}/{LAUNCHD_LABEL}"),
+                ]),
+                alt: Some(argv(&["launchctl", "unload", &unit.display().to_string()])),
+            },
+            Step::Remove(unit),
+        ],
+    };
+    if purge {
+        steps.push(Step::Remove(cfg_dir.join("config.toml")));
+        steps.push(Step::Remove(cfg_dir.join("relay-state.json")));
+        steps.push(Step::DropRelayToken(cfg_dir.join("credentials.toml")));
+    }
+    steps
+}
+
+/// A step as one line of text, for the confirmation prompt.
+pub fn describe_step(s: &Step) -> String {
+    match s {
+        Step::Run { cmd, alt } => match alt {
+            Some(a) => format!("run {} (else {})", cmd.join(" "), a.join(" ")),
+            None => format!("run {}", cmd.join(" ")),
+        },
+        Step::Remove(p) => format!("remove {}", p.display()),
+        Step::DropRelayToken(p) => format!("remove the relay credential from {}", p.display()),
+    }
+}
+
+fn run_cmd(cmd: &[String]) -> std::result::Result<(), String> {
+    let out = std::process::Command::new(&cmd[0])
+        .args(&cmd[1..])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                format!("{} is not available here", cmd[0])
+            } else {
+                e.to_string()
+            }
+        })?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let first = err.lines().next().unwrap_or("").trim();
+    Err(if first.is_empty() {
+        format!("exited with {}", out.status)
+    } else {
+        first.to_string()
+    })
+}
+
+fn do_step(s: &Step) -> Result<()> {
+    use crate::ui::{dim, ok_line, warn_line};
+    match s {
+        Step::Run { cmd, alt } => {
+            let line = cmd.join(" ");
+            match run_cmd(cmd) {
+                Ok(()) => ok_line(line),
+                Err(first) => match alt.as_ref().map(|a| (a.join(" "), run_cmd(a))) {
+                    Some((l, Ok(()))) => ok_line(l),
+                    Some((l, Err(e))) => println!("{} ({e})", dim(&format!("skipped {l}"))),
+                    None => println!("{} ({first})", dim(&format!("skipped {line}"))),
+                },
+            }
+        }
+        Step::Remove(p) => match std::fs::remove_file(p) {
+            Ok(()) => ok_line(format!("removed {}", p.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("{}", dim(&format!("{} was not there", p.display())))
+            }
+            Err(e) => warn_line(format!("could not remove {}: {e}", p.display())),
+        },
+        Step::DropRelayToken(_) => match Credentials::drop_relay_token() {
+            Ok(true) => ok_line("removed the relay credential (your own login is kept)"),
+            Ok(false) => println!("{}", dim("no relay credential was stored")),
+            Err(e) => warn_line(format!("{e:#}")),
+        },
+    }
+    Ok(())
+}
+
+/// `fire uninstall`: stop and disable the service, delete what `fire install` wrote; --purge also
+/// removes the relay's own config, state file and credential.
+pub fn uninstall(purge: bool, yes: bool) -> Result<()> {
+    use std::io::{IsTerminal, Write};
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
+    let uid = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| "501".into());
+    let plan = uninstall_plan(Platform::current(), &home, &config_dir(), &uid, purge);
+    if !yes && std::io::stdin().is_terminal() {
+        println!("This will:");
+        for s in &plan {
+            println!("  {}", describe_step(s));
+        }
+        print!("Put out the fire? [y/N] ");
+        let _ = std::io::stdout().flush();
+        let mut a = String::new();
+        if !(std::io::stdin().read_line(&mut a).is_ok() && matches!(a.trim(), "y" | "Y" | "yes")) {
+            println!("kept the fire lit");
+            return Ok(());
+        }
+    }
+    for s in &plan {
+        do_step(s)?;
+    }
+    crate::ui::ok_line(if purge {
+        "the fire is out and its files are gone"
+    } else {
+        "the fire is out (config and credentials kept; add --purge to remove them)"
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn linux_plan_stops_disables_removes_and_reloads() {
+        let plan = uninstall_plan(
+            Platform::Linux,
+            Path::new("/h"),
+            Path::new("/h/.config/corntchap"),
+            "1000",
+            false,
+        );
+        let lines: Vec<String> = plan.iter().map(describe_step).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "run systemctl --user stop corntchap-relay",
+                "run systemctl --user disable corntchap-relay",
+                "remove /h/.config/systemd/user/corntchap-relay.service",
+                "run systemctl --user daemon-reload",
+            ]
+        );
+    }
+
+    #[test]
+    fn mac_plan_boots_out_with_unload_fallback() {
+        let plan = uninstall_plan(
+            Platform::Mac,
+            Path::new("/Users/a"),
+            Path::new("/c"),
+            "501",
+            false,
+        );
+        assert_eq!(
+            plan[0],
+            Step::Run {
+                cmd: argv(&["launchctl", "bootout", "gui/501/dev.corntchap.relay"]),
+                alt: Some(argv(&[
+                    "launchctl",
+                    "unload",
+                    "/Users/a/Library/LaunchAgents/dev.corntchap.relay.plist"
+                ])),
+            }
+        );
+        assert_eq!(
+            plan[1],
+            Step::Remove(PathBuf::from(
+                "/Users/a/Library/LaunchAgents/dev.corntchap.relay.plist"
+            ))
+        );
+        assert_eq!(plan.len(), 2);
+    }
+
+    #[test]
+    fn purge_adds_the_relay_files_and_credential_last() {
+        let plain = uninstall_plan(
+            Platform::Linux,
+            Path::new("/h"),
+            Path::new("/c"),
+            "1",
+            false,
+        );
+        let purge = uninstall_plan(Platform::Linux, Path::new("/h"), Path::new("/c"), "1", true);
+        assert_eq!(&purge[..plain.len()], &plain[..]);
+        assert_eq!(
+            &purge[plain.len()..],
+            &[
+                Step::Remove(PathBuf::from("/c/config.toml")),
+                Step::Remove(PathBuf::from("/c/relay-state.json")),
+                Step::DropRelayToken(PathBuf::from("/c/credentials.toml")),
+            ]
+        );
+    }
+
+    #[test]
+    fn unit_path_matches_what_install_writes() {
+        assert_eq!(
+            unit_path(Platform::Linux, Path::new("/h")),
+            PathBuf::from("/h/.config/systemd/user/corntchap-relay.service")
+        );
+    }
 
     #[test]
     fn sse_parser_survives_multibyte_split_across_chunks() {
