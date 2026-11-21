@@ -118,6 +118,6 @@ See `deploy/` for Kubernetes + CloudNativePG, and `Containerfile` for the distro
 ### Deviations from the design doc
 
 - Basic-auth/Argon2 is replaced by bearer tokens (device flow + OIDC SSO via Keycloak), per the later direction.
-- MCP is cratestack's binding: tool arguments are flat; list arguments are strings (`labels`/`dependsOn` comma-separated, `items` one per line); the doc's resources are tools: `get_board` (project board markdown) and `get_task_markdown` (one task).
+- MCP is cratestack's binding: tool arguments are flat; list arguments are strings (`labels`/`dependsOn` comma-separated, `items` one per line); every model is also an MCP resource (`cratestack://corntchap/<tasks|projects|items|comments|events|…>[/<id>]`, paged with `?limit=&cursor=`) under the same read policies as REST; `get_board` and `get_task_markdown` render markdown.
 - Credentials live in `credentials.toml` in the config dir (see above) (0600) or `CORNTCHAP_TOKEN`; no OS keyring.
 - No generated OpenAPI spec yet.

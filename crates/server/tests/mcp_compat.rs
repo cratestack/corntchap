@@ -248,3 +248,128 @@ async fn legacy_handshake_list_and_call() {
     let who = common::TestApp::payload(&app.mcp(&agent, "whoami", json!({})).await);
     assert_eq!(who["name"], "a1");
 }
+
+/// Models are MCP resources on both protocol doors, read under the same @@allow policies.
+#[tokio::test]
+async fn models_are_resources_under_policies() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let admin_tok = tok.unwrap();
+    for (team, key) in [("acme", "PAY"), ("other", "OPS")] {
+        app.post(&admin_tok, "/teams", json!({"name": team})).await;
+        app.post(
+            &admin_tok,
+            "/projects",
+            json!({"team": team, "key": key, "name": key}),
+        )
+        .await;
+        for n in 0..3 {
+            app.post(
+                &admin_tok,
+                &format!("/projects/{key}/tasks"),
+                json!({"title": format!("{key} task {n}")}),
+            )
+            .await;
+        }
+    }
+    let (_, ag) = app
+        .post(
+            &admin_tok,
+            "/agents",
+            json!({"name": "a1", "kind": "other", "runtime": "local"}),
+        )
+        .await;
+    app.post(
+        &admin_tok,
+        "/teams/acme/members",
+        json!({"principal": "a1"}),
+    )
+    .await;
+    let mcp = Legacy {
+        app: &app,
+        token: ag["token"].as_str().unwrap().to_string(),
+    };
+
+    let init = mcp
+        .rpc(Some("2025-06-18"), "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}))
+        .await;
+    assert!(init["result"]["capabilities"]["resources"].is_object());
+
+    let list = mcp
+        .rpc(Some("2025-06-18"), "resources/list", json!({}))
+        .await;
+    let uris: Vec<String> = list["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["uri"].as_str().unwrap().to_string())
+        .collect();
+    for seg in ["projects", "tasks", "items", "comments", "events", "teams"] {
+        assert!(
+            uris.contains(&format!("cratestack://corntchap/{seg}")),
+            "{seg} missing in {uris:?}"
+        );
+    }
+    let templates = mcp
+        .rpc(Some("2025-06-18"), "resources/templates/list", json!({}))
+        .await;
+    assert!(
+        templates["result"]["resourceTemplates"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 2 * uris.len()
+    );
+
+    // Page through tasks two at a time: only team acme's three tasks are visible.
+    let mut seen = vec![];
+    let mut uri = "cratestack://corntchap/tasks?limit=2".to_string();
+    loop {
+        let r = mcp
+            .rpc(Some("2025-06-18"), "resources/read", json!({"uri": uri}))
+            .await;
+        let page: Value =
+            serde_json::from_str(r["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
+        for t in page["items"].as_array().unwrap() {
+            seen.push(t["title"].as_str().unwrap().to_string());
+        }
+        match page["nextCursor"].as_str() {
+            Some(c) => uri = format!("cratestack://corntchap/tasks?limit=2&cursor={c}"),
+            None => break,
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, vec!["PAY task 0", "PAY task 1", "PAY task 2"]);
+
+    // A record from the other team reads as not found.
+    let other_id: String = sqlx::query_scalar("select t.id::text from tasks t join projects p on p.id = t.project_id where p.key = 'OPS' limit 1")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    let r = mcp
+        .rpc(
+            Some("2025-06-18"),
+            "resources/read",
+            json!({"uri": format!("cratestack://corntchap/tasks/{other_id}")}),
+        )
+        .await;
+    assert_eq!(r["error"]["code"], -32002, "{r}");
+    let mine: String = sqlx::query_scalar("select t.id::text from tasks t join projects p on p.id = t.project_id where p.key = 'PAY' limit 1")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    let r = mcp
+        .rpc(
+            Some("2025-06-18"),
+            "resources/read",
+            json!({"uri": format!("cratestack://corntchap/tasks/{mine}")}),
+        )
+        .await;
+    assert!(
+        r["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("PAY task"),
+        "{r}"
+    );
+}
