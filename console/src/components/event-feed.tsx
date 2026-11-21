@@ -18,6 +18,9 @@ import {
   PartyPopper,
   RotateCcw,
   Soup,
+  MessageCircleQuestion,
+  CircleCheck,
+  CircleX,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
@@ -25,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { fmtAgo, useNow } from "@/lib/format";
 import { Avatar } from "./bits";
 import { useOpenMemory, useOpenTask } from "@/lib/nav";
+import { questionLink } from "./questions";
 
 interface Described {
   icon: LucideIcon;
@@ -54,7 +58,15 @@ export function describe(e: ChangeView): Described {
     case "task.released":
       return { icon: Undo2, tone: "text-muted-foreground", verb: "put back", detail: p.reason ?? undefined };
     case "task.blocked":
-      return { icon: Hourglass, tone: "text-waiting", verb: "stalled", detail: p.reason ?? undefined };
+      return { icon: Hourglass, tone: "text-waiting", verb: p.question ? "parked" : "stalled", detail: p.reason ?? undefined };
+    case "question.asked":
+      return { icon: MessageCircleQuestion, tone: "text-primary", verb: "asked", detail: p.title ?? undefined };
+    case "question.answered":
+      return { icon: CircleCheck, tone: "text-success", verb: "answered", detail: p.answer ?? undefined };
+    case "question.dismissed":
+      return { icon: CircleX, tone: "text-muted-foreground", verb: "dismissed", detail: p.answer ?? undefined };
+    case "question.noted":
+      return { icon: MessageSquare, tone: "text-muted-foreground", verb: "added a note to", detail: p.title ?? undefined };
     case "task.unblocked":
       return { icon: Unlock, tone: "text-primary", verb: "unblocked" };
     case "task.cancelled":
@@ -104,6 +116,20 @@ const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: b
       <div className="min-w-0 flex-1">
         <p className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[13.5px]")}>
           <span className="font-semibold">{actor}</span> <span className="text-muted-foreground">{d.verb}</span>{" "}
+          {e.kind.startsWith("question.") && e.payload.question && (
+            <>
+              <Link
+                to={questionLink(e.project, e.payload.question)}
+                className="rounded font-mono text-[12px] font-bold underline-offset-2 hover:underline focus-visible:underline"
+              >
+                {e.payload.question}
+              </Link>
+              {e.kind === "question.answered" && e.payload.relayed_by && (
+                <span className="text-muted-foreground"> (via {e.payload.relayed_by})</span>
+              )}
+              {e.task && <span className="text-muted-foreground"> on </span>}
+            </>
+          )}
           {e.task && (
             <button
               type="button"
