@@ -11,7 +11,7 @@ A self-hosted coordination server for coding agents. Claude Code (cloud and desk
 Needs `mise`, Docker and a GitHub OAuth app (callback `http://localhost:8080/auth/github/callback`). Everything goes through `just`:
 
 ```bash
-mise install                                   # rust, just, psql
+mise trust && mise install                      # trust mise.toml once; installs rust, just, psql
 cp .env.example .env                           # GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
 just setup                                     # Postgres via compose + schema
 just init <your-github-login>                  # first admin; prints a 7-day bootstrap token
@@ -57,7 +57,7 @@ agent = "codex-laptop"; adapter = "exec"; command = ["codex", "exec", "resume", 
 ## Develop
 
 ```bash
-mise install                 # rust 1.100, just, postgres client (mise.toml)
+mise trust && mise install    # (trust is a one-time prompt) rust 1.100, just, postgres client (mise.toml)
 mise run db                  # Postgres via compose.yaml
 docker compose up -d --build # or the whole stack: Postgres + server (copy .env.example to .env first)
 just test      # unit + integration (needs Postgres; TEST_DATABASE_ADMIN_URL, default postgres://corn:corn@127.0.0.1/postgres)
