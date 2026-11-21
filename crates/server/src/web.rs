@@ -3,7 +3,12 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use authkestra::core::{OAuth2Flow, state::OAuth2State};
+use authkestra::core::{
+    OAuth2Flow,
+    auth::{SessionStore, session::resolve_redirect_target, strategy::utils::extract_cookie},
+    pkce::Pkce,
+    state::OAuth2State,
+};
 use authkestra::oidc::OidcProvider;
 use axum::{
     Json, Router,
@@ -21,10 +26,13 @@ use crate::{
     auth::{generate_token, random_hex, sha256},
     error::{Error, Result},
     service,
+    sessions::{self, PgSessionStore},
     state::{AppState, Principal},
 };
 
 const SESSION_COOKIE: &str = "ct_session";
+/// Sign-in attempt state: an authkestra `OAuth2State`, AES-GCM encrypted into this cookie.
+const STATE_COOKIE: &str = "ak_state";
 const SESSION_TTL_SECS: i64 = 12 * 3600;
 const DEVICE_TTL_SECS: i64 = 600;
 pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -69,30 +77,40 @@ fn page(title: &str, body: &str, refresh: bool) -> Html<String> {
 }
 
 fn safe_next(next: Option<&str>) -> String {
-    match next {
-        Some(n)
-            if n.starts_with('/')
-                && !n.starts_with("//")
-                && !n.contains('\\')
-                && !n.chars().any(|c| c.is_control()) =>
-        {
-            n.to_string()
-        }
-        _ => "/".to_string(),
-    }
+    resolve_redirect_target(next, "/")
 }
 
 fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    let h = headers.get(header::COOKIE)?.to_str().ok()?;
-    h.split(';')
-        .filter_map(|p| p.trim().split_once('='))
-        .find(|(k, _)| *k == name)
-        .map(|(_, v)| v)
+    extract_cookie(headers, name)
+}
+
+/// The key that seals the sign-in state cookie: stable across restarts and replicas, derived
+/// from the OIDC client secret.
+fn state_key(state: &AppState) -> [u8; 32] {
+    let secret = state
+        .config
+        .oidc
+        .as_ref()
+        .map(|c| c.client_secret.as_str())
+        .unwrap_or("");
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&sha256(
+        format!("corntchap/oauth-state/{secret}").as_bytes(),
+    ));
+    key
+}
+
+fn store(state: &AppState) -> PgSessionStore {
+    PgSessionStore {
+        db: state.db.clone(),
+    }
 }
 
 pub struct Session {
     pub user: Principal,
     pub csrf: String,
+    /// The IdP's id_token, used as `id_token_hint` at logout.
+    pub id_token: Option<String>,
 }
 
 pub async fn session_from_headers(
@@ -102,16 +120,25 @@ pub async fn session_from_headers(
     let Some(tok) = cookie_value(headers, SESSION_COOKIE) else {
         return Ok(None);
     };
-    let row: Option<(Uuid, String, String, Option<Uuid>, bool, i64, String)> = sqlx::query_as(
-        "select p.id, p.kind, p.name, p.owner_id, p.is_admin, p.max_leases, s.csrf
-         from web_sessions s join principals p on p.id = s.user_id
-         where s.id_hash = $1 and s.expires_at > now() and p.disabled_at is null",
+    let Some(sess) = store(state)
+        .load_session(tok)
+        .await
+        .map_err(|e| Error::Internal(e.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let Ok(uid) = sess.identity.external_id.parse::<Uuid>() else {
+        return Ok(None);
+    };
+    let row: Option<(Uuid, String, String, Option<Uuid>, bool, i64)> = sqlx::query_as(
+        "select id, kind, name, owner_id, is_admin, max_leases from principals
+         where id = $1 and disabled_at is null",
     )
-    .bind(sha256(tok.as_bytes()))
+    .bind(uid)
     .fetch_optional(&state.db)
     .await?;
-    Ok(row.map(
-        |(id, kind, name, owner_id, is_admin, max_leases, csrf)| Session {
+    Ok(
+        row.map(|(id, kind, name, owner_id, is_admin, max_leases)| Session {
             user: Principal {
                 id,
                 kind,
@@ -123,9 +150,19 @@ pub async fn session_from_headers(
                 agent_kind: None,
                 token_id: None,
             },
-            csrf,
-        },
-    ))
+            csrf: sess
+                .identity
+                .attributes
+                .get(sessions::ATTR_CSRF)
+                .cloned()
+                .unwrap_or_default(),
+            id_token: sess
+                .identity
+                .attributes
+                .get(sessions::ATTR_ID_TOKEN)
+                .cloned(),
+        }),
+    )
 }
 
 /// Session cookie, or a bearer token (so `curl -H "Authorization: Bearer …" /board/PAY` works too).
@@ -238,8 +275,7 @@ fn error_page(status: StatusCode, title: &str, msg: &str) -> Response {
 /// Drop expired sign-in attempts, sessions and long-dead device requests.
 async fn purge_expired(db: &sqlx::PgPool) {
     for q in [
-        "delete from oauth_states where expires_at < now()",
-        "delete from web_sessions where expires_at < now()",
+        "delete from auth_sessions where expires_at < now()",
         "delete from device_requests where expires_at < now() - interval '1 day'",
     ] {
         if let Err(e) = sqlx::query(q).execute(db).await {
@@ -253,19 +289,16 @@ async fn oidc_login(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response> {
     let flow = oidc_flow(&state).await?;
-    let (url, st) = flow.initiate_login(&[], None);
-    let next = safe_next(q.get("next").map(|s| s.as_str()));
-    // Bind the attempt to this browser: the callback must present the same nonce cookie (login CSRF).
-    let nonce = random_hex(16);
-    let mut data = serde_json::to_value(&st).map_err(|e| Error::Internal(e.to_string()))?;
-    data["ct_nonce_hash"] = json!(hex::encode(sha256(nonce.as_bytes())));
+    let pkce = Pkce::new();
+    let (url, mut st) = flow.initiate_login(&[], Some(&pkce.code_challenge));
+    st.code_verifier = Some(pkce.code_verifier);
+    st.success_url = Some(safe_next(q.get("next").map(|s| s.as_str())));
+    // The attempt lives in an encrypted cookie, so it is bound to this browser (login CSRF)
+    // and needs no server-side state.
+    let sealed = st
+        .encrypt(&state_key(&state))
+        .map_err(|e| Error::Internal(e.to_string()))?;
     purge_expired(&state.db).await;
-    sqlx::query("insert into oauth_states (state, data, next, expires_at) values ($1,$2,$3, now() + interval '10 minutes')")
-        .bind(&st.state)
-        .bind(data)
-        .bind(next)
-        .execute(&state.db)
-        .await?;
     let secure = if state.config.require_https {
         "; Secure"
     } else {
@@ -274,7 +307,7 @@ async fn oidc_login(
     let mut resp = Redirect::to(&url).into_response();
     resp.headers_mut().insert(
         header::SET_COOKIE,
-        format!("ct_oauth={nonce}; HttpOnly; SameSite=Lax; Path=/auth; Max-Age=600{secure}")
+        format!("{STATE_COOKIE}={sealed}; HttpOnly; SameSite=Lax; Path=/auth; Max-Age=600{secure}")
             .parse()
             .unwrap(),
     );
@@ -300,28 +333,11 @@ async fn oidc_callback(
     let (Some(code), Some(received)) = (q.get("code"), q.get("state")) else {
         return Err(Error::Invalid("missing code or state".into()));
     };
-    let row: Option<(Value, String)> = sqlx::query_as(
-        "delete from oauth_states where state = $1 and expires_at > now() returning data, next",
-    )
-    .bind(received)
-    .fetch_optional(&state.db)
-    .await?;
-    let Some((data, next)) = row else {
-        return Err(Error::Invalid(
-            "unknown or expired sign-in attempt; start again".into(),
-        ));
-    };
-    let want = data["ct_nonce_hash"].as_str().unwrap_or("").to_string();
-    let have = cookie_value(&headers, "ct_oauth")
-        .map(|n| hex::encode(sha256(n.as_bytes())))
-        .unwrap_or_default();
-    if want.is_empty() || want != have {
-        return Err(Error::Forbidden(
-            "this sign-in was not started in this browser; start again".into(),
-        ));
-    }
-    let expected: OAuth2State =
-        serde_json::from_value(data).map_err(|e| Error::Internal(e.to_string()))?;
+    let not_here =
+        || Error::Forbidden("this sign-in was not started in this browser; start again".into());
+    let sealed = cookie_value(&headers, STATE_COOKIE).ok_or_else(not_here)?;
+    let expected = OAuth2State::decrypt(sealed, &state_key(&state)).map_err(|_| not_here())?;
+    let next = safe_next(expected.success_url.as_deref());
     let flow = oidc_flow(&state).await?;
     let (identity, token, _) = flow
         .finalize_login(code, received, &expected)
@@ -403,23 +419,32 @@ async fn oidc_callback(
     .await?;
     purge_expired(&state.db).await;
     let session = generate_token();
-    sqlx::query("insert into web_sessions (id_hash, user_id, csrf, id_token, expires_at) values ($1,$2,$3,$4, now() + make_interval(secs => $5::float8))")
-        .bind(sha256(session.as_bytes()))
-        .bind(user)
-        .bind(random_hex(16))
-        .bind((!id_token.is_empty()).then_some(id_token))
-        .bind(SESSION_TTL_SECS as f64)
-        .execute(&state.db)
-        .await?;
+    store(&state)
+        .save_session(&sessions::new_session(
+            session.clone(),
+            user,
+            &login,
+            random_hex(16),
+            (!id_token.is_empty()).then_some(id_token),
+            SESSION_TTL_SECS,
+        ))
+        .await
+        .map_err(|e| Error::Internal(e.to_string()))?;
     let secure = if state.config.require_https {
         "; Secure"
     } else {
         ""
     };
     let mut resp = Redirect::to(&next).into_response();
-    resp.headers_mut().insert(
+    resp.headers_mut().append(
         header::SET_COOKIE,
         format!("{SESSION_COOKIE}={session}; HttpOnly; SameSite=Lax; Path=/; Max-Age={SESSION_TTL_SECS}{secure}")
+            .parse()
+            .unwrap(),
+    );
+    resp.headers_mut().append(
+        header::SET_COOKIE,
+        format!("{STATE_COOKIE}=; Max-Age=0; Path=/auth")
             .parse()
             .unwrap(),
     );
@@ -499,12 +524,11 @@ async fn logout(
         {
             return Err(Error::Forbidden("bad CSRF token".into()));
         }
-        let id_token: Option<String> =
-            sqlx::query_scalar("delete from web_sessions where id_hash = $1 returning id_token")
-                .bind(sha256(tok.as_bytes()))
-                .fetch_optional(&state.db)
-                .await?
-                .flatten();
+        let id_token = session.as_ref().and_then(|s| s.id_token.clone());
+        store(&state)
+            .delete_session(tok)
+            .await
+            .map_err(|e| Error::Internal(e.to_string()))?;
         if let Some(u) = end_session_url(&state, id_token.as_deref()).await {
             target = u;
         }
