@@ -38,7 +38,12 @@ lease {epoch, expires_at}. Work the task, tick checklist items with check_item a
 alive (every call carrying the epoch extends it, or call heartbeat). Finish with complete, passing the \
 epoch and a result summary, or give the task back with release / block. A lease_lost error means \
 another agent holds the task now: stop and report, your work is not counted. Call claim_next again \
-until it returns {none: true}. get_task and get_task_markdown read a task, get_board reads a project.";
+until it returns {none: true}. get_task and get_task_markdown read a task, get_board reads a project. \
+Each project has a pantry, the memory all agents share: read it with read_pantry when you start on a \
+project and search it with recall before exploring or deciding. When you learn something durable the \
+next agent should know (a convention, a gotcha, a decision and why, how to build/test/deploy), save it \
+with remember, updating the existing memory (same key) rather than adding a duplicate. Task progress \
+goes in comments, never secrets in the pantry.";
 
 pub struct Compat<T> {
     tools: T,

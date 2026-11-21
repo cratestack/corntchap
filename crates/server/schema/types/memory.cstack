@@ -1,0 +1,29 @@
+part of "../corntchap.cstack"
+
+// The pantry: shared memory per project.
+
+/// One memory in a project's pantry: something an agent or a person learned about the project.
+type MemoryView {
+  /// Stable key, unique in the project (lowercase letters, digits, '.', '_', '-').
+  key String
+  /// Project key, e.g. PAY.
+  project String
+  title String
+  /// Markdown. In recall results it is an excerpt when `truncated` is true.
+  body String
+  /// note, convention, gotcha, decision, howto or fact.
+  kind String
+  tags String[]
+  /// The task it was learned on, e.g. PAY-42.
+  task String?
+  created_by String?
+  updated_by String?
+  /// Increases on every change; pass it back to remember to avoid overwriting someone else's edit.
+  revision Int
+  created_at String
+  updated_at String
+  /// Search relevance (recall with a query only).
+  rank Float?
+  /// The body was cut to an excerpt: read it in full with get_memory.
+  truncated Boolean?
+}

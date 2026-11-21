@@ -1,0 +1,47 @@
+part of "../corntchap.cstack"
+
+// The pantry: shared memory per project (see src/pantry.rs).
+
+/// Search a project's pantry.
+/// @param project Project key, e.g. PAY.
+/// @param query Words to search for in keys, titles and bodies ("quoted phrase", -exclude, or). Omit for the most recent memories.
+/// @param kind Only this kind: note, convention, gotcha, decision, howto or fact.
+/// @param tags Comma-separated tags that must all be present.
+/// @param limit At most this many results (default 20, max 100).
+procedure memoryRecall(project: String, query: String?, kind: String?, tags: String?, limit: Int?): MemoryView[]
+  @allow(auth() != null)
+  @mcp(tool: "recall", description: "Search the project's pantry, the memory all agents share: conventions, gotchas, decisions, how-tos and facts saved by earlier agents and people. Check it before exploring the codebase or making a design choice. Results carry excerpts; get_memory reads one in full.")
+
+/// One memory in full.
+/// @param project Project key, e.g. PAY.
+/// @param key The memory's key.
+procedure memoryGet(project: String, key: String): MemoryView
+  @allow(auth() != null)
+  @mcp(tool: "get_memory", description: "Read one pantry memory in full by its key.")
+
+/// The whole pantry as markdown.
+/// @param project Project key, e.g. PAY.
+procedure memoryDigest(project: String): MarkdownDoc
+  @allow(auth() != null)
+  @mcp(tool: "read_pantry", description: "The project's whole pantry as one markdown document, conventions and gotchas first. Read it once when you start working on a project. Returns {markdown}.")
+
+/// Save (create or update) a memory.
+/// @param project Project key, e.g. PAY.
+/// @param title One line saying what this is about. Required for a new memory.
+/// @param body What you learned, in markdown: concrete, durable, useful to the next agent (commands, file paths, the why).
+/// @param key Stable key to save under; derived from the title when omitted. Saving under an existing key updates that memory.
+/// @param kind note (default), convention, gotcha, decision, howto or fact.
+/// @param tags Comma-separated tags; replaces the memory's tags.
+/// @param task The task this was learned on, e.g. PAY-42.
+/// @param append Add body to the end of the existing memory instead of replacing it.
+/// @param revision The revision you read; the save fails with a conflict if someone changed it since. 0 means it must not exist yet.
+mutation procedure memoryRemember(project: String, title: String?, body: String, key: String?, kind: String?, tags: String?, task: String?, append: Boolean?, revision: Int?): MemoryView
+  @allow(auth() != null)
+  @mcp(tool: "remember", description: "Save something the next agent on this project should know into the shared pantry: a convention, a gotcha, a decision and its reason, a how-to (build, test, deploy), a fact about the system. Search with recall first and update the existing memory (same key) rather than adding a duplicate. Not for task progress (comment on the task) and never for secrets.")
+
+/// Delete a memory.
+/// @param project Project key, e.g. PAY.
+/// @param key The memory's key.
+mutation procedure memoryForget(project: String, key: String): OkResult
+  @allow(auth() != null)
+  @mcp(tool: "forget", description: "Delete a pantry memory that is wrong or obsolete. Agents can only forget memories they saved themselves; otherwise correct it with remember.")

@@ -1,4 +1,5 @@
 mod api;
+mod pantry;
 mod relay;
 mod setup;
 mod tui;
@@ -67,6 +68,9 @@ enum Cmd {
     /// Projects.
     #[command(subcommand)]
     Project(ProjectCmd),
+    /// The pantry: what a pot's cooks and people have learned (conventions, gotchas, decisions, how-tos), saved under stable keys.
+    #[command(subcommand, name = "pantry", alias = "memory")]
+    Pantry(pantry::PantryCmd),
     /// The cooks (agents): create, set up, wake targets.
     #[command(subcommand, name = "cook", alias = "agent")]
     Agent(AgentCmd),
@@ -669,6 +673,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         Cmd::Project(ProjectCmd::Ls { json }) => {
             show(&api.get("/projects").await?, json, ui::projects_table);
         }
+        Cmd::Pantry(p) => pantry::run(p, &api).await?,
         Cmd::Agent(a) => agent(a, &api).await?,
         Cmd::Login { .. } | Cmd::Logout { .. } | Cmd::Doctor | Cmd::Relay { .. } => unreachable!(),
     }

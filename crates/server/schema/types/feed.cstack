@@ -12,6 +12,10 @@ type ChangePayload {
   done Boolean?
   result String?
   reason String?
+  /// memory.saved / memory.forgotten: the memory's key.
+  key String?
+  /// memory.saved: true when the memory was new.
+  created Boolean?
 }
 
 type ChangeView {

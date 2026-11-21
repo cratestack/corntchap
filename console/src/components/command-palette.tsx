@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ChefHat, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
+import { BookMarked, ChefHat, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -47,6 +47,14 @@ export function CommandPalette() {
       <CommandList className="max-h-[min(420px,60vh)]">
         <CommandEmpty>Nothing in the pot matches that.</CommandEmpty>
         <CommandGroup heading="Do">
+          {pot && (
+            <CommandItem
+              value="search the pantry memory memories recall"
+              onSelect={run(() => navigate(`/pots/${pot}/pantry`, { state: { focus: true } }))}
+            >
+              <BookMarked /> Search the pantry in {pot}
+            </CommandItem>
+          )}
           <CommandItem value="new task add create" onSelect={run(() => openNewTask(pot))}>
             <Plus /> New task{pot ? ` in ${pot}` : ""}
           </CommandItem>

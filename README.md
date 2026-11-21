@@ -36,7 +36,8 @@ Corntchap is corn and beans cooked slowly in a pot over a fire, and the CLI borr
 
 Human output is tidy tables and short confirmations (colour only on a TTY, never with `NO_COLOR`); every listing/show command takes `--json`. The agent-mode task commands (`scoop` (alias `claim-next`), `claim`, `check`, `heartbeat`, `complete`, `release`, `block`, `comment`, `changes`) keep emitting JSON for agents.
 
-- `corntchap-cli kitchen`: live board (ratatui). Left: projects; middle: tasks grouped by status with checklist progress and holder; right: the selected task (body, checklist, dependencies, comments). Refreshes every 2.5 s. Keys: arrows or `j`/`k` move, `Tab` switches pane, `Enter` opens, `a` add task (title, then items one per line; a blank line or Ctrl-S saves), `c` comment, `x`/Space tick the highlighted checklist item (no lease needed), `d` done, `u` unblock, `X` cancel (asks first), `r` refresh, `?` help, `q` quit.
+- `corntchap-cli kitchen`: live board (ratatui). Left: projects; middle: tasks grouped by status with checklist progress and holder; right: the selected task (body, checklist, dependencies, comments). Refreshes every 2.5 s. Keys: arrows or `j`/`k` move, `Tab` switches pane, `Enter` opens, `a` add task (title, then items one per line; a blank line or Ctrl-S saves), `c` comment, `x`/Space tick the highlighted checklist item (no lease needed), `d` done, `u` unblock, `X` cancel (asks first), `p` toggle the project's pantry (memories list plus full body, read-only; `j`/`k` scroll in the right pane), `r` refresh, `?` help, `q` quit.
+- `corntchap-cli pantry` (alias `memory`): the pot's shared memory, durable knowledge saved under stable keys (kinds: note, convention, gotcha, decision, howto, fact). `pantry list <POT> [-q TEXT] [--kind K] [--tag T] [--limit N]` (alias `ls`; best matches first with `-q`), `pantry search <POT> <words…>`, `pantry show <POT> <KEY>`, `pantry stock <POT> --title T [--key K] [--kind K] [--tag T] [--task PAY-1] [--append] [--revision N] [--body TEXT | --file PATH]` (aliases `add`, `remember`; the body comes from stdin when neither is given; saving the same key updates it, and `--revision` turns a concurrent edit into a conflict instead of an overwrite), `pantry toss <POT> <KEY> [--yes]` (aliases `rm`, `forget`; asks on a terminal), `pantry digest <POT>` (alias `read`; markdown). All but `stock`/`toss`/`digest` take `--json`.
 - `corntchap-cli marabou`: checks the server, your login, the relay credential and `config.toml`.
 - `corntchap-cli logout [--relay | --all]`.
 
@@ -89,6 +90,10 @@ cwd = "~/code/payments"
 ```
 
 The relay remembers the last event id it saw (`relay-state.json` next to `credentials.toml`) and sends it as `Last-Event-ID` on restart, so wakes sent while it was down are replayed.
+
+### The pantry: shared memory per project
+
+Every project has a pantry: what agents and people learned about it (conventions, gotchas, decisions and their reasons, how to build/test/deploy, facts about the system), saved under a stable key so the next agent starts from it instead of rediscovering it. MCP tools: `read_pantry` (the whole pantry as markdown, read once when starting on a project), `recall` (ranked full-text search with kind/tag filters; excerpts), `get_memory`, `remember` (create or update by key; `append`; pass the `revision` you read and a concurrent edit is refused instead of lost) and `forget` (agents only forget what they saved). Overwrites keep the previous version (`memory_revisions`); saves and deletions appear in the change feed (`memory.saved`, `memory.forgotten`). Also at `/api/v1/projects/{key}/pantry`, as the `memories` MCP resource and the read-only `Memory` model at `/api/v2`. Visibility follows the project: whoever sees the project shares its pantry.
 
 ## Architecture
 

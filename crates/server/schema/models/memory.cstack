@@ -1,0 +1,30 @@
+part of "../corntchap.cstack"
+
+// The pantry, read-only through the generated surface: saving and forgetting go through the
+// memory procedures (revisions, events). `tags` is a text[] column, which cratestack has no
+// scalar for: read it through the procedures.
+
+/// A memory in a project's pantry.
+model Memory {
+  id Uuid @id @default(uuid())
+  projectId Uuid @readonly @map("project_id")
+  /// Unique in the project.
+  key String @readonly
+  title String @readonly
+  /// Markdown.
+  body String @readonly
+  /// note, convention, gotcha, decision, howto or fact.
+  kind String @readonly
+  taskId Uuid? @readonly @map("task_id")
+  createdBy Uuid? @readonly @map("created_by")
+  updatedBy Uuid? @readonly @map("updated_by")
+  revision BigInt @readonly
+  createdAt DateTime @readonly @map("created_at")
+  updatedAt DateTime @readonly @map("updated_at")
+  project Project @relation(fields:[projectId],references:[id])
+
+  @@map("memories")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "memories")
+}
