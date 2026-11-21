@@ -3,7 +3,9 @@
 # +crt-static: it breaks proc-macros). Works for amd64 and arm64.
 # The web console (Vite + React) is built first and embedded in the server binary.
 FROM node:lts-slim AS console
-RUN corepack enable
+# Node 25+ images no longer ship corepack: install the pnpm pinned in console/package.json (packageManager).
+ARG PNPM_VERSION=10.28.0
+RUN npm install -g pnpm@${PNPM_VERSION}
 WORKDIR /console
 COPY console/package.json console/pnpm-lock.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
