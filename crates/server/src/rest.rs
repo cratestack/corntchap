@@ -202,7 +202,7 @@ async fn tasks_add(
             parent: s(&b, "parent"),
             depends_on: arr(&b, "depends_on"),
             labels: arr(&b, "labels"),
-            priority: i(&b, "priority").unwrap_or(0) as i32,
+            priority: i(&b, "priority").unwrap_or(0),
         },
     )
     .await?)
@@ -247,7 +247,7 @@ async fn task_patch(
             title: s(&b, "title"),
             body: s(&b, "body"),
             labels,
-            priority: i(&b, "priority").map(|n| n as i32),
+            priority: i(&b, "priority"),
         },
     )
     .await?)
@@ -276,8 +276,7 @@ async fn task_check(
     Path(id): Path<String>,
     Json(b): Json<Value>,
 ) -> J {
-    let pos =
-        i(&b, "position").ok_or_else(|| Error::Invalid("position is required".into()))? as i32;
+    let pos = i(&b, "position").ok_or_else(|| Error::Invalid("position is required".into()))?;
     ok(service::check_item(
         &st.db,
         &p.worker()?,
@@ -389,7 +388,7 @@ async fn agents_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Va
         &req_s(&b, "name")?,
         s(&b, "kind").as_deref(),
         s(&b, "runtime").as_deref(),
-        i(&b, "max_leases").map(|n| n as i32),
+        i(&b, "max_leases"),
         s(&b, "owner").as_deref(),
     )
     .await?)

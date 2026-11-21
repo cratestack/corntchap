@@ -102,7 +102,7 @@ pub async fn session_from_headers(
     let Some(tok) = cookie_value(headers, SESSION_COOKIE) else {
         return Ok(None);
     };
-    let row: Option<(Uuid, String, String, Option<Uuid>, bool, i32, String)> = sqlx::query_as(
+    let row: Option<(Uuid, String, String, Option<Uuid>, bool, i64, String)> = sqlx::query_as(
         "select p.id, p.kind, p.name, p.owner_id, p.is_admin, p.max_leases, s.csrf
          from web_sessions s join principals p on p.id = s.user_id
          where s.id_hash = $1 and s.expires_at > now() and p.disabled_at is null",

@@ -53,7 +53,7 @@ struct PrincipalRow {
     name: String,
     owner_id: Option<uuid::Uuid>,
     is_admin: bool,
-    max_leases: i32,
+    max_leases: i64,
     runtime: Option<String>,
     agent_kind: Option<String>,
     token_id: uuid::Uuid,

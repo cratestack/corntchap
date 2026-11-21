@@ -49,6 +49,19 @@ pub async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
 
 pub fn build(state: AppState) -> anyhow::Result<Router> {
     let db = cratestack_schema::Cratestack::builder(state.db.clone()).build();
+    // The generated REST surface (models + procedure routes) under /api/v2, same bearer tokens.
+    let generated = cratestack_schema::axum::router(
+        db.clone(),
+        procs::Procedures {
+            state: state.clone(),
+        },
+        (),
+        cratestack::JsonCodec,
+        TokenAuth {
+            state: state.clone(),
+        },
+        cratestack::DEFAULT_BODY_LIMIT_BYTES,
+    );
     let registry = procs::Procedures {
         state: state.clone(),
     };
@@ -106,6 +119,7 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
         .nest("/api/v1", crate::rest::routes())
         .merge(web::routes())
         .with_state(state.clone())
+        .nest("/api/v2", generated)
         .nest_service("/mcp", mcp_router)
         .merge(mcp.metadata_router())
         .layer(middleware::from_fn_with_state(

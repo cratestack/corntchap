@@ -21,51 +21,144 @@ auth Caller {
   agentKind String?
 }
 
+// Typed procedure outputs (MCP `outputSchema`, generated TypeScript types). Field names are the
+// snake_case keys of the JSON the service layer has always returned; timestamps stay strings so
+// the bytes on the wire do not change. Null-valued optionals are omitted by the framework.
+type TaskItemView {
+  position Int
+  text String
+  done Boolean
+  done_by String?
+}
+
+type TaskCommentView {
+  author String?
+  body String
+  at String
+}
+
+type TaskLinkView {
+  id String
+  title String
+  status String
+}
+
+type TaskView {
+  id String
+  project String
+  number Int
+  title String
+  body String
+  priority Int
+  labels String[]
+  status String
+  parent String?
+  depends_on String[]
+  claimed_by String?
+  lease_epoch Int
+  lease_expires_at String?
+  lease_live Boolean?
+  ready Boolean?
+  open_items Int
+  total_items Int
+  result String?
+  created_at String
+  updated_at String
+}
+
+type TaskDetail {
+  id String
+  project String
+  number Int
+  title String
+  body String
+  priority Int
+  labels String[]
+  status String
+  parent String?
+  depends_on String[]
+  claimed_by String?
+  lease_epoch Int
+  lease_expires_at String?
+  lease_live Boolean?
+  ready Boolean?
+  open_items Int
+  total_items Int
+  result String?
+  created_at String
+  updated_at String
+  items TaskItemView[]
+  comments TaskCommentView[]
+  dependencies TaskLinkView[]
+  subtasks TaskLinkView[]
+}
+
+type LeaseView {
+  epoch Int
+  expires_at String
+}
+
+type ClaimResult {
+  task TaskDetail?
+  lease LeaseView?
+  none Boolean?
+}
+
+type LeaseRenewal {
+  id String
+  epoch Int
+  expires_at String
+}
+
+type MarkdownDoc {
+  markdown String
+}
+
 procedure whoami(): Json
   @allow(auth() != null)
   @mcp(tool: "whoami", description: "Who you are: name, teams, projects and the leases you currently hold.")
 
-procedure listProjects(): Json
+procedure projectOverview(): Json
   @allow(auth() != null)
   @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts.")
 
-procedure listTasks(project: String, status: String?, label: String?, readyOnly: Boolean?): Json
+procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?): Json
   @allow(auth() != null)
   @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts. Optional status/label filters; readyOnly limits to claimable tasks.")
 
-procedure getTask(id: String): Json
+procedure taskDetail(id: String): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "get_task", description: "One task with its checklist items, comments, dependencies and subtasks. Task ids look like PAY-42.")
 
-procedure getBoard(project: String): Json
+procedure getBoard(project: String): MarkdownDoc
   @allow(auth() != null)
   @mcp(tool: "get_board", description: "The project board as markdown with - [ ] checkboxes per task.")
 
-procedure getTaskMarkdown(id: String): Json
+procedure getTaskMarkdown(id: String): MarkdownDoc
   @allow(auth() != null)
   @mcp(tool: "get_task_markdown", description: "One task rendered as markdown (the corntchap://task/{id} view): status, body, checklist, dependencies and comments. Returns {markdown}.")
 
-mutation procedure createTask(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?): Json
+mutation procedure taskCreate(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated.")
 
-mutation procedure updateTask(id: String, title: String?, body: String?, priority: Int?, labels: String?): Json
+mutation procedure taskEdit(id: String, title: String?, body: String?, priority: Int?, labels: String?): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "update_task", description: "Edit title, body, priority or labels (labels is comma-separated and replaces the set). Not status. Agents may only edit a task they currently hold.")
 
-mutation procedure claimNext(project: String, labels: String?): Json
+mutation procedure claimNext(project: String, labels: String?): ClaimResult
   @allow(auth() != null)
   @mcp(tool: "claim_next", description: "Atomically take the best ready task in a project. Returns the task and a lease {epoch, expires_at}, or {none: true}. Optional labels (comma-separated) restricts which tasks you accept.")
 
-mutation procedure claimTask(id: String): Json
+mutation procedure claimTask(id: String): ClaimResult
   @allow(auth() != null)
   @mcp(tool: "claim_task", description: "Claim one named task. Returns the task and a lease {epoch, expires_at}.")
 
-mutation procedure heartbeat(id: String, epoch: Int, ttlS: Int?): Json
+mutation procedure heartbeat(id: String, epoch: Int, ttlS: Int?): LeaseRenewal
   @allow(auth() != null)
   @mcp(tool: "heartbeat", description: "Extend your lease. Any call carrying the epoch also extends it, so you rarely need this.")
 
-mutation procedure checkItem(id: String, epoch: Int, position: Int, done: Boolean): Json
+mutation procedure checkItem(id: String, epoch: Int, position: Int, done: Boolean): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "check_item", description: "Tick (or untick) checklist item `position` (1-based). Needs your live lease epoch.")
 
@@ -73,15 +166,15 @@ mutation procedure comment(id: String, body: String, epoch: Int?): Json
   @allow(auth() != null)
   @mcp(tool: "comment", description: "Add a note or handoff to a task. No lease needed; pass epoch to also extend yours.")
 
-mutation procedure complete(id: String, epoch: Int, result: String): Json
+mutation procedure complete(id: String, epoch: Int, result: String): TaskView
   @allow(auth() != null)
   @mcp(tool: "complete", description: "Mark the task done. Fails with lease_lost if the epoch is stale: then stop and report, your work is not counted.")
 
-mutation procedure release(id: String, epoch: Int, reason: String): Json
+mutation procedure release(id: String, epoch: Int, reason: String): TaskView
   @allow(auth() != null)
   @mcp(tool: "release", description: "Give the task back (status open) for someone else.")
 
-mutation procedure block(id: String, epoch: Int, reason: String): Json
+mutation procedure block(id: String, epoch: Int, reason: String): TaskView
   @allow(auth() != null)
   @mcp(tool: "block", description: "Mark the task blocked; it waits for a human to unblock it.")
 
@@ -92,3 +185,190 @@ procedure changesSince(cursor: Int, project: String?, limit: Int?): Json
 procedure waitForWork(project: String?, timeoutS: Int?): Json
   @allow(auth() != null)
   @mcp(tool: "wait_for_work", description: "Long-poll (up to 55 s) until a task is ready for you; returns the ready tasks or an empty list. Does not claim.")
+
+// ---------------------------------------------------------------------------------------------
+// Models: the generated REST surface (and the TypeScript client) for the console.
+// Existing snake_case tables and columns are mapped with @@map/@map. Policies:
+//   * relays see nothing (they only listen for wake events);
+//   * admins see and manage everything;
+//   * members see the projects, tasks, items, comments and events of the teams they belong to;
+//   * an agent may only edit a task it currently holds; creating tasks and every lease
+//     operation (claim/heartbeat/complete/...) are procedures that run raw SQL.
+// Uuid columns are compared with the caller through the generated text mirror columns
+// (`*Ref`, migration 0002) because the framework binds the caller id as text.
+// ---------------------------------------------------------------------------------------------
+
+model Principal {
+  id Uuid @id @default(uuid())
+  kind String @readonly
+  name String @readonly
+  ownerId Uuid? @readonly @map("owner_id")
+  oidcLogin String? @readonly @map("oidc_login")
+  agentKind String? @readonly @map("agent_kind")
+  runtime String? @readonly
+  maxLeases Int @readonly @map("max_leases")
+  isAdmin Boolean @readonly @map("is_admin")
+  disabledAt DateTime? @readonly @map("disabled_at")
+  lastSeenAt DateTime? @readonly @map("last_seen_at")
+  createdAt DateTime @readonly @map("created_at")
+  oidcSub String? @server_only @map("oidc_sub")
+  adminSource String @server_only @map("admin_source")
+  idRef String @server_only @map("id_ref")
+  ownerRef String? @server_only @map("owner_ref")
+  memberships TeamMember[] @relation(fields:[id],references:[principalId])
+
+  @@map("principals")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || idRef == auth().id || ownerRef == auth().id || memberships.some.team.members.some.principalRef == auth().id)
+}
+
+model Team {
+  id Uuid @id @default(uuid())
+  name String
+  members TeamMember[] @relation(fields:[id],references:[teamId])
+  projects Project[] @relation(fields:[id],references:[teamId])
+
+  @@map("teams")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || members.some.principalRef == auth().id)
+  @@allow("create", auth().isAdmin == true)
+  @@allow("update", auth().isAdmin == true)
+  @@allow("delete", auth().isAdmin == true)
+}
+
+model TeamMember {
+  id Uuid @id @default(uuid())
+  teamId Uuid @map("team_id")
+  principalId Uuid @map("principal_id")
+  role String
+  principalRef String @server_only @map("principal_ref")
+  team Team @relation(fields:[teamId],references:[id])
+  principal Principal @relation(fields:[principalId],references:[id])
+
+  @@map("team_members")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || principalRef == auth().id)
+  @@allow("create", auth().isAdmin == true)
+  @@allow("update", auth().isAdmin == true)
+  @@allow("delete", auth().isAdmin == true)
+}
+
+model Project {
+  id Uuid @id @default(uuid())
+  teamId Uuid @map("team_id")
+  key String
+  name String
+  repoUrl String? @map("repo_url")
+  nextNumber Int @readonly @map("next_number")
+  team Team @relation(fields:[teamId],references:[id])
+  tasks Task[] @relation(fields:[id],references:[projectId])
+
+  @@map("projects")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || team.members.some.principalRef == auth().id)
+  @@allow("create", auth().isAdmin == true)
+  @@allow("update", auth().isAdmin == true)
+}
+
+model Task {
+  id Uuid @id @default(uuid())
+  projectId Uuid @readonly @map("project_id")
+  number Int @readonly
+  title String
+  body String
+  priority Int
+  parentId Uuid? @readonly @map("parent_id")
+  status String @readonly
+  claimedBy Uuid? @readonly @map("claimed_by")
+  leaseEpoch BigInt @readonly @map("lease_epoch")
+  leaseExpiresAt DateTime? @readonly @map("lease_expires_at")
+  result String? @readonly
+  createdBy Uuid? @readonly @map("created_by")
+  createdAt DateTime @readonly @map("created_at")
+  updatedAt DateTime @readonly @map("updated_at")
+  claimedRef String? @server_only @map("claimed_ref")
+  project Project @relation(fields:[projectId],references:[id])
+  items Item[] @relation(fields:[id],references:[taskId])
+  comments Comment[] @relation(fields:[id],references:[taskId])
+
+  @@map("tasks")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@allow("update", auth().isAdmin == true || (auth().kind == "user" && project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && claimedRef == auth().id && status == "claimed"))
+}
+
+model Item {
+  id Uuid @id @default(uuid())
+  taskId Uuid @readonly @map("task_id")
+  position Int @readonly
+  text String @readonly
+  done Boolean
+  doneBy Uuid? @readonly @map("done_by")
+  task Task @relation(fields:[taskId],references:[id])
+
+  @@map("items")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@allow("update", auth().isAdmin == true || (auth().kind == "user" && task.project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && task.claimedRef == auth().id && task.status == "claimed"))
+}
+
+model Comment {
+  id Uuid @id @default(uuid())
+  taskId Uuid @map("task_id")
+  authorId Uuid? @map("author_id")
+  body String
+  createdAt DateTime @map("created_at")
+  task Task @relation(fields:[taskId],references:[id])
+
+  @@map("comments")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+}
+
+model TaskDep {
+  id Uuid @id @default(uuid())
+  taskId Uuid @map("task_id")
+  dependsOn Uuid @map("depends_on")
+  task Task @relation(fields:[taskId],references:[id])
+
+  @@map("task_deps")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+}
+
+// Wake targets of the agents you own (admins: all). `config` (webhook URLs and tokens) is
+// deliberately not part of the model; `projects`/`labels` are text[] columns, which cratestack
+// has no scalar for.
+model WakeTarget {
+  id Uuid @id @default(uuid())
+  agentId Uuid @map("agent_id")
+  type String
+  agent Principal @relation(fields:[agentId],references:[id])
+
+  @@map("wake_targets")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || agent.ownerRef == auth().id)
+}
+
+// The append-only change feed (read-only).
+model Event {
+  seq BigInt @id @default(dbgenerated())
+  projectId Uuid? @map("project_id")
+  taskId Uuid? @map("task_id")
+  kind String
+  actorId Uuid? @map("actor_id")
+  payload Json
+  at DateTime
+  project Project? @relation(fields:[projectId],references:[id])
+
+  @@map("events")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+}
+
+// Human-only transitions (no MCP tool): blocked -> open, open/blocked -> cancelled.
+mutation procedure unblockTask(id: String): TaskView
+  @allow(auth() != null)
+
+mutation procedure cancelTask(id: String): TaskView
+  @allow(auth() != null)
