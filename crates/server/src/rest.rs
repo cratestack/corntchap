@@ -526,8 +526,15 @@ async fn task_patch(
     )
     .await?)
 }
-async fn task_claim(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
-    ok(service::claim_task(&st.db, &p.worker()?, &id, None).await?)
+/// `{"station": "st_…"}` optional: the lease records the session.
+async fn task_claim(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    body: Option<Json<Value>>,
+) -> J {
+    let station = body.and_then(|Json(b)| s(&b, "station"));
+    ok(service::claim_task(&st.db, &p.worker()?, &id, station.as_deref()).await?)
 }
 async fn task_heartbeat(
     State(st): State<AppState>,

@@ -682,7 +682,10 @@ mod tests {
 
     #[test]
     fn titles_are_plain() {
-        assert_eq!(short("**Round** `down` or _up_?\nmore"), "Round down or up?");
+        assert_eq!(
+            short("**Round** `down` or _up_?\nmore"),
+            "Round down or up?"
+        );
         assert_eq!(short("\n## Which currency?"), "Which currency?");
     }
 

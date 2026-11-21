@@ -178,23 +178,9 @@ export function useQuestions(pot: string, status: "open" | "all", enabled = true
   return { data: q.data, isLoading: q.isLoading, error: q.error as unknown };
 }
 
-/** Open-question counts per pot, for the sidebar badges. */
+/** Open-question counts per pot, for the sidebar badges (from the pot summaries, no extra requests). */
 export function useOpenQuestionCounts(projects: ProjectSummary[] | undefined): Record<string, number> {
-  const dp = useDataProvider();
-  const results = useQueries({
-    queries: (projects ?? []).map((p) => ({
-      queryKey: ["data", "questions", p.key, "open"],
-      queryFn: async () => {
-        const res = await dp().custom!({ url: "", method: "get", meta: { procedure: "questionList" }, payload: { project: p.key, status: "open" } });
-        return (res as { data: QuestionView[] }).data;
-      },
-      staleTime: 1500,
-    })),
-  });
   const out: Record<string, number> = {};
-  (projects ?? []).forEach((p, i) => {
-    const n = results[i]?.data?.length ?? 0;
-    if (n > 0) out[p.key] = n;
-  });
+  for (const p of projects ?? []) if (p.open_questions > 0) out[p.key] = p.open_questions;
   return out;
 }
