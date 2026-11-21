@@ -26,3 +26,4 @@ rustc-ice-*.txt
 .env.dev
 .env
 *.whl
+.claude/worktrees/
