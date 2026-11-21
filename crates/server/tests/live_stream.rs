@@ -109,7 +109,7 @@ async fn replay_then_live_with_visibility() {
 
     // live: a write after connecting arrives on the same connection
     let (_, b1_view) = app.get(&b1, "/projects/PAY/tasks").await; // b1 cannot see PAY at all
-    assert_eq!(b1_view["error"].as_str().is_some(), true, "{b1_view}");
+    assert!(b1_view["error"].as_str().is_some(), "{b1_view}");
     app.post(
         &admin,
         "/projects/OPS/tasks",
