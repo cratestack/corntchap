@@ -1,0 +1,39 @@
+# Local stack: Postgres + corntchap built from the Containerfile.
+#   cp .env.example .env   # fill in the GitHub OAuth app (callback: ${PUBLIC_URL}/auth/github/callback)
+#   docker compose up -d --build
+#   docker compose exec corntchap /corntchap init --admin <your-github-login>
+# Postgres alone (for `cargo test` / `just e2e`):  docker compose up -d db
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: corn
+      POSTGRES_PASSWORD: corn
+      POSTGRES_DB: corntchap
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U corn -d corntchap"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  corntchap:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: ghcr.io/stephane-segning/corntchap:dev
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://corn:corn@db/corntchap
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}   # plain http is only accepted on localhost
+      BIND: 0.0.0.0:8080
+      AUTO_MIGRATE: "1"
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports: ["8080:8080"]
+
+volumes:
+  pgdata:

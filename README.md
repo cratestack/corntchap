@@ -55,6 +55,9 @@ agent = "codex-laptop"; adapter = "exec"; command = ["codex", "exec", "resume", 
 ## Develop
 
 ```bash
+mise install                 # rust 1.100, just, postgres client (mise.toml)
+mise run db                  # Postgres via compose.yaml
+docker compose up -d --build # or the whole stack: Postgres + server (copy .env.example to .env first)
 just test      # unit + integration (needs Postgres; TEST_DATABASE_ADMIN_URL, default postgres://corn:corn@127.0.0.1/postgres)
 just e2e       # real binaries: server + CLI + relay + a fake agent
 ```

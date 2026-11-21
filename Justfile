@@ -44,7 +44,10 @@ image tag="dev":
     rt=$(command -v podman || command -v docker)
     "$rt" build -f Containerfile -t {{image}}:{{tag}} .
 
-# Throwaway local Postgres 16 matching the test defaults.
+# Local Postgres 16 via compose (matches the test defaults on 127.0.0.1:5432).
 db:
-    docker run -d --name corntchap-pg -p 5432:5432 \
-      -e POSTGRES_USER=corn -e POSTGRES_PASSWORD=corn postgres:16
+    docker compose up -d --wait db
+
+# The whole stack: Postgres + server image.
+up:
+    docker compose up -d --build

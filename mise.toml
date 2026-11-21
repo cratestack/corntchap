@@ -1,0 +1,35 @@
+# Dev dependencies: `mise install` then `mise run <task>` (tasks wrap the Justfile).
+[tools]
+rust = { version = "1.100", components = "rustfmt,clippy", targets = "x86_64-unknown-linux-musl" }
+just = "latest"
+# psql is used by scripts/e2e.sh
+postgres = "16"
+
+[env]
+DATABASE_URL = "postgres://corn:corn@127.0.0.1:5432/corntchap"
+TEST_DATABASE_ADMIN_URL = "postgres://corn:corn@127.0.0.1:5432/postgres"
+
+[tasks.db]
+description = "Start Postgres (docker compose)"
+run = "docker compose up -d --wait db"
+
+[tasks.build]
+run = "just build"
+
+[tasks.test]
+description = "Unit + integration tests (needs Postgres)"
+depends = ["db"]
+run = "just test"
+
+[tasks.e2e]
+description = "Real-binary end-to-end run"
+depends = ["db"]
+run = "just e2e"
+
+[tasks.check]
+description = "fmt + clippy"
+run = ["just fmt", "just clippy"]
+
+[tasks.up]
+description = "Whole stack in containers"
+run = "docker compose up -d --build"
