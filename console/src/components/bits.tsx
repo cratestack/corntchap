@@ -118,8 +118,8 @@ export function IdChip({ id, className }: { id: string; className?: string }) {
 }
 
 export const BUCKET_DOT: Record<Bucket, string> = {
-  claimed: "bg-corn",
-  ready: "bg-primary",
+  claimed: "bg-primary",
+  ready: "bg-corn",
   waiting: "bg-waiting",
   done: "bg-success",
   cancelled: "bg-muted-foreground/50",

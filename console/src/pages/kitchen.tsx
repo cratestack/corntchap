@@ -520,7 +520,7 @@ function ListView({
   );
 }
 
-const BOARD_COLS: Bucket[] = ["waiting", "ready", "claimed", "done"];
+const BOARD_COLS: Bucket[] = ["ready", "claimed", "waiting", "done"];
 
 function BoardView({
   loading,
@@ -542,7 +542,7 @@ function BoardView({
   if (total === 0) {
     return (
       <EmptyState title="The board is bare" action={<Button onClick={onNew}>New task</Button>}>
-        Four columns fill up as tasks move from waiting to ready, onto the fire and out to the table.
+        Four columns: ready to scoop, on the fire, waiting on a human or a dependency, and served.
       </EmptyState>
     );
   }
