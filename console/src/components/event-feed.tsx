@@ -13,12 +13,14 @@ import {
   Undo2,
   Unlock,
   Pencil,
+  BookMarked,
+  Eraser,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fmtAgo, useNow } from "@/lib/format";
 import { Avatar } from "./bits";
-import { useOpenTask } from "@/lib/nav";
+import { useOpenMemory, useOpenTask } from "@/lib/nav";
 
 interface Described {
   icon: LucideIcon;
@@ -55,6 +57,15 @@ export function describe(e: ChangeView): Described {
       return { icon: Ban, tone: "text-destructive", verb: "cancelled" };
     case "task.updated":
       return { icon: Pencil, tone: "text-muted-foreground", verb: "edited" };
+    case "memory.saved":
+      return {
+        icon: BookMarked,
+        tone: "text-success",
+        verb: p.created ? "stocked the pantry with" : "updated in the pantry",
+        detail: p.title ?? undefined,
+      };
+    case "memory.forgotten":
+      return { icon: Eraser, tone: "text-destructive", verb: "forgot", detail: p.title ?? undefined };
     case "task.lease_expired":
       return { icon: Hourglass, tone: "text-corn-text", verb: "lease ran out on" };
     default:
@@ -64,6 +75,7 @@ export function describe(e: ChangeView): Described {
 
 const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: boolean; now: number }) {
   const open = useOpenTask();
+  const openMemory = useOpenMemory();
   const d = describe(e);
   const Icon = d.icon;
   const actor = e.actor ?? "the kitchen";
@@ -86,6 +98,18 @@ const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: b
             >
               {e.task}
             </button>
+          )}
+          {e.kind === "memory.saved" && e.payload.key && (
+            <button
+              type="button"
+              onClick={() => openMemory(e.project, e.payload.key!)}
+              className="ml-1 rounded font-mono text-[12px] font-bold underline-offset-2 hover:underline focus-visible:underline"
+            >
+              {e.payload.key}
+            </button>
+          )}
+          {e.kind === "memory.forgotten" && e.payload.key && (
+            <span className="ml-1 font-mono text-[12px] font-bold line-through decoration-muted-foreground/60">{e.payload.key}</span>
           )}
           {d.detail && <span className="text-muted-foreground"> · {d.detail}</span>}
         </p>

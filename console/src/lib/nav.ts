@@ -33,3 +33,14 @@ export function useOpenTask() {
     [loc.pathname, navigate, setParams],
   );
 }
+
+/** Open a memory in the pantry's side sheet (deep link: `/pots/PAY/pantry?memory=<key>`). */
+export function useOpenMemory() {
+  const navigate = useNavigate();
+  return useCallback(
+    (project: string, key: string) => {
+      void navigate(`/pots/${project}/pantry?memory=${encodeURIComponent(key)}`);
+    },
+    [navigate],
+  );
+}
