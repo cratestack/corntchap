@@ -114,15 +114,80 @@ type MarkdownDoc {
   markdown String
 }
 
-procedure whoami(): Json
+type OkResult {
+  ok Boolean
+}
+
+type ProjectSummary {
+  key String
+  name String
+  repo_url String?
+  team String?
+  lease_ttl_s Float
+  open Int
+  ready Int
+  claimed Int
+  blocked Int
+  done Int
+}
+
+type TeamRole {
+  name String
+  role String
+}
+
+type WhoamiView {
+  name String
+  kind String
+  agent_kind String?
+  runtime String?
+  is_admin Boolean
+  max_leases Int
+  teams TeamRole[]
+  projects String[]
+  current_leases TaskView[]
+}
+
+// The keys the event kinds put in `payload` (an open-ended object in the table; task.created's
+// `labels` list is not part of the typed view, read it through the Event model).
+type ChangePayload {
+  title String?
+  agent String?
+  epoch Int?
+  position Int?
+  done Boolean?
+  result String?
+  reason String?
+}
+
+type ChangeView {
+  seq Int
+  kind String
+  project String
+  task String?
+  actor String?
+  at String
+  payload ChangePayload
+}
+
+type ChangeFeed {
+  events ChangeView[]
+  next_cursor Int
+}
+
+type WaitResult {
+  ready TaskView[]
+}
+
+procedure whoami(): WhoamiView
   @allow(auth() != null)
   @mcp(tool: "whoami", description: "Who you are: name, teams, projects and the leases you currently hold.")
 
-procedure projectOverview(): Json
+procedure projectOverview(): ProjectSummary[]
   @allow(auth() != null)
   @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts.")
 
-procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?): Json
+procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?): TaskView[]
   @allow(auth() != null)
   @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts. Optional status/label filters; readyOnly limits to claimable tasks.")
 
@@ -162,7 +227,7 @@ mutation procedure checkItem(id: String, epoch: Int, position: Int, done: Boolea
   @allow(auth() != null)
   @mcp(tool: "check_item", description: "Tick (or untick) checklist item `position` (1-based). Needs your live lease epoch.")
 
-mutation procedure comment(id: String, body: String, epoch: Int?): Json
+mutation procedure comment(id: String, body: String, epoch: Int?): OkResult
   @allow(auth() != null)
   @mcp(tool: "comment", description: "Add a note or handoff to a task. No lease needed; pass epoch to also extend yours.")
 
@@ -178,11 +243,11 @@ mutation procedure block(id: String, epoch: Int, reason: String): TaskView
   @allow(auth() != null)
   @mcp(tool: "block", description: "Mark the task blocked; it waits for a human to unblock it.")
 
-procedure changesSince(cursor: Int, project: String?, limit: Int?): Json
+procedure changesSince(cursor: Int, project: String?, limit: Int?): ChangeFeed
   @allow(auth() != null)
   @mcp(tool: "changes_since", description: "Events after a cursor (0 to start) plus the next cursor; empty when nothing moved.")
 
-procedure waitForWork(project: String?, timeoutS: Int?): Json
+procedure waitForWork(project: String?, timeoutS: Int?): WaitResult
   @allow(auth() != null)
   @mcp(tool: "wait_for_work", description: "Long-poll (up to 55 s) until a task is ready for you; returns the ready tasks or an empty list. Does not claim.")
 

@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 //! The cratestack procedure registry: each MCP tool is a thin adapter onto `service`.
 
-use cratestack::{CratestackContext, CratestackError, Json, Value};
+use cratestack::{CratestackContext, CratestackError, Value};
 use uuid::Uuid;
 
 use crate::{
@@ -37,7 +37,6 @@ fn lines(v: &Option<String>) -> Vec<String> {
 }
 
 type Db = cratestack_schema::Cratestack;
-type Res = Result<Json<Value>, CratestackError>;
 
 #[derive(Clone)]
 pub struct Procedures {
@@ -119,10 +118,6 @@ fn typed<T: serde::de::DeserializeOwned>(
     })
 }
 
-fn out(r: crate::error::Result<serde_json::Value>) -> Res {
-    r.map(|v| Json(Value::from_plain_json(v))).map_err(map_err)
-}
-
 impl ProcedureRegistry for Procedures {
     async fn whoami(
         &self,
@@ -130,9 +125,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         _a: whoami::Args,
         _z: whoami::Authorized,
-    ) -> Res {
+    ) -> Result<whoami::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::whoami(&self.state.db, &p).await)
+        typed(service::whoami(&self.state.db, &p).await)
     }
 
     async fn project_overview(
@@ -141,9 +136,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         _a: project_overview::Args,
         _z: project_overview::Authorized,
-    ) -> Res {
+    ) -> Result<project_overview::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::list_projects(&self.state.db, &p).await)
+        typed(service::list_projects(&self.state.db, &p).await)
     }
 
     async fn project_tasks(
@@ -152,17 +147,19 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: project_tasks::Args,
         _z: project_tasks::Authorized,
-    ) -> Res {
+    ) -> Result<project_tasks::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::list_tasks(
-            &self.state.db,
-            &p,
-            &a.project.to_uppercase(),
-            a.status.as_deref(),
-            a.label.as_deref(),
-            a.readyOnly.unwrap_or(false),
+        typed(
+            service::list_tasks(
+                &self.state.db,
+                &p,
+                &a.project.to_uppercase(),
+                a.status.as_deref(),
+                a.label.as_deref(),
+                a.readyOnly.unwrap_or(false),
+            )
+            .await,
         )
-        .await)
     }
 
     async fn task_detail(
@@ -320,9 +317,9 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: comment::Args,
         _z: comment::Authorized,
-    ) -> Res {
+    ) -> Result<comment::Output, CratestackError> {
         let p = principal(ctx)?;
-        out(service::comment(&self.state.db, &p, &a.id, &a.body, a.epoch).await)
+        typed(service::comment(&self.state.db, &p, &a.id, &a.body, a.epoch).await)
     }
 
     async fn complete(
@@ -364,17 +361,19 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: changes_since::Args,
         _z: changes_since::Authorized,
-    ) -> Res {
+    ) -> Result<changes_since::Output, CratestackError> {
         let p = principal(ctx)?;
         let project = a.project.map(|k| k.to_uppercase());
-        out(service::changes_since(
-            &self.state.db,
-            &p,
-            a.cursor,
-            project.as_deref(),
-            a.limit.unwrap_or(200),
+        typed(
+            service::changes_since(
+                &self.state.db,
+                &p,
+                a.cursor,
+                project.as_deref(),
+                a.limit.unwrap_or(200),
+            )
+            .await,
         )
-        .await)
     }
 
     async fn wait_for_work(
@@ -383,16 +382,18 @@ impl ProcedureRegistry for Procedures {
         ctx: &CratestackContext,
         a: wait_for_work::Args,
         _z: wait_for_work::Authorized,
-    ) -> Res {
+    ) -> Result<wait_for_work::Output, CratestackError> {
         let p = principal(ctx)?;
         let project = a.project.map(|k| k.to_uppercase());
-        out(stream::wait_for_work(
-            &self.state,
-            &p,
-            project.as_deref(),
-            a.timeoutS.unwrap_or(30),
+        typed(
+            stream::wait_for_work(
+                &self.state,
+                &p,
+                project.as_deref(),
+                a.timeoutS.unwrap_or(30),
+            )
+            .await,
         )
-        .await)
     }
 
     async fn unblock_task(
