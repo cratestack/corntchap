@@ -62,18 +62,58 @@ impl Credentials {
         if self.relay_token.is_some() {
             disk.relay_token = self.relay_token.clone();
         }
-        fs::write(&path, toml::to_string_pretty(&disk)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+        write_creds(&path, &disk)
+    }
+
+    /// Remove stored tokens from credentials.toml (not environment overrides); returns what was on disk.
+    pub fn clear(user: bool, relay: bool) -> Result<Credentials> {
+        let path = cred_path();
+        let mut disk: Credentials = fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default();
+        let before = disk.clone();
+        if user {
+            disk.token = None;
         }
-        Ok(())
+        if relay {
+            disk.relay_token = None;
+        }
+        if path.exists() {
+            write_creds(&path, &disk)?;
+        }
+        Ok(before)
     }
 }
 
+fn write_creds(path: &std::path::Path, c: &Credentials) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(path, toml::to_string_pretty(c)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// The server answered 401: the stored credential is expired, revoked or from another database.
+#[derive(Debug)]
+pub struct Unauthorized(pub String);
+
+impl std::fmt::Display for Unauthorized {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unauthorized {}
+
 #[derive(Clone)]
 pub struct Api {
+    pub relay: bool,
     pub server: String,
     pub token: Option<String>,
     pub http: reqwest::Client,
@@ -82,6 +122,7 @@ pub struct Api {
 impl Api {
     pub fn new(server: &str, token: Option<String>) -> Api {
         Api {
+            relay: false,
             server: server.trim_end_matches('/').to_string(),
             token,
             http: reqwest::Client::builder()
@@ -105,7 +146,9 @@ impl Api {
                 "not logged in: run `corntchap-cli login <server-url>`"
             });
         }
-        Ok(Api::new(&server, token))
+        let mut api = Api::new(&server, token);
+        api.relay = relay;
+        Ok(api)
     }
 
     fn req(&self, m: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -123,9 +166,25 @@ impl Api {
         let status = resp.status();
         let text = resp.text().await?;
         let v: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({"message": text}));
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            let server = &self.server;
+            return Err(Unauthorized(if self.relay {
+                format!(
+                    "the server rejected your relay credential for {server} (expired, revoked, or the dev database was reset). Run `corntchap-cli relay enroll <name>`"
+                )
+            } else {
+                format!(
+                    "the server rejected your stored credential for {server} (expired, revoked, or the dev database was reset). Run `corntchap-cli login {server}`"
+                )
+            })
+            .into());
+        }
         if !status.is_success() {
-            let code = v["error"].as_str().unwrap_or("error");
+            let code = v["error"].as_str().unwrap_or("");
             let msg = v["message"].as_str().unwrap_or(&text);
+            if code.is_empty() || code == "error" {
+                bail!("{msg} (HTTP {status})");
+            }
             bail!("{code}: {msg} (HTTP {status})");
         }
         Ok(v)

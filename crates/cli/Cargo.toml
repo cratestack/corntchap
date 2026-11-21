@@ -19,3 +19,6 @@ tokio = { version = "1.54.1", features = ["full"] }
 toml = "1.2.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+comfy-table = "8.0.1"
+owo-colors = "4.4.0"
+ratatui = "0.30.2"

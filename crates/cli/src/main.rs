@@ -1,10 +1,14 @@
 mod api;
 mod relay;
+mod setup;
+mod tui;
+mod ui;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use api::{Api, Credentials, device_login};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
+use ui::{ok_line, s, warn_line};
 
 #[derive(Parser)]
 #[command(
@@ -25,20 +29,43 @@ enum Cmd {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Sign out: revoke this token on the server and delete it from credentials.toml (the relay token is kept unless --relay or --all).
+    Logout {
+        /// Sign out the relay credential instead of your user token.
+        #[arg(long)]
+        relay: bool,
+        /// Sign out both the user token and the relay credential.
+        #[arg(long)]
+        all: bool,
+        /// Only delete the stored tokens; do not call the server (used by `just reset`).
+        #[arg(long)]
+        local: bool,
+    },
     /// Who am I, and what do I hold?
-    Whoami,
+    Whoami {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check everything: server reachable, your login, the relay credential and config.toml.
+    Doctor,
+    /// Open the live board in the terminal (projects, tasks, checklists; tick, comment, add).
+    Tui,
     /// Tasks: the board for humans, plus JSON commands for agents that only have a shell.
     #[command(subcommand)]
     Task(TaskCmd),
+    /// Users (admin).
     #[command(subcommand)]
     User(UserCmd),
+    /// Teams and their members.
     #[command(subcommand)]
     Team(TeamCmd),
+    /// Projects.
     #[command(subcommand)]
     Project(ProjectCmd),
+    /// Agents: create, set up, wake targets.
     #[command(subcommand)]
     Agent(AgentCmd),
-    /// Run the relay in the foreground (subcommands: install, doctor, enroll).
+    /// Run the relay in the foreground (subcommands: init, install, doctor, enroll).
     Relay {
         #[command(subcommand)]
         cmd: Option<RelayCmd>,
@@ -88,12 +115,10 @@ enum TaskCmd {
         #[arg(long)]
         result: Option<String>,
     },
-    Unblock {
-        id: String,
-    },
-    Cancel {
-        id: String,
-    },
+    /// Put a blocked task back to open.
+    Unblock { id: String },
+    /// Cancel a task.
+    Cancel { id: String },
     /// Agent mode: claim the best ready task (JSON).
     ClaimNext {
         #[arg(long)]
@@ -119,11 +144,13 @@ enum TaskCmd {
         #[arg(long)]
         undo: bool,
     },
+    /// Agent mode: extend a lease (JSON).
     Heartbeat {
         id: String,
         #[arg(long)]
         epoch: i64,
     },
+    /// Agent mode: finish a claimed task (JSON).
     Complete {
         id: String,
         #[arg(long)]
@@ -131,6 +158,7 @@ enum TaskCmd {
         #[arg(long, default_value = "")]
         result: String,
     },
+    /// Agent mode: give a task back (JSON).
     Release {
         id: String,
         #[arg(long)]
@@ -138,6 +166,7 @@ enum TaskCmd {
         #[arg(long, default_value = "")]
         reason: String,
     },
+    /// Agent mode: mark a claimed task blocked (JSON).
     Block {
         id: String,
         #[arg(long)]
@@ -145,13 +174,14 @@ enum TaskCmd {
         #[arg(long, default_value = "")]
         reason: String,
     },
+    /// Comment on a task (agents pass --epoch; JSON).
     Comment {
         id: String,
         body: String,
         #[arg(long)]
         epoch: Option<i64>,
     },
-    /// Events after a cursor.
+    /// Events after a cursor (JSON).
     Changes {
         #[arg(long, default_value_t = 0)]
         cursor: i64,
@@ -168,17 +198,27 @@ enum UserCmd {
         #[arg(long)]
         admin: bool,
     },
-    Ls,
+    /// List users.
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
 enum TeamCmd {
-    Add {
-        name: String,
+    /// Create a team.
+    Add { name: String },
+    /// List your teams.
+    Ls {
+        #[arg(long)]
+        json: bool,
     },
-    Ls,
+    /// List a team's members.
     Members {
         team: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Add a user or agent to a team.
     Join {
@@ -187,14 +227,13 @@ enum TeamCmd {
         #[arg(long, default_value = "member")]
         role: String,
     },
-    Leave {
-        team: String,
-        principal: String,
-    },
+    /// Remove a user or agent from a team.
+    Leave { team: String, principal: String },
 }
 
 #[derive(Subcommand)]
 enum ProjectCmd {
+    /// Create a project in a team.
     Add {
         team: String,
         key: String,
@@ -204,7 +243,11 @@ enum ProjectCmd {
         #[arg(long)]
         lease_ttl_s: Option<i64>,
     },
-    Ls,
+    /// List projects with their task counts.
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -221,17 +264,40 @@ enum AgentCmd {
         #[arg(long)]
         owner: Option<String>,
     },
-    Ls,
+    /// One step: create the agent, join a team, add a relay wake target (local agents) and print the MCP config plus the relay [[target]] block.
+    Setup {
+        name: String,
+        /// opencode | codex | claude-code | other
+        #[arg(long, default_value = "other")]
+        kind: String,
+        /// local | cloud
+        #[arg(long, default_value = "local")]
+        runtime: String,
+        /// Team to add the agent to.
+        #[arg(long)]
+        team: Option<String>,
+    },
+    /// Register an agent through the device flow (approve in the browser); prints its token once.
+    Enroll {
+        name: String,
+        /// opencode | codex | claude-code | other
+        #[arg(long, default_value = "other")]
+        kind: String,
+        /// local | cloud
+        #[arg(long, default_value = "local")]
+        runtime: String,
+    },
+    /// List your agents.
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
     /// Revoke every token and print a fresh one.
-    Rotate {
-        name: String,
-    },
-    Disable {
-        name: String,
-    },
-    Enable {
-        name: String,
-    },
+    Rotate { name: String },
+    /// Stop an agent from claiming work.
+    Disable { name: String },
+    /// Let a disabled agent claim work again.
+    Enable { name: String },
     /// Wake targets: how and when an idle agent gets woken.
     #[command(subcommand)]
     Wake(WakeCmd),
@@ -239,6 +305,7 @@ enum AgentCmd {
 
 #[derive(Subcommand)]
 enum WakeCmd {
+    /// Add a wake target to an agent.
     Add {
         agent: String,
         /// relay | webhook | github-comment
@@ -260,16 +327,23 @@ enum WakeCmd {
         #[arg(long)]
         issue: Option<i64>,
     },
+    /// List wake targets (of one agent, or of all your agents).
     Ls {
-        agent: String,
+        agent: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
-    Rm {
-        id: String,
-    },
+    /// Remove a wake target by id.
+    Rm { id: String },
 }
 
 #[derive(Subcommand)]
 enum RelayCmd {
+    /// Write a commented config.toml template (never overwrites unless --force).
+    Init {
+        #[arg(long)]
+        force: bool,
+    },
     /// Write a systemd user unit (Linux) or launchd agent (macOS).
     Install,
     /// Check the server, the credential and each target.
@@ -282,11 +356,12 @@ fn out(v: &Value) {
     println!("{}", serde_json::to_string_pretty(v).unwrap());
 }
 
-fn s(v: &Value, k: &str) -> String {
-    match &v[k] {
-        Value::String(x) => x.clone(),
-        Value::Null => "-".into(),
-        o => o.to_string(),
+/// `--json` prints the raw JSON; otherwise the human rendering.
+fn show(v: &Value, json: bool, human: impl FnOnce(&Value) -> String) {
+    if json {
+        out(v)
+    } else {
+        println!("{}", human(v))
     }
 }
 
@@ -300,12 +375,20 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Login { url, token } => login(&url, token).await,
+        Cmd::Logout { relay, all, local } => logout(relay, all, local).await,
+        Cmd::Doctor => relay::doctor(true).await,
         Cmd::Relay { cmd } => match cmd {
             None => relay::run(Api::from_creds(true)?).await,
+            Some(RelayCmd::Init { force }) => relay::init(force),
             Some(RelayCmd::Install) => relay::install(),
-            Some(RelayCmd::Doctor) => relay::doctor().await,
+            Some(RelayCmd::Doctor) => relay::doctor(false).await,
             Some(RelayCmd::Enroll { name }) => enroll(&name).await,
         },
+        Cmd::Agent(AgentCmd::Enroll {
+            name,
+            kind,
+            runtime,
+        }) => agent_enroll(&name, &kind, &runtime).await,
         other => run(other, Api::from_creds(false)?).await,
     }
 }
@@ -317,14 +400,69 @@ async fn login(url: &str, token: Option<String>) -> Result<()> {
         None => device_login(url, "user", None, json!({})).await?.0,
     };
     let api = Api::new(url, Some(t.clone()));
-    let me = api.get("/me").await?;
+    let me = api.get("/me").await.map_err(|e| {
+        if e.downcast_ref::<api::Unauthorized>().is_some() {
+            anyhow!("{url} rejected that token (wrong server, expired or revoked)")
+        } else {
+            e
+        }
+    })?;
     Credentials {
         server: Some(url.to_string()),
         token: Some(t),
         relay_token: None,
     }
     .save()?;
-    println!("signed in to {url} as {}", s(&me, "name"));
+    ok_line(format!("signed in to {url} as {}", s(&me, "name")));
+    Ok(())
+}
+
+async fn logout(relay: bool, all: bool, local: bool) -> Result<()> {
+    let c = Credentials::load();
+    let server = match (c.server.clone(), local) {
+        (Some(s), _) => s,
+        (None, true) => String::new(),
+        (None, false) => return Err(anyhow!("not logged in: nothing to do")),
+    };
+    let mut targets: Vec<(&str, Option<String>)> = vec![];
+    if all || !relay {
+        targets.push(("user token", c.token.clone()));
+    }
+    if all || relay {
+        targets.push(("relay credential", c.relay_token.clone()));
+    }
+    let mut any = false;
+    for (what, tok) in targets {
+        let Some(tok) = tok else { continue };
+        any = true;
+        if local {
+            continue;
+        }
+        match Api::new(&server, Some(tok))
+            .post("/logout", json!({}))
+            .await
+        {
+            Ok(_) => {}
+            Err(e) if e.to_string().contains("HTTP 404") => warn_line(format!(
+                "{server} does not support POST /api/v1/logout yet; the {what} stays valid on the server until it expires or is rotated"
+            )),
+            Err(e) if e.downcast_ref::<api::Unauthorized>().is_some() => {} // already revoked
+            Err(e) => warn_line(format!("could not revoke the {what} on the server: {e:#}")),
+        }
+    }
+    Credentials::clear(all || !relay, all || relay)?;
+    if any {
+        ok_line(if local {
+            "removed the stored tokens".to_string()
+        } else {
+            format!("signed out of {server}")
+        });
+    } else {
+        println!("no stored credential to remove");
+    }
+    if std::env::var("CORNTCHAP_TOKEN").is_ok() {
+        warn_line("CORNTCHAP_TOKEN is set in your environment; unset it to finish signing out");
+    }
     Ok(())
 }
 
@@ -332,77 +470,265 @@ async fn enroll(name: &str) -> Result<()> {
     let c = Credentials::load();
     let server = c
         .server
-        .ok_or_else(|| anyhow::anyhow!("run `corntchap-cli login <url>` first"))?;
+        .ok_or_else(|| anyhow!("run `corntchap-cli login <url>` first"))?;
     let (t, p) = device_login(&server, "relay", Some(name), json!({})).await?;
     Credentials {
         relay_token: Some(t),
         ..Default::default()
     }
     .save()?;
-    println!(
-        "relay {} enrolled; credential stored. Next: edit ~/.config/corntchap/config.toml, then `corntchap-cli relay doctor`.",
+    ok_line(format!(
+        "relay {} enrolled; credential stored",
         s(&p, "name")
-    );
+    ));
+    let cfg = relay::config_path();
+    if cfg.exists() {
+        println!(
+            "Next: edit {}, then `corntchap-cli relay doctor`.",
+            cfg.display()
+        );
+    } else {
+        println!(
+            "Next: `corntchap-cli relay init` writes a commented {}, then `corntchap-cli relay doctor`.",
+            cfg.display()
+        );
+    }
     Ok(())
 }
 
-fn print_tasks(v: &Value) {
-    for t in v.as_array().into_iter().flatten() {
-        let mark = match t["status"].as_str() {
-            Some("done") => "x",
-            _ => " ",
-        };
-        println!(
-            "[{mark}] {:<8} {:<9} p{:<2} {}  ({}/{} items){}",
-            s(t, "id"),
-            s(t, "status"),
-            t["priority"],
-            s(t, "title"),
-            t["total_items"].as_i64().unwrap_or(0) - t["open_items"].as_i64().unwrap_or(0),
-            t["total_items"],
-            t["claimed_by"]
-                .as_str()
-                .map(|b| format!(" [{b}]"))
-                .unwrap_or_default()
-        );
+/// Device flow with kind=agent: a human approves in the browser, the token is printed once.
+async fn agent_enroll(name: &str, kind: &str, runtime: &str) -> Result<()> {
+    let c = Credentials::load();
+    let server = c
+        .server
+        .ok_or_else(|| anyhow!("run `corntchap-cli login <url>` first"))?;
+    let (token, p) = device_login(
+        &server,
+        "agent",
+        Some(name),
+        json!({"agent_kind": kind, "runtime": runtime}),
+    )
+    .await?;
+    let n = s(&p, "name");
+    ok_line(format!(
+        "agent {n} enrolled. Token (shown once):\n\n  {token}\n"
+    ));
+    print!("{}", setup::mcp_snippet(kind, &server, &token));
+    println!("\nNext: corntchap-cli team join <team> {n}");
+    Ok(())
+}
+
+fn whoami_text(v: &Value, server: &str) -> String {
+    let kind = s(v, "kind");
+    let mut role = vec![kind.clone()];
+    if kind == "agent" {
+        role.push(format!("{} / {}", s(v, "agent_kind"), s(v, "runtime")));
     }
+    if v["is_admin"] == true {
+        role.push("admin".into());
+    }
+    let mut o = format!(
+        "{}  ({})\n{}\n",
+        ui::bold(&s(v, "name")),
+        role.join(", "),
+        ui::dim(server)
+    );
+    let teams: Vec<String> = v["teams"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| format!("{} ({})", s(t, "name"), s(t, "role")))
+        .collect();
+    o.push_str(&format!(
+        "\nteams     {}",
+        if teams.is_empty() {
+            "-".into()
+        } else {
+            teams.join(", ")
+        }
+    ));
+    let projects: Vec<&str> = v["projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    o.push_str(&format!(
+        "\nprojects  {}",
+        if projects.is_empty() {
+            "-".into()
+        } else {
+            projects.join(", ")
+        }
+    ));
+    let leases = v["current_leases"].as_array().cloned().unwrap_or_default();
+    if leases.is_empty() {
+        o.push_str("\nleases    none");
+    } else {
+        o.push_str("\nleases");
+        for l in &leases {
+            o.push_str(&format!("\n  {} {}", s(l, "id"), s(l, "title")));
+        }
+    }
+    o
 }
 
 async fn run(cmd: Cmd, api: Api) -> Result<()> {
     match cmd {
-        Cmd::Whoami => out(&api.get("/me").await?),
+        Cmd::Whoami { json } => {
+            let v = api.get("/me").await?;
+            show(&v, json, |v| whoami_text(v, &api.server));
+        }
+        Cmd::Tui => tui::run(api).await?,
         Cmd::Task(t) => task(t, &api).await?,
-        Cmd::User(UserCmd::Add { login, admin }) => out(&api.post("/users", json!({"login": login, "is_admin": admin})).await?),
-        Cmd::User(UserCmd::Ls) => {
-            for u in api.get("/users").await?.as_array().into_iter().flatten() {
-                println!("{:<24} {}{}", s(u, "name"), if u["is_admin"] == true { "admin " } else { "" }, if u["linked"] == true { "(signed in once)" } else { "(not signed in yet)" });
-            }
+        Cmd::User(UserCmd::Add { login, admin }) => {
+            api.post("/users", json!({"login": login, "is_admin": admin}))
+                .await?;
+            ok_line(format!(
+                "added user {login}{} (they sign in at {}/board or with `corntchap-cli login`)",
+                if admin { " as admin" } else { "" },
+                api.server
+            ));
         }
-        Cmd::Team(TeamCmd::Add { name }) => out(&api.post("/teams", json!({"name": name})).await?),
-        Cmd::Team(TeamCmd::Ls) => {
-            for t in api.get("/teams").await?.as_array().into_iter().flatten() {
-                println!("{:<20} role={} members={} projects={}", s(t, "name"), s(t, "role"), t["members"], t["projects"]);
-            }
+        Cmd::User(UserCmd::Ls { json }) => {
+            show(&api.get("/users").await?, json, ui::users_table);
         }
-        Cmd::Team(TeamCmd::Members { team }) => {
-            for m in api.get(&format!("/teams/{team}/members")).await?.as_array().into_iter().flatten() {
-                println!("{:<24} {:<6} {}", s(m, "name"), s(m, "kind"), s(m, "role"));
-            }
+        Cmd::Team(TeamCmd::Add { name }) => {
+            api.post("/teams", json!({"name": name})).await?;
+            ok_line(format!("team {name} created"));
         }
-        Cmd::Team(TeamCmd::Join { team, principal, role }) => out(&api.post(&format!("/teams/{team}/members"), json!({"principal": principal, "role": role})).await?),
-        Cmd::Team(TeamCmd::Leave { team, principal }) => out(&api.delete(&format!("/teams/{team}/members/{principal}")).await?),
-        Cmd::Project(ProjectCmd::Add { team, key, name, repo, lease_ttl_s }) => {
-            out(&api.post("/projects", json!({"team": team, "key": key, "name": name, "repo_url": repo, "lease_ttl_s": lease_ttl_s})).await?)
+        Cmd::Team(TeamCmd::Ls { json }) => {
+            show(&api.get("/teams").await?, json, ui::teams_table);
         }
-        Cmd::Project(ProjectCmd::Ls) => {
-            for p in api.get("/projects").await?.as_array().into_iter().flatten() {
-                println!("{:<8} {:<24} team={} ready={} claimed={} done={}", s(p, "key"), s(p, "name"), s(p, "team"), p["ready"], p["claimed"], p["done"]);
-            }
+        Cmd::Team(TeamCmd::Members { team, json }) => {
+            show(
+                &api.get(&format!("/teams/{team}/members")).await?,
+                json,
+                ui::members_table,
+            );
+        }
+        Cmd::Team(TeamCmd::Join {
+            team,
+            principal,
+            role,
+        }) => {
+            api.post(
+                &format!("/teams/{team}/members"),
+                json!({"principal": principal, "role": role}),
+            )
+            .await?;
+            ok_line(format!("{principal} joined team {team} as {role}"));
+        }
+        Cmd::Team(TeamCmd::Leave { team, principal }) => {
+            api.delete(&format!("/teams/{team}/members/{principal}"))
+                .await?;
+            ok_line(format!("{principal} left team {team}"));
+        }
+        Cmd::Project(ProjectCmd::Add {
+            team,
+            key,
+            name,
+            repo,
+            lease_ttl_s,
+        }) => {
+            let v = api
+                .post(
+                    "/projects",
+                    json!({"team": team, "key": key, "name": name, "repo_url": repo, "lease_ttl_s": lease_ttl_s}),
+                )
+                .await?;
+            let k = v["key"]
+                .as_str()
+                .map(String::from)
+                .unwrap_or_else(|| key.to_uppercase());
+            ok_line(format!("project {k} ({name}) created in team {team}"));
+        }
+        Cmd::Project(ProjectCmd::Ls { json }) => {
+            show(&api.get("/projects").await?, json, ui::projects_table);
         }
         Cmd::Agent(a) => agent(a, &api).await?,
-        Cmd::Login { .. } | Cmd::Relay { .. } => unreachable!(),
+        Cmd::Login { .. } | Cmd::Logout { .. } | Cmd::Doctor | Cmd::Relay { .. } => unreachable!(),
     }
     Ok(())
+}
+
+async fn agent_setup(
+    api: &Api,
+    name: &str,
+    kind: &str,
+    runtime: &str,
+    team: Option<&str>,
+) -> Result<()> {
+    let r = api
+        .post(
+            "/agents",
+            json!({"name": name, "kind": kind, "runtime": runtime}),
+        )
+        .await?;
+    let n = s(&r, "name");
+    let token = s(&r, "token");
+    ok_line(format!("agent {n} created ({kind}, {runtime})"));
+    match team {
+        Some(t) => {
+            api.post(
+                &format!("/teams/{t}/members"),
+                json!({"principal": n, "role": "member"}),
+            )
+            .await?;
+            ok_line(format!("{n} joined team {t}"));
+        }
+        None => println!(
+            "Next: corntchap-cli team join <team> {n}   (an agent only sees its team's projects)"
+        ),
+    }
+    if runtime == "local" {
+        match api
+            .post(
+                &format!("/agents/{n}/wake-targets"),
+                json!({"type": "relay", "projects": [], "labels": [], "config": {}}),
+            )
+            .await
+        {
+            Ok(_) => ok_line(format!("relay wake target added for {n}")),
+            Err(e) => warn_line(format!("could not add the relay wake target: {e:#}")),
+        }
+    }
+    println!("\nToken (shown once):\n\n  {token}\n");
+    print!("{}", setup::mcp_snippet(kind, &api.server, &token));
+    if runtime == "local" {
+        println!(
+            "\nRelay: paste this into {} (run `corntchap-cli relay init` first if it does not exist),\nthen `corntchap-cli relay doctor`:\n",
+            relay::config_path().display()
+        );
+        println!("{}", relay::target_block(&n, kind));
+    } else {
+        println!(
+            "\nCloud agent: wake it with a webhook, e.g.\n  corntchap-cli agent wake add {n} --type webhook --url https://… --token …"
+        );
+    }
+    Ok(())
+}
+
+async fn wake_targets(api: &Api, agent: Option<String>) -> Result<Vec<(String, Value)>> {
+    let agents: Vec<String> = match agent {
+        Some(a) => vec![a],
+        None => api
+            .get("/agents")
+            .await?
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x["name"].as_str().map(String::from))
+            .collect(),
+    };
+    let mut all = vec![];
+    for a in agents {
+        let v = api.get(&format!("/agents/{a}/wake-targets")).await?;
+        for w in v.as_array().into_iter().flatten() {
+            all.push((a.clone(), w.clone()));
+        }
+    }
+    Ok(all)
 }
 
 async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
@@ -426,23 +752,14 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
             );
             println!("Next: corntchap-cli team join <team> {}", s(&r, "name"));
         }
-        AgentCmd::Ls => {
-            for x in api.get("/agents").await?.as_array().into_iter().flatten() {
-                println!(
-                    "{:<22} {:<12} {:<6} owner={} busy={}{}",
-                    s(x, "name"),
-                    s(x, "agent_kind"),
-                    s(x, "runtime"),
-                    s(x, "owner"),
-                    x["busy"],
-                    if x["disabled"] == true {
-                        " DISABLED"
-                    } else {
-                        ""
-                    }
-                );
-            }
-        }
+        AgentCmd::Setup {
+            name,
+            kind,
+            runtime,
+            team,
+        } => agent_setup(api, &name, &kind, &runtime, team.as_deref()).await?,
+        AgentCmd::Enroll { .. } => unreachable!(),
+        AgentCmd::Ls { json } => show(&api.get("/agents").await?, json, ui::agents_table),
         AgentCmd::Rotate { name } => {
             let r = api
                 .post(&format!("/agents/{name}/rotate"), json!({}))
@@ -453,12 +770,16 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                 s(&r, "token")
             );
         }
-        AgentCmd::Disable { name } => out(&api
-            .post(&format!("/agents/{name}/disable"), json!({}))
-            .await?),
-        AgentCmd::Enable { name } => out(&api
-            .post(&format!("/agents/{name}/enable"), json!({}))
-            .await?),
+        AgentCmd::Disable { name } => {
+            api.post(&format!("/agents/{name}/disable"), json!({}))
+                .await?;
+            ok_line(format!("{name} disabled"));
+        }
+        AgentCmd::Enable { name } => {
+            api.post(&format!("/agents/{name}/enable"), json!({}))
+                .await?;
+            ok_line(format!("{name} enabled"));
+        }
         AgentCmd::Wake(w) => match w {
             WakeCmd::Add {
                 agent,
@@ -478,12 +799,35 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                     }
                     _ => {}
                 }
-                out(&api.post(&format!("/agents/{agent}/wake-targets"), json!({"type": typ, "projects": projects, "labels": labels, "config": config})).await?)
+                let r = api.post(&format!("/agents/{agent}/wake-targets"), json!({"type": typ, "projects": projects, "labels": labels, "config": config})).await?;
+                ok_line(format!(
+                    "{typ} wake target added for {agent}{}",
+                    r["id"]
+                        .as_str()
+                        .map(|i| format!(" ({i})"))
+                        .unwrap_or_default()
+                ));
             }
-            WakeCmd::Ls { agent } => {
-                out(&api.get(&format!("/agents/{agent}/wake-targets")).await?)
+            WakeCmd::Ls { agent, json } => {
+                let all = wake_targets(api, agent).await?;
+                if json {
+                    out(&Value::Array(
+                        all.iter()
+                            .map(|(a, w)| {
+                                let mut w = w.clone();
+                                w["agent"] = json!(a);
+                                w
+                            })
+                            .collect(),
+                    ));
+                } else {
+                    println!("{}", ui::wake_table(&all));
+                }
             }
-            WakeCmd::Rm { id } => out(&api.delete(&format!("/wake-targets/{id}")).await?),
+            WakeCmd::Rm { id } => {
+                api.delete(&format!("/wake-targets/{id}")).await?;
+                ok_line(format!("wake target {id} removed"));
+            }
         },
     }
     Ok(())
@@ -515,7 +859,7 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
                     q.join("&")
                 ))
                 .await?;
-            if json { out(&v) } else { print_tasks(&v) }
+            show(&v, json, ui::tasks_table);
         }
         TaskCmd::Add {
             project,
@@ -528,38 +872,11 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             priority,
         } => {
             let v = api.post(&format!("/projects/{}/tasks", project.to_uppercase()), json!({"title": title, "body": body, "items": items, "labels": labels, "depends_on": depends_on, "parent": parent, "priority": priority})).await?;
-            println!("created {}", s(&v, "id"));
+            ok_line(format!("created {}", s(&v, "id")));
         }
         TaskCmd::Show { id, json } => {
             let v = api.get(&format!("/tasks/{id}")).await?;
-            if json {
-                out(&v);
-            } else {
-                println!(
-                    "{} {} [{}]{}\n",
-                    s(&v, "id"),
-                    s(&v, "title"),
-                    s(&v, "status"),
-                    v["claimed_by"]
-                        .as_str()
-                        .map(|b| format!(" held by {b}"))
-                        .unwrap_or_default()
-                );
-                if !s(&v, "body").is_empty() && s(&v, "body") != "-" {
-                    println!("{}\n", s(&v, "body"));
-                }
-                for i in v["items"].as_array().into_iter().flatten() {
-                    println!(
-                        "  {}. [{}] {}",
-                        i["position"],
-                        if i["done"] == true { "x" } else { " " },
-                        s(i, "text")
-                    );
-                }
-                for c in v["comments"].as_array().into_iter().flatten() {
-                    println!("\n  {}: {}", s(c, "author"), s(c, "body"));
-                }
-            }
+            show(&v, json, ui::task_detail);
         }
         TaskCmd::Done { id, result } => {
             let c = api.post(&format!("/tasks/{id}/claim"), json!({})).await?;
@@ -569,12 +886,16 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
                 json!({"epoch": epoch, "result": result.unwrap_or_default()}),
             )
             .await?;
-            println!("{id} done");
+            ok_line(format!("{id} done"));
         }
         TaskCmd::Unblock { id } => {
-            out(&api.post(&format!("/tasks/{id}/unblock"), json!({})).await?)
+            api.post(&format!("/tasks/{id}/unblock"), json!({})).await?;
+            ok_line(format!("{id} unblocked"));
         }
-        TaskCmd::Cancel { id } => out(&api.post(&format!("/tasks/{id}/cancel"), json!({})).await?),
+        TaskCmd::Cancel { id } => {
+            api.post(&format!("/tasks/{id}/cancel"), json!({})).await?;
+            ok_line(format!("{id} cancelled"));
+        }
         TaskCmd::ClaimNext {
             project, labels, ..
         } => out(&api

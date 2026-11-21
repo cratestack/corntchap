@@ -73,9 +73,20 @@ setup: deps infra
     {{load}} cargo run -q -p corntchap -- migrate
     @{{load}} echo "Postgres: 127.0.0.1:$PG_PORT   Keycloak: http://localhost:$KC_PORT (users admin/admin, dev/dev)   server: $PUBLIC_URL"
 
-# Create the first admin (an OIDC username; the dev realm has `admin`); prints a 7-day bootstrap token.
+# Create the first admin (an OIDC username; the dev realm has `admin`) and sign the CLI in with its 7-day bootstrap token.
 init admin="admin": env-init
-    {{load}} cargo run -q -p corntchap -- init --admin {{admin}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; [ -f .env ] && . ./.env; [ -f .env.dev ] && . ./.env.dev; set +a
+    out=$(cargo run -q -p corntchap -- init --admin {{admin}})
+    echo "$out"
+    tok=$(printf '%s\n' "$out" | sed -n 's/^bootstrap token[^:]*: //p')
+    if [ -n "$tok" ]; then
+      cargo run -q -p corntchap-cli -- login "$PUBLIC_URL" --token "$tok"
+      echo "stored the bootstrap token as your CLI login for $PUBLIC_URL (next: just serve, then just seed)"
+    else
+      echo "no new bootstrap token was printed (admin already exists?): run \`just login\` to sign in"
+    fi
 
 # Run the server on the random APP_PORT (OIDC settings come from .env.dev).
 serve: env-init run-server
@@ -102,9 +113,15 @@ mcp-check project="DEMO":
     .venv-mcp/bin/pip install -q mcp
     {{load}} CORNTCHAP_URL="$PUBLIC_URL" PROJECT={{project}} .venv-mcp/bin/python scripts/mcp_check.py
 
-# Stop the compose stack and delete its data.
+# Stop the compose stack; the database volume is kept (your tokens stay valid).
 down: env-init
+    {{load}} docker compose down
+
+# Stop the compose stack, DELETE its data and forget the stored CLI tokens (they die with the database).
+reset: env-init
     {{load}} docker compose down -v
+    cargo run -q -p corntchap-cli -- logout --all --local
+    @echo "reset: database deleted and stored CLI tokens removed. Start over with: just setup && just init && just serve"
 
 # Compose status / logs for the local stack.
 ps: env-init
@@ -116,3 +133,8 @@ logs *args: env-init
 # Same check with the official TypeScript MCP SDK (handshake-era revisions). `CORNTCHAP_TOKEN=<agent token> just mcp-check-ts`
 mcp-check-ts project="DEMO":
     {{load}} mkdir -p .venv-mcp-ts && cd .venv-mcp-ts && ([ -d node_modules/@modelcontextprotocol ] || npm i --silent @modelcontextprotocol/sdk@1.32.2) && cd .. && cp scripts/mcp_check_ts.mjs .venv-mcp-ts/check.mjs && CORNTCHAP_URL="$PUBLIC_URL" PROJECT={{project}} node .venv-mcp-ts/check.mjs
+
+# Put corntchap-cli and corntchap on your PATH (~/.cargo/bin).
+install:
+    cargo install --locked --path crates/cli
+    cargo install --locked --path crates/server
