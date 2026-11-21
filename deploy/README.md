@@ -14,18 +14,22 @@ Prerequisites: the [CloudNativePG operator](https://cloudnative-pg.io), ingress-
    create the `corntchap-tls` secret yourself.
 4. Pin the image tag in `kustomization.yaml` (`images:`) to a release or `sha-<commit>`.
 
-## GitHub OAuth app
+## Keycloak (OIDC) client
 
-Create one at GitHub, Settings, Developer settings, OAuth Apps:
+Humans sign in through any OpenID provider; Keycloak is the reference. In your realm create a confidential client:
 
-- Homepage URL: `https://HOST`
-- Authorization callback URL: `https://HOST/auth/github/callback`
+- Client ID: `corntchap`, Client authentication: on, Standard flow: on
+- Valid redirect URIs: `https://HOST/auth/oidc/callback`
+- Set `OIDC_ISSUER` in `deployment.yaml` to the realm URL (`https://KEYCLOAK/realms/<realm>`).
 
-Then store its credentials (the Deployment reads `client-id` and `client-secret` from this secret):
+Users are matched by the `preferred_username` claim (then pinned to the OIDC subject on first sign-in), so disable
+"Edit username" for users in the realm and only provision usernames you control (`corntchap-cli user add <username>`).
+
+Store the client credentials (the Deployment reads `client-id` and `client-secret` from this secret):
 
 ```sh
 kubectl create namespace corntchap
-kubectl -n corntchap create secret generic corntchap-github \
+kubectl -n corntchap create secret generic corntchap-oidc \
   --from-literal=client-id=... --from-literal=client-secret=...
 kubectl -n corntchap create secret generic corntchap-backup-s3 \
   --from-literal=ACCESS_KEY_ID=... --from-literal=ACCESS_SECRET_KEY=...
@@ -43,10 +47,10 @@ The Deployment reads `DATABASE_URL` from the `corntchap-db-app` secret (key `uri
 
 ## First run: create the admin
 
-Once the pods are ready, create the first admin (a GitHub login) and a 7-day bootstrap token:
+Once the pods are ready, create the first admin (a Keycloak username) and a 7-day bootstrap token:
 
 ```sh
-kubectl -n corntchap exec deploy/corntchap -- /corntchap init --admin <github-login>
+kubectl -n corntchap exec deploy/corntchap -- /corntchap init --admin <keycloak-username>
 ```
 
 The image is distroless, so `exec` runs the binary directly (no shell). Then sign in from a workstation:

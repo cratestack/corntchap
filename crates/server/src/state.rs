@@ -13,30 +13,18 @@ pub struct Config {
     pub bind: String,
     /// Refuse non-loopback requests that did not arrive over TLS (`X-Forwarded-Proto: https`).
     pub require_https: bool,
-    pub github: Option<GithubConfig>,
+    pub oidc: Option<OidcConfig>,
     pub run_background: bool,
 }
 
 #[derive(Clone, Debug)]
-pub struct GithubConfig {
+pub struct OidcConfig {
+    /// Issuer URL used for discovery (`<issuer>/.well-known/openid-configuration`).
+    /// With Keycloak's backchannel-dynamic hostname this can be an internal URL while the
+    /// issuer inside tokens stays the public one.
+    pub issuer: String,
     pub client_id: String,
     pub client_secret: String,
-    /// Overridable so tests (and GitHub Enterprise) can point elsewhere: authorize, token, user.
-    pub authorize_url: String,
-    pub token_url: String,
-    pub user_url: String,
-}
-
-impl GithubConfig {
-    pub fn new(client_id: String, client_secret: String) -> Self {
-        GithubConfig {
-            client_id,
-            client_secret,
-            authorize_url: "https://github.com/login/oauth/authorize".into(),
-            token_url: "https://github.com/login/oauth/access_token".into(),
-            user_url: "https://api.github.com/user".into(),
-        }
-    }
 }
 
 impl Config {
@@ -48,7 +36,7 @@ impl Config {
             public_url,
             bind,
             require_https,
-            github: None,
+            oidc: None,
             run_background: true,
         }
     }
@@ -95,6 +83,8 @@ pub struct Inner {
     /// Fan-out of event sequence numbers (from Postgres LISTEN/NOTIFY).
     pub events: broadcast::Sender<i64>,
     pub guard: Arc<Guard<Principal>>,
+    /// OIDC provider, discovered lazily so the server can start before the IdP is up.
+    pub oidc: tokio::sync::OnceCell<authkestra::oidc::OidcProvider>,
 }
 
 #[derive(Clone)]
@@ -129,6 +119,7 @@ impl AppState {
             http,
             events,
             guard,
+            oidc: tokio::sync::OnceCell::new(),
         }))
     }
 }

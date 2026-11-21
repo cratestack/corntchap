@@ -1,10 +1,10 @@
 //! Browser-facing and device-facing endpoints: GitHub SSO (authkestra OAuth2 flow),
 //! sessions, the RFC 8628 device authorization grant, and the read-only board.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use authkestra::core::{OAuth2Flow, state::OAuth2State};
-use authkestra::providers::github::GithubProvider;
+use authkestra::oidc::OidcProvider;
 use axum::{
     Json, Router,
     extract::{Form, Path, Query, State},
@@ -31,8 +31,8 @@ pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/auth/github/login", get(github_login))
-        .route("/auth/github/callback", get(github_callback))
+        .route("/auth/oidc/login", get(oidc_login))
+        .route("/auth/oidc/callback", get(oidc_callback))
         .route("/logout", get(logout))
         .route("/oauth/device/code", post(device_code))
         .route("/oauth/token", post(device_token))
@@ -143,7 +143,7 @@ async fn web_principal(
 }
 
 fn login_redirect(next: &str) -> Response {
-    Redirect::to(&format!("/auth/github/login?next={}", urlencode(next))).into_response()
+    Redirect::to(&format!("/auth/oidc/login?next={}", urlencode(next))).into_response()
 }
 
 fn urlencode(s: &str) -> String {
@@ -158,33 +158,48 @@ fn urlencode(s: &str) -> String {
     o
 }
 
-// ---------- GitHub SSO ----------
+// ---------- OIDC SSO (Keycloak or any OpenID provider) ----------
 
-fn github_flow(state: &AppState) -> Result<OAuth2Flow<GithubProvider>> {
-    let gh = state.config.github.as_ref().ok_or_else(|| {
+async fn oidc_flow(state: &AppState) -> Result<OAuth2Flow<OidcProvider>> {
+    let cfg = state.config.oidc.as_ref().ok_or_else(|| {
         Error::Invalid(
-            "GitHub sign-in is not configured (set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET)"
+            "sign-in is not configured (set OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET)"
                 .into(),
         )
     })?;
-    let provider = GithubProvider::new(
-        gh.client_id.clone(),
-        gh.client_secret.clone(),
-        format!("{}/auth/github/callback", state.config.public_url),
-    )
-    .with_test_urls(
-        gh.authorize_url.clone(),
-        gh.token_url.clone(),
-        gh.user_url.clone(),
-    );
-    Ok(OAuth2Flow::new(provider))
+    let provider = state
+        .oidc
+        .get_or_try_init(|| async {
+            OidcProvider::discover(
+                cfg.client_id.clone(),
+                cfg.client_secret.clone(),
+                format!("{}/auth/oidc/callback", state.config.public_url),
+                &cfg.issuer,
+                Duration::from_secs(3600),
+            )
+            .await
+            .map_err(|e| {
+                Error::Internal(format!("OIDC discovery against {} failed: {e}", cfg.issuer))
+            })
+        })
+        .await?;
+    Ok(OAuth2Flow::new(provider.clone()))
 }
 
-async fn github_login(
+/// A claim from the (already signature-checked) ID token's payload.
+fn id_token_claim(id_token: &str, key: &str) -> Option<String> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let payload = id_token.split('.').nth(1)?;
+    let raw = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
+    let v: Value = serde_json::from_slice(&raw).ok()?;
+    v.get(key)?.as_str().map(String::from)
+}
+
+async fn oidc_login(
     State(state): State<AppState>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response> {
-    let flow = github_flow(&state)?;
+    let flow = oidc_flow(&state).await?;
     let (url, st) = flow.initiate_login(&[], None);
     let next = safe_next(q.get("next").map(|s| s.as_str()));
     // Bind the attempt to this browser: the callback must present the same nonce cookie (login CSRF).
@@ -215,7 +230,7 @@ async fn github_login(
     Ok(resp)
 }
 
-async fn github_callback(
+async fn oidc_callback(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
@@ -256,18 +271,24 @@ async fn github_callback(
     }
     let expected: OAuth2State =
         serde_json::from_value(data).map_err(|e| Error::Internal(e.to_string()))?;
-    let flow = github_flow(&state)?;
-    let (identity, _token, _) = flow
+    let flow = oidc_flow(&state).await?;
+    let (identity, token, _) = flow
         .finalize_login(code, received, &expected)
         .await
-        .map_err(|e| Error::Forbidden(format!("GitHub sign-in failed: {e}")))?;
-    let login = identity.username.clone().unwrap_or_default().to_lowercase();
+        .map_err(|e| Error::Forbidden(format!("sign-in failed: {e}")))?;
+    let login = token
+        .id_token
+        .as_deref()
+        .and_then(|t| id_token_claim(t, "preferred_username"))
+        .or_else(|| identity.email.clone())
+        .unwrap_or_default()
+        .to_lowercase();
     let gh_id = identity.external_id.clone();
 
-    // Match by stable GitHub id first, then link a pre-provisioned login on first sign-in.
+    // Match by stable subject first, then link a pre-provisioned login on first sign-in.
     let user: Option<Uuid> = sqlx::query_scalar(
-        "update principals set github_id = $1, github_login = $2
-         where kind = 'user' and disabled_at is null and (github_id = $1 or (github_id is null and github_login = $2))
+        "update principals set oidc_sub = $1, oidc_login = $2
+         where kind = 'user' and disabled_at is null and (oidc_sub = $1 or (oidc_sub is null and oidc_login = $2))
          returning id",
     )
     .bind(&gh_id)
@@ -279,7 +300,7 @@ async fn github_callback(
             StatusCode::FORBIDDEN,
             page(
                 "Not provisioned",
-                &format!("<h1>Not provisioned</h1><p>GitHub account <code>@{}</code> has no user on this instance. Ask an admin to add it.</p>", esc(&login)),
+                &format!("<h1>Not provisioned</h1><p>Account <code>{}</code> has no user on this instance. Ask an admin to add it.</p>", esc(&login)),
                 false,
             ),
         )

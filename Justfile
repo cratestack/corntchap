@@ -4,7 +4,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 target := "x86_64-unknown-linux-musl"
 image  := "ghcr.io/stephane-segning/corntchap"
 
-# Local settings: random ports from `just setup` live in .env.dev; secrets (GitHub OAuth) in .env.
+# Local settings: random ports from `just setup` live in .env.dev; optional overrides in .env.
 # Every recipe that needs them starts with {{load}}.
 load := "set -a; [ -f .env ] && . ./.env; [ -f .env.dev ] && . ./.env.dev; set +a;"
 
@@ -51,30 +51,33 @@ image tag="dev":
 env-init:
     [ -f .env.dev ] || python3 scripts/devenv.py > .env.dev
 
-# Local Postgres 18 via compose, on the random loopback port from .env.dev.
-db: env-init
-    {{load}} docker compose up -d --wait db
+# Postgres 18 + Keycloak (dev realm) via compose, on random loopback ports from .env.dev.
+infra: env-init
+    {{load}} docker compose up -d --wait db keycloak
+
+# Alias kept for muscle memory.
+db: infra
 
 # The whole stack: Postgres + server image (server on APP_PORT).
 up: env-init
     {{load}} docker compose up -d --build
 
-# ---- Quick start: just setup && just init <github-login> && just serve (then, in another shell: just login && just seed) ----
+# ---- Quick start: just setup && just init && just serve (then, in another shell: just login && just seed) ----
 
 # Trust mise.toml and install the toolchain (skipped when mise is not installed).
 deps:
     if command -v mise >/dev/null; then mise trust -y && mise install; else echo "mise not found: install Rust 1.100+ yourself (https://mise.jdx.dev)"; fi
 
-# Toolchain, Postgres (compose, random port) and the schema. Prints the GitHub OAuth callback to register.
-setup: deps db
+# Toolchain, Postgres + Keycloak (compose, random ports) and the schema.
+setup: deps infra
     {{load}} cargo run -q -p corntchap -- migrate
-    @{{load}} echo "Postgres: 127.0.0.1:$PG_PORT   server: $PUBLIC_URL   GitHub OAuth callback: $PUBLIC_URL/auth/github/callback"
+    @{{load}} echo "Postgres: 127.0.0.1:$PG_PORT   Keycloak: http://localhost:$KC_PORT (users admin/admin, dev/dev)   server: $PUBLIC_URL"
 
-# Create the first admin (a GitHub login); prints a 7-day bootstrap token.
-init admin: env-init
+# Create the first admin (an OIDC username; the dev realm has `admin`); prints a 7-day bootstrap token.
+init admin="admin": env-init
     {{load}} cargo run -q -p corntchap -- init --admin {{admin}}
 
-# Run the server on the random APP_PORT (set GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET in .env for browser sign-in).
+# Run the server on the random APP_PORT (OIDC settings come from .env.dev).
 serve: env-init run-server
 
 # Any corntchap-cli command: `just cli task ls PAY`.

@@ -4,11 +4,11 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-/// GitHub SSO → device flow → token, then drive the board over REST and MCP.
+/// OIDC SSO → device flow → token, then drive the board over REST and MCP.
 #[tokio::test]
 async fn sso_device_flow_rest_and_mcp() {
     let app = common::start(false).await;
-    // The first admin is provisioned by login; SSO links it by GitHub id on first sign-in.
+    // The first admin is provisioned by login; SSO links it by OIDC subject on first sign-in.
     admin::init_admin(&app.state.db, "octo").await.unwrap();
 
     // 1. device authorization request
@@ -43,7 +43,7 @@ async fn sso_device_flow_rest_and_mcp() {
         (400, Some("authorization_pending"))
     );
 
-    // 2. the human approves in the browser (GitHub SSO)
+    // 2. the human approves in the browser (OIDC SSO)
     let cookie = app.browser_login(&format!("/device?user_code={uc}")).await;
     let page = app
         .http
@@ -103,7 +103,7 @@ async fn sso_device_flow_rest_and_mcp() {
     // login CSRF: a callback replayed in a browser that did not start the sign-in is refused
     let r = app
         .http
-        .get(format!("{}/auth/github/login", app.base))
+        .get(format!("{}/auth/oidc/login", app.base))
         .send()
         .await
         .unwrap();
@@ -124,20 +124,20 @@ async fn sso_device_flow_rest_and_mcp() {
     let c = app.browser_login("/%09/evil.example").await;
     let _ = c;
 
-    // 4. bearer works; garbage does not; unprovisioned GitHub users are refused
+    // 4. bearer works; garbage does not; unprovisioned OIDC users are refused
     let (st, me) = app.get(&admin_token, "/me").await;
     assert_eq!(
         (st, me["name"].as_str(), me["is_admin"].as_bool()),
         (200, Some("octo"), Some(true))
     );
     assert_eq!(app.get("ct_garbage", "/me").await.0, 401);
-    sqlx::query("update principals set github_id = '1' where name = 'octo'")
+    sqlx::query("update principals set oidc_sub = 'someone-else' where name = 'octo'")
         .execute(&app.state.db)
         .await
         .unwrap();
     let r = app
         .http
-        .get(format!("{}/auth/github/login", app.base))
+        .get(format!("{}/auth/oidc/login", app.base))
         .send()
         .await
         .unwrap();
@@ -156,7 +156,7 @@ async fn sso_device_flow_rest_and_mcp() {
     assert_eq!(
         r.status().as_u16(),
         403,
-        "GitHub id 4242 is not provisioned (octo is linked to id 1)"
+        "subject sub-4242 is not provisioned (octo is linked to a different subject)"
     );
 
     // 5. admin sets up a team, project and an agent with a token

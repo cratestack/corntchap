@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 cratestack = { package = "cratestack-pg", version = "0.20.6", features = ["mcp"] }
-authkestra = { version = "0.15.3", features = ["axum", "github", "resource"] }
+authkestra = { version = "0.15.3", features = ["axum", "oidc", "resource"] }
 async-trait = "0.1"
 http = "1"
 anyhow = "1.0.104"
@@ -32,3 +32,6 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.29.3", features = ["v4", "serde"] }
 serde_urlencoded = "0.7.1"
+
+[dev-dependencies]
+jsonwebtoken = "11.1"

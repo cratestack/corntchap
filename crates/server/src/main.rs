@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use corntchap::{
     admin, app,
-    state::{AppState, Config, GithubConfig},
+    state::{AppState, Config, OidcConfig},
 };
 
 #[derive(Parser)]
@@ -23,7 +23,7 @@ enum Cmd {
     Serve,
     /// Apply the database schema.
     Migrate,
-    /// Create the first admin (a GitHub login) and print a 7-day bootstrap token.
+    /// Create the first admin (an OIDC username, e.g. Keycloak's preferred_username) and print a 7-day bootstrap token.
     Init {
         #[arg(long)]
         admin: String,
@@ -55,8 +55,16 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
         )
     });
     let mut c = Config::new(db, public, bind);
-    if let (Some(id), Some(secret)) = (env("GITHUB_CLIENT_ID"), env("GITHUB_CLIENT_SECRET")) {
-        c.github = Some(GithubConfig::new(id, secret));
+    if let (Some(issuer), Some(id), Some(secret)) = (
+        env("OIDC_ISSUER"),
+        env("OIDC_CLIENT_ID"),
+        env("OIDC_CLIENT_SECRET"),
+    ) {
+        c.oidc = Some(OidcConfig {
+            issuer,
+            client_id: id,
+            client_secret: secret,
+        });
     }
     Ok(c)
 }
@@ -97,9 +105,9 @@ async fn main() -> anyhow::Result<()> {
             if env("AUTO_MIGRATE").as_deref() == Some("1") {
                 app::migrate(&pool).await?;
             }
-            if cfg.github.is_none() {
+            if cfg.oidc.is_none() {
                 tracing::warn!(
-                    "GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET not set: browser sign-in and device approval are disabled"
+                    "OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_CLIENT_SECRET not set: browser sign-in and device approval are disabled"
                 );
             }
             let bind = cfg.bind.clone();

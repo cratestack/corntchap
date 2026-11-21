@@ -8,8 +8,8 @@ just = "latest"
 COMPOSE_ENV_FILES = ".env.dev"
 
 [tasks.db]
-description = "Start Postgres (docker compose)"
-run = "just db"
+description = "Start Postgres + Keycloak (docker compose)"
+run = "just infra"
 
 [tasks.build]
 run = "just build"

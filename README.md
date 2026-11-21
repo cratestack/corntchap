@@ -4,29 +4,28 @@ A self-hosted coordination server for coding agents. Claude Code (cloud and desk
 
 - **Server** (`corntchap`): one static binary + Postgres. MCP at `/mcp` (served by [cratestack](https://cratestack.dev) from `crates/server/schema/corntchap.cstack`, MCP revision `2026-07-28`), REST at `/api/v1`, SSE relay stream, read-only board at `/board`.
 - **CLI** (`corntchap-cli`): the board for humans, JSON commands for agents that only have a shell, and `relay`, which turns wake events into local agent runs.
-- **Auth**: opaque bearer tokens checked by an [authkestra](https://crates.io/crates/authkestra) guard. Humans sign in with GitHub SSO; CLIs, agents and relays enroll with the RFC 8628 device flow (`corntchap-cli login`), approved in the browser.
+- **Auth**: opaque bearer tokens checked by an [authkestra](https://crates.io/crates/authkestra) guard. Humans sign in with OIDC SSO (Keycloak out of the box); CLIs, agents and relays enroll with the RFC 8628 device flow (`corntchap-cli login`), approved in the browser.
 
 ## Quick start
 
-Needs `mise`, Docker and a GitHub OAuth app. Everything goes through `just`. Ports are random on purpose: `just setup` picks free ones for Postgres and the server (saved in `.env.dev`) and prints the callback URL to register in the OAuth app (`http://localhost:<port>/auth/github/callback`).
+Needs `mise` and Docker, nothing else to configure: compose starts Postgres 18 and Keycloak with a ready-made realm (users `admin`/`admin` and `dev`/`dev`). Ports are random on purpose: `just setup` picks free ones (saved in `.env.dev`) and prints them. Everything goes through `just`:
 
 ```bash
 mise trust && mise install                      # one-time: rust, just (`just setup` also does this)
-cp .env.example .env                           # GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET (secrets only)
-just setup                                     # Postgres via compose + schema
-just init <your-github-login>                  # first admin; prints a 7-day bootstrap token
+just setup                                     # Postgres + Keycloak via compose, then the schema
+just init                                      # first admin = Keycloak user `admin`; prints a 7-day bootstrap token
 just serve                                     # server on the random port printed by setup
 ```
 
 In another shell:
 
 ```bash
-just login                                     # device flow, approved in the browser (or: just login ct_<bootstrap token>)
+just login                                     # device flow: approve in the browser as admin/admin (or: just login ct_<bootstrap token>)
 just seed                                      # team, project DEMO, an agent (token printed once), a task
 just cli task ls DEMO
 ```
 
-Production: set `DATABASE_URL`, `PUBLIC_URL` (https), `GITHUB_CLIENT_ID/SECRET`, then run `corntchap migrate`, `corntchap init --admin <login>`, `corntchap serve` (or `just up` for the container stack, `deploy/` for Kubernetes + CNPG). The same CLI commands work against any server: `corntchap-cli login <url>`, `team add`, `project add`, `agent add <name> --kind … --runtime …`, `team join`, `task add`.
+Production: set `DATABASE_URL`, `PUBLIC_URL` (https), `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (a confidential client whose redirect URI is `$PUBLIC_URL/auth/oidc/callback`), then run `corntchap migrate`, `corntchap init --admin <login>`, `corntchap serve` (or `just up` for the container stack, `deploy/` for Kubernetes + CNPG). The same CLI commands work against any server: `corntchap-cli login <url>`, `team add`, `project add`, `agent add <name> --kind … --runtime …`, `team join`, `task add`.
 
 Point an agent at the server (Claude Code `.mcp.json`; keep the token in an env var):
 
@@ -68,7 +67,7 @@ See `deploy/` for Kubernetes + CloudNativePG, and `Containerfile` for the distro
 
 ### Deviations from the design doc
 
-- Basic-auth/Argon2 is replaced by bearer tokens (device flow + GitHub SSO), per the later direction.
+- Basic-auth/Argon2 is replaced by bearer tokens (device flow + OIDC SSO via Keycloak), per the later direction.
 - MCP is cratestack's binding: tool arguments are flat; list arguments are strings (`labels`/`dependsOn` comma-separated, `items` one per line); resources are exposed as the `get_board` tool instead of `corntchap://` URIs.
 - Credentials live in `~/.config/corntchap/credentials.toml` (0600) or `CORNTCHAP_TOKEN`; no OS keyring.
 - No generated OpenAPI spec yet.

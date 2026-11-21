@@ -5,7 +5,7 @@ use axum::{
     response::Redirect,
     routing::{get, post},
 };
-use corntchap::state::{AppState, Config, GithubConfig};
+use corntchap::state::{AppState, Config, OidcConfig};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -41,35 +41,96 @@ pub struct TestApp {
     pub gh: String,
 }
 
-/// A tiny stand-in for GitHub: authorize bounces straight back, token and user are canned.
-pub async fn mock_github() -> String {
-    async fn authorize(Query(q): Query<HashMap<String, String>>) -> Redirect {
+/// A tiny OpenID provider: discovery, authorize (bounces straight back), token (RS256 ID token), JWKS.
+pub async fn mock_oidc() -> String {
+    use axum::extract::State;
+    use std::sync::{Arc, Mutex};
+    type Codes = Arc<Mutex<HashMap<String, String>>>; // code -> nonce
+    #[derive(Clone)]
+    struct Idp {
+        base: String,
+        codes: Codes,
+    }
+    async fn discovery(State(i): State<Idp>) -> Json<Value> {
+        Json(json!({
+            "issuer": i.base,
+            "authorization_endpoint": format!("{}/authorize", i.base),
+            "token_endpoint": format!("{}/token", i.base),
+            "jwks_uri": format!("{}/jwks", i.base),
+            "response_types_supported": ["code"],
+            "id_token_signing_alg_values_supported": ["RS256"],
+        }))
+    }
+    async fn authorize(State(i): State<Idp>, Query(q): Query<HashMap<String, String>>) -> Redirect {
+        let code = format!("code-{}", uuid::Uuid::new_v4().simple());
+        i.codes
+            .lock()
+            .unwrap()
+            .insert(code.clone(), q.get("nonce").cloned().unwrap_or_default());
         Redirect::to(&format!(
-            "{}?code=mockcode&state={}",
+            "{}?code={code}&state={}",
             q["redirect_uri"], q["state"]
         ))
     }
-    let app = Router::new()
-        .route("/authorize", get(authorize))
-        .route("/token", post(|| async { Json(json!({"access_token": "gho_mock", "token_type": "bearer", "scope": "user:email"})) }))
-        .route("/user", get(|| async { Json(json!({"id": 4242, "login": "Octo", "email": null})) }));
+    async fn token(
+        State(i): State<Idp>,
+        axum::Form(f): axum::Form<HashMap<String, String>>,
+    ) -> Json<Value> {
+        let nonce = i
+            .codes
+            .lock()
+            .unwrap()
+            .remove(&f["code"])
+            .expect("known code");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let claims = json!({
+            "iss": i.base, "aud": "cid", "sub": "sub-4242", "iat": now, "exp": now + 300, "nonce": nonce,
+            "preferred_username": "Octo", "email": "octo@example.test", "name": "Octo Cat",
+        });
+        let mut h = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+        h.kid = Some("k1".into());
+        let key = jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("test_rsa.pem")).unwrap();
+        let id_token = jsonwebtoken::encode(&h, &claims, &key).unwrap();
+        Json(
+            json!({"access_token": "at", "token_type": "Bearer", "expires_in": 300, "id_token": id_token}),
+        )
+    }
+    async fn jwks() -> Json<Value> {
+        Json(
+            json!({"keys": [{"kty": "RSA", "kid": "k1", "use": "sig", "alg": "RS256",
+            "n": include_str!("test_rsa_n.txt").trim(), "e": "AQAB"}]}),
+        )
+    }
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = l.local_addr().unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    let idp = Idp {
+        base: base.clone(),
+        codes: Default::default(),
+    };
+    let app = Router::new()
+        .route("/.well-known/openid-configuration", get(discovery))
+        .route("/authorize", get(authorize))
+        .route("/token", post(token))
+        .route("/jwks", get(jwks))
+        .with_state(idp);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-    format!("http://{addr}")
+    base
 }
 
 pub async fn start(background: bool) -> TestApp {
     let (pool, url) = fresh_db().await;
-    let gh = mock_github().await;
+    let gh = mock_oidc().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let mut cfg = Config::new(url, base.clone(), "127.0.0.1:0".into());
-    let mut g = GithubConfig::new("cid".into(), "csecret".into());
-    g.authorize_url = format!("{gh}/authorize");
-    g.token_url = format!("{gh}/token");
-    g.user_url = format!("{gh}/user");
-    cfg.github = Some(g);
+    cfg.oidc = Some(OidcConfig {
+        issuer: gh.clone(),
+        client_id: "cid".into(),
+        client_secret: "csecret".into(),
+    });
     cfg.run_background = background;
     let state = AppState::new(pool, cfg);
     let app = corntchap::app::build(state.clone()).unwrap();
@@ -139,11 +200,11 @@ impl TestApp {
         serde_json::from_str(text).unwrap_or(Value::String(text.to_string()))
     }
 
-    /// Sign in through the mock GitHub and return the session cookie header value.
+    /// Sign in through the mock OIDC provider and return the session cookie header value.
     pub async fn browser_login(&self, next: &str) -> String {
         let r = self
             .http
-            .get(format!("{}/auth/github/login?next={next}", self.base))
+            .get(format!("{}/auth/oidc/login?next={next}", self.base))
             .send()
             .await
             .unwrap();

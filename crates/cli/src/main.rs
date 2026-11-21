@@ -19,7 +19,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Sign in: device flow approved in the browser through GitHub (or --token to paste one).
+    /// Sign in: device flow approved in the browser through your OIDC provider (Keycloak) (or --token to paste one).
     Login {
         url: String,
         #[arg(long)]
@@ -162,9 +162,9 @@ enum TaskCmd {
 
 #[derive(Subcommand)]
 enum UserCmd {
-    /// Add a user by GitHub login (admin).
+    /// Add a user by their OIDC username (admin).
     Add {
-        github_login: String,
+        login: String,
         #[arg(long)]
         admin: bool,
     },
@@ -372,7 +372,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
     match cmd {
         Cmd::Whoami => out(&api.get("/me").await?),
         Cmd::Task(t) => task(t, &api).await?,
-        Cmd::User(UserCmd::Add { github_login, admin }) => out(&api.post("/users", json!({"github_login": github_login, "is_admin": admin})).await?),
+        Cmd::User(UserCmd::Add { login, admin }) => out(&api.post("/users", json!({"login": login, "is_admin": admin})).await?),
         Cmd::User(UserCmd::Ls) => {
             for u in api.get("/users").await?.as_array().into_iter().flatten() {
                 println!("{:<24} {}{}", s(u, "name"), if u["is_admin"] == true { "admin " } else { "" }, if u["linked"] == true { "(signed in once)" } else { "(not signed in yet)" });

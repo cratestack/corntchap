@@ -1,9 +1,27 @@
 # Local stack: Postgres + corntchap built from the Containerfile.
 # Use `just up` / `just db` (they pick random free ports into .env.dev); plain `docker compose` needs
 # PG_PORT, APP_PORT and PUBLIC_URL in the environment.
-#   cp .env.example .env   # GitHub OAuth app (callback: $PUBLIC_URL/auth/github/callback)
 #   just up && docker compose exec corntchap /corntchap init --admin <your-github-login>
 services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin      # master-realm console login (not a corntchap user)
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: "http://localhost:${KC_PORT:?run just setup (it picks a random port)}"
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"  # the app reaches it as keycloak:8080; tokens carry the public localhost issuer
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports: ["127.0.0.1:${KC_PORT}:8080"]
+    volumes: ["./deploy/dev/keycloak:/opt/keycloak/data/import:ro"]   # realm `corntchap`: client + users admin/admin, dev/dev
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '\"UP\"' <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
   db:
     image: postgres:18
     environment:
@@ -25,13 +43,15 @@ services:
     image: ghcr.io/stephane-segning/corntchap:dev
     depends_on:
       db: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
     environment:
       DATABASE_URL: postgres://corn:corn@db/corntchap
       PUBLIC_URL: ${PUBLIC_URL:?run `just setup`}   # plain http is only accepted on localhost
       BIND: 0.0.0.0:8080
       AUTO_MIGRATE: "1"
-      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
-      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      OIDC_ISSUER: "http://keycloak:8080/realms/corntchap"   # discovery over the compose network
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-corntchap}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-corntchap-dev-secret}
       RUST_LOG: ${RUST_LOG:-info}
     ports: ["127.0.0.1:${APP_PORT:?run `just setup`: it picks a random port}:8080"]
 

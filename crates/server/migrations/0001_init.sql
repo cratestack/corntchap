@@ -3,8 +3,8 @@ create table principals (
   kind text not null check (kind in ('user','agent','relay')),
   name text unique not null,
   owner_id uuid references principals(id),
-  github_id text unique,
-  github_login text unique,
+  oidc_sub text unique,
+  oidc_login text unique,
   agent_kind text,
   runtime text,
   max_leases int not null default 1,
@@ -152,7 +152,7 @@ create table device_requests (
   expires_at timestamptz not null
 );
 
--- OAuth2 (GitHub) login state between redirect and callback.
+-- OIDC (Keycloak, or any OpenID provider) login state between redirect and callback.
 create table oauth_states (
   state text primary key,
   data jsonb not null,

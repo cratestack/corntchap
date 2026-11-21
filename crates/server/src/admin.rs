@@ -43,24 +43,21 @@ pub async fn mint_token(
     Ok(token)
 }
 
-pub async fn create_user(
-    db: &PgPool,
-    p: &Principal,
-    github_login: &str,
-    is_admin: bool,
-) -> Result<Value> {
+pub async fn create_user(db: &PgPool, p: &Principal, login: &str, is_admin: bool) -> Result<Value> {
     if !p.is_admin {
         return Err(Error::Forbidden("only an admin can add users".into()));
     }
-    let login = norm_name(github_login)?;
+    let login = norm_name(login)?;
     let id = Uuid::new_v4();
-    sqlx::query("insert into principals (id, kind, name, github_login, is_admin) values ($1,'user',$2,$2,$3)")
-        .bind(id)
-        .bind(&login)
-        .bind(is_admin)
-        .execute(db)
-        .await?;
-    Ok(json!({"id": id, "name": login, "github_login": login, "is_admin": is_admin}))
+    sqlx::query(
+        "insert into principals (id, kind, name, oidc_login, is_admin) values ($1,'user',$2,$2,$3)",
+    )
+    .bind(id)
+    .bind(&login)
+    .bind(is_admin)
+    .execute(db)
+    .await?;
+    Ok(json!({"id": id, "name": login, "login": login, "is_admin": is_admin}))
 }
 
 pub async fn list_users(db: &PgPool, p: &Principal) -> Result<Value> {
@@ -68,8 +65,8 @@ pub async fn list_users(db: &PgPool, p: &Principal) -> Result<Value> {
         return Err(Error::Forbidden("only an admin can list users".into()));
     }
     let rows: Vec<Value> = sqlx::query_scalar(
-        "select jsonb_build_object('name', name, 'github_login', github_login, 'is_admin', is_admin,
-            'linked', github_id is not null, 'disabled', disabled_at is not null) from principals where kind = 'user' order by name",
+        "select jsonb_build_object('name', name, 'login', oidc_login, 'is_admin', is_admin,
+            'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals where kind = 'user' order by name",
     )
     .fetch_all(db)
     .await?;
@@ -466,7 +463,7 @@ pub async fn init_admin(db: &PgPool, login: &str) -> Result<(String, Option<Stri
         }
         None => {
             let id = Uuid::new_v4();
-            sqlx::query("insert into principals (id, kind, name, github_login, is_admin) values ($1,'user',$2,$2,true)")
+            sqlx::query("insert into principals (id, kind, name, oidc_login, is_admin) values ($1,'user',$2,$2,true)")
                 .bind(id)
                 .bind(&login)
                 .execute(&mut *tx)

@@ -37,15 +37,17 @@ spec:
               value: 0.0.0.0:8080
             - name: AUTO_MIGRATE
               value: "1"
-            - name: GITHUB_CLIENT_ID
+            - name: OIDC_ISSUER
+              value: https://keycloak.example.com/realms/corntchap   # CHANGE-ME: your realm's issuer URL
+            - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: corntchap-github
+                  name: corntchap-oidc
                   key: client-id
-            - name: GITHUB_CLIENT_SECRET
+            - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: corntchap-github
+                  name: corntchap-oidc
                   key: client-secret
           readinessProbe:
             httpGet: { path: /healthz, port: http }

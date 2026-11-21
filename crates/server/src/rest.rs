@@ -98,7 +98,7 @@ async fn users_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Val
     ok(admin::create_user(
         &st.db,
         &p,
-        &req_s(&b, "github_login")?,
+        &req_s(&b, "login")?,
         b["is_admin"].as_bool().unwrap_or(false),
     )
     .await?)
