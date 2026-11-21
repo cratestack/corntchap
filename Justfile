@@ -82,3 +82,9 @@ seed:
     cargo run -q -p corntchap-cli -- agent add demo-agent --kind other --runtime local
     cargo run -q -p corntchap-cli -- team join acme demo-agent
     cargo run -q -p corntchap-cli -- task add DEMO "Try the board" --item "claim me" --item "tick me"
+
+# Drive a running server with the official MCP Python SDK. `CORNTCHAP_TOKEN=<agent token> just mcp-check`
+mcp-check project="DEMO":
+    [ -d .venv-mcp ] || python3 -m venv .venv-mcp
+    .venv-mcp/bin/pip install -q mcp
+    PROJECT={{project}} .venv-mcp/bin/python scripts/mcp_check.py
