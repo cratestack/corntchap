@@ -72,8 +72,8 @@ Config and credentials live in `~/.config/corntchap/` on Linux and `~/Library/Ap
 [[target]]
 agent = "opencode-laptop"
 adapter = "opencode"
-url = "http://127.0.0.1:4096"
-directory = "~/code/payments"
+directory = "~/code/payments"   # wakes the newest OpenCode session in this directory
+# url = "http://127.0.0.1:4096" # optional: the running OpenCode (desktop, TUI or `opencode serve`) is found on its own
 
 [[target]]
 agent = "codex-laptop"
@@ -88,6 +88,8 @@ adapter = "exec"
 command = ["claude", "-p", "--continue"]
 cwd = "~/code/payments"
 ```
+
+OpenCode's desktop app and TUI pick a new port on every start, so the `opencode` adapter finds the running server itself: `OPENCODE_PORT`, then running `opencode*` processes (their `--port`, or the ports they listen on), then `127.0.0.1:4096`, preferring the one with a session in `directory`. A password-protected server gets its password from `password_env` / `password` on the target, `OPENCODE_SERVER_PASSWORD`, or (Linux) the OpenCode process's own environment. `corntchap-cli fire doctor` shows what it found; `corntchap-cli fire poke <cook> --pot PAY` sends a wake right away to check the wiring. (OpenCode 1.x server API; the 2.x API is not supported yet.)
 
 The relay remembers the last event id it saw (`relay-state.json` next to `credentials.toml`) and sends it as `Last-Event-ID` on restart, so wakes sent while it was down are replayed.
 

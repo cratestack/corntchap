@@ -1,4 +1,5 @@
 mod api;
+mod opencode;
 mod pantry;
 mod relay;
 mod setup;
@@ -363,6 +364,14 @@ enum RelayCmd {
     Doctor,
     /// Register this machine as a relay (device flow) and store its credential.
     Enroll { name: String },
+    /// Wake one local cook now, as a wake event would (checks the wiring end to end).
+    Poke {
+        /// The cook's name (its [[target]] in config.toml).
+        cook: String,
+        /// Project key the prompt names.
+        #[arg(long, default_value = "PAY")]
+        pot: String,
+    },
 }
 
 fn out(v: &Value) {
@@ -400,6 +409,7 @@ async fn main() -> Result<()> {
             Some(RelayCmd::Install) => relay::install(),
             Some(RelayCmd::Doctor) => relay::doctor(false).await,
             Some(RelayCmd::Enroll { name }) => enroll(&name).await,
+            Some(RelayCmd::Poke { cook, pot }) => relay::poke(&cook, &pot.to_uppercase()).await,
         },
         Cmd::Agent(AgentCmd::Enroll {
             name,
