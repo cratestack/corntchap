@@ -157,8 +157,16 @@ enum TaskCmd {
     },
     /// Put a blocked task back to open.
     Unblock { id: String },
-    /// Cancel a task.
-    Cancel { id: String },
+    /// Toss a task (people only): it leaves the pot, shown as Tossed; a cook holding it loses its lease.
+    #[command(name = "toss", alias = "cancel")]
+    Toss {
+        id: String,
+        /// Why (shown on the task).
+        #[arg(long, short)]
+        reason: Option<String>,
+    },
+    /// Put a tossed task back on the counter (open).
+    Restore { id: String },
     /// Scoop the next ready portion: agent mode, claims the best ready task (JSON).
     #[command(name = "scoop", alias = "claim-next")]
     ClaimNext {
@@ -996,9 +1004,17 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             api.post(&format!("/tasks/{id}/unblock"), json!({})).await?;
             ok_line(format!("{id} unblocked"));
         }
-        TaskCmd::Cancel { id } => {
-            api.post(&format!("/tasks/{id}/cancel"), json!({})).await?;
-            ok_line(format!("{id} cancelled"));
+        TaskCmd::Toss { id, reason } => {
+            let body = match reason {
+                Some(r) => json!({"reason": r}),
+                None => json!({}),
+            };
+            api.post(&format!("/tasks/{id}/toss"), body).await?;
+            ok_line(format!("{id} tossed"));
+        }
+        TaskCmd::Restore { id } => {
+            api.post(&format!("/tasks/{id}/restore"), json!({})).await?;
+            ok_line(format!("{id} is back on the counter"));
         }
         TaskCmd::ClaimNext {
             project,

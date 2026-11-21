@@ -194,7 +194,8 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
                 and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))),
             'claimed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'claimed'),
             'blocked', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'blocked'),
-            'done', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'done'))
+            'done', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'done'),
+            'tossed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'cancelled'))
          from projects pr where {} order by pr.key",
         access_sql("$1", "$2")
     );
@@ -745,32 +746,54 @@ pub async fn block(db: &PgPool, p: &Principal, r: &str, epoch: i64, reason: &str
 }
 
 /// Human-only transitions: unblock (blocked -> open) and cancel (open/blocked -> cancelled).
-pub async fn human_transition(db: &PgPool, p: &Principal, r: &str, action: &str) -> Result<Value> {
+/// People-only moves: `unblock` (blocked -> open), `cancel` = toss (open, blocked or claimed ->
+/// cancelled, with an optional reason; a held task's lease ends and its epoch moves on, so the
+/// cook's next lease call fails with lease_lost) and `restore` (cancelled -> open).
+pub async fn human_transition(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    action: &str,
+    reason: Option<&str>,
+) -> Result<Value> {
     if !p.is_user() {
         return Err(Error::Forbidden(format!(
             "only a human can {action} a task"
         )));
     }
-    let (from, to, kind): (&[&str], &str, &str) = match action {
-        "unblock" => (&["blocked"], "open", "task.unblocked"),
-        "cancel" => (&["open", "blocked"], "cancelled", "task.cancelled"),
+    let (from, to, kind, verb): (&[&str], &str, &str, &str) = match action {
+        "unblock" => (&["blocked"], "open", "task.unblocked", "unblocked"),
+        "cancel" => (
+            &["open", "blocked", "claimed"],
+            "cancelled",
+            "task.cancelled",
+            "tossed",
+        ),
+        "restore" => (&["cancelled"], "open", "task.restored", "restored"),
         _ => return invalid("unknown action"),
     };
+    let reason = reason.map(str::trim).filter(|r| !r.is_empty());
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
     let from: Vec<String> = from.iter().map(|s| s.to_string()).collect();
     let n = sqlx::query(
-        "update tasks set status = $3, updated_at = now() where id = $1 and status = any($2)",
+        "update tasks set status = $3, updated_at = now(),
+            result = case when $3 = 'cancelled' then $4 when $3 = 'open' and status = 'cancelled' then null else result end,
+            lease_epoch = case when status = 'claimed' then lease_epoch + 1 else lease_epoch end,
+            claimed_by = case when $3 = 'cancelled' then null else claimed_by end,
+            lease_expires_at = case when $3 = 'cancelled' then null else lease_expires_at end
+         where id = $1 and status = any($2)",
     )
     .bind(t.id)
     .bind(&from)
     .bind(to)
+    .bind(reason)
     .execute(&mut *tx)
     .await?
     .rows_affected();
     if n == 0 {
         return Err(Error::Conflict(format!(
-            "{r} is {} and cannot be {action}ed",
+            "{r} is {} and cannot be {verb}",
             t.status
         )));
     }
@@ -780,7 +803,10 @@ pub async fn human_transition(db: &PgPool, p: &Principal, r: &str, action: &str)
         Some(t.id),
         kind,
         Some(p.id),
-        json!({}),
+        match reason {
+            Some(why) => json!({"reason": why}),
+            None => json!({}),
+        },
     )
     .await?;
     let out = task_json(&mut tx, t.id).await?;

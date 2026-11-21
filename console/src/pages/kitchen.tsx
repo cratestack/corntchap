@@ -287,6 +287,11 @@ function PotHeader({
             <b className="font-semibold text-foreground">{project.ready}</b> ready to scoop ·{" "}
             <b className="font-semibold text-foreground">{project.blocked}</b> waiting ·{" "}
             <b className="font-semibold text-foreground">{project.done}</b> served
+            {project.tossed > 0 && (
+              <>
+                {" "}· <b className="font-semibold text-foreground">{project.tossed}</b> tossed
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -614,7 +619,7 @@ function ListView({
   );
 }
 
-const BOARD_COLS: Bucket[] = ["ready", "claimed", "waiting", "done"];
+const BOARD_COLS: Bucket[] = ["ready", "claimed", "waiting", "done", "cancelled"];
 
 function BoardView({
   loading,
@@ -638,18 +643,22 @@ function BoardView({
   if (total === 0) {
     return (
       <EmptyState title="The board is bare" action={<Button onClick={onNew}>New task</Button>}>
-        Four columns: ready to scoop, on the fire, waiting on a human or a dependency, and served.
+        Five columns: ready to scoop, on the fire, waiting on a human or a dependency, served, and tossed.
       </EmptyState>
     );
   }
   return (
     <div className="-mx-5 overflow-x-auto px-5 pb-3 lg:-mx-8 lg:px-8 scrollbar-thin">
-      <div className="grid min-w-[1040px] grid-cols-4 gap-4 xl:min-w-0">
+      <div className="grid min-w-[1000px] grid-cols-[repeat(4,minmax(180px,1fr))_minmax(150px,0.75fr)] gap-3.5 xl:min-w-0">
         {BOARD_COLS.map((id) => {
           const meta = BUCKETS.find((b) => b.id === id)!;
           const col = groups[id];
           return (
-            <section key={id} aria-labelledby={`col-${id}`} className="flex max-h-[calc(100dvh-14rem)] min-h-40 flex-col rounded-[14px] bg-column p-2.5">
+            <section
+              key={id}
+              aria-labelledby={`col-${id}`}
+              className={cn("flex max-h-[calc(100dvh-14rem)] min-h-40 flex-col rounded-[14px] bg-column p-2.5", id === "cancelled" && "opacity-80")}
+            >
               <h2 id={`col-${id}`} className="flex items-center gap-2 px-1.5 pt-1 pb-2.5 text-[15px]">
                 <span className={cn("size-2.5 rounded-full", BUCKET_DOT[id], id === "claimed" && "live-dot")} aria-hidden="true" />
                 {meta.label}
@@ -676,7 +685,7 @@ function BoardView({
 
 const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[] = [
   { id: "all", label: "Everything", match: () => true },
-  { id: "moves", label: "Scoops and moves", match: (k) => ["task.claimed", "task.released", "task.blocked", "task.unblocked", "task.lease_expired", "task.cancelled"].includes(k) },
+  { id: "moves", label: "Scoops and moves", match: (k) => ["task.claimed", "task.released", "task.blocked", "task.unblocked", "task.lease_expired", "task.cancelled", "task.restored"].includes(k) },
   { id: "served", label: "Served", match: (k) => k === "task.completed" },
   { id: "checklist", label: "Checklists", match: (k) => k === "item.checked" },
   { id: "comments", label: "Comments", match: (k) => k === "task.commented" },

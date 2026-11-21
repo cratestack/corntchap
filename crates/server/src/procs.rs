@@ -409,7 +409,7 @@ impl ProcedureRegistry for Procedures {
         _z: unblock_task::Authorized,
     ) -> Result<unblock_task::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::human_transition(&self.state.db, &p, &a.id, "unblock").await)
+        typed(service::human_transition(&self.state.db, &p, &a.id, "unblock", None).await)
     }
 
     async fn cancel_task(
@@ -420,7 +420,21 @@ impl ProcedureRegistry for Procedures {
         _z: cancel_task::Authorized,
     ) -> Result<cancel_task::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::human_transition(&self.state.db, &p, &a.id, "cancel").await)
+        typed(
+            service::human_transition(&self.state.db, &p, &a.id, "cancel", a.reason.as_deref())
+                .await,
+        )
+    }
+
+    async fn restore_task(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: restore_task::Args,
+        _z: restore_task::Authorized,
+    ) -> Result<restore_task::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(service::human_transition(&self.state.db, &p, &a.id, "restore", None).await)
     }
 
     async fn memory_recall(

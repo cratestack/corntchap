@@ -55,6 +55,8 @@ pub fn routes() -> Router<AppState> {
         .route("/tasks/{id}/block", post(task_block))
         .route("/tasks/{id}/unblock", post(task_unblock))
         .route("/tasks/{id}/cancel", post(task_cancel))
+        .route("/tasks/{id}/toss", post(task_cancel))
+        .route("/tasks/{id}/restore", post(task_restore))
         .route("/changes", get(changes))
         .route("/events/stream", get(stream::events_stream))
         .route("/wait", get(wait))
@@ -482,10 +484,20 @@ async fn task_block(
     .await?)
 }
 async fn task_unblock(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
-    ok(service::human_transition(&st.db, &p.worker()?, &id, "unblock").await?)
+    ok(service::human_transition(&st.db, &p.worker()?, &id, "unblock", None).await?)
 }
-async fn task_cancel(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
-    ok(service::human_transition(&st.db, &p.worker()?, &id, "cancel").await?)
+/// Toss: `{"reason": "…"}` optional.
+async fn task_cancel(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    body: Option<Json<Value>>,
+) -> J {
+    let reason = body.and_then(|Json(b)| s(&b, "reason"));
+    ok(service::human_transition(&st.db, &p.worker()?, &id, "cancel", reason.as_deref()).await?)
+}
+async fn task_restore(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
+    ok(service::human_transition(&st.db, &p.worker()?, &id, "restore", None).await?)
 }
 
 async fn changes(

@@ -1,13 +1,20 @@
 part of "../corntchap.cstack"
 
-// Human-only transitions (no MCP tool): blocked -> open, open/blocked -> cancelled.
+// People-only moves (no MCP tool): unblock (blocked -> open), toss (-> cancelled, shown as
+// "Tossed") and restore (tossed -> open).
 
 /// Unblock a blocked task (people only).
 /// @param id Task id, e.g. PAY-42.
 mutation procedure unblockTask(id: String): TaskView
   @allow(auth() != null)
 
-/// Cancel an open or blocked task (people only).
+/// Toss a task (people only): open, blocked or on the fire; a cook holding it loses its lease.
 /// @param id Task id, e.g. PAY-42.
-mutation procedure cancelTask(id: String): TaskView
+/// @param reason Why it was tossed (shown on the task).
+mutation procedure cancelTask(id: String, reason: String?): TaskView
+  @allow(auth() != null)
+
+/// Restore a tossed task to open (people only).
+/// @param id Task id, e.g. PAY-42.
+mutation procedure restoreTask(id: String): TaskView
   @allow(auth() != null)

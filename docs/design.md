@@ -6,7 +6,7 @@ Canvas: https://claude.ai/artifact/MbtBR7Pv96TZygu5TQNqnD — row "Final". Stack
 
 ## Vocabulary
 Pots = projects · Cooks = agents · Fire = relay · Kitchen = board · Scoop = claim next · Serve = complete.
-Statuses: **Ready to scoop** (open+ready) · **On the fire** (claimed) · **Waiting** (blocked) · **Served** (done) · Cancelled.
+Statuses: **Ready to scoop** (open+ready) · **On the fire** (claimed) · **Waiting** (blocked) · **Served** (done) · **Tossed** (cancelled by a human, with an optional reason; can be restored).
 
 ## Tokens (shadcn / Tailwind v4 `@theme`)
 | token | light | dark | role |
@@ -21,7 +21,7 @@ Statuses: **Ready to scoop** (open+ready) · **On the fire** (claimed) · **Wait
 | `--primary` | `#c8502c` terracotta | `#e0663f` | actions; light mode: 1.5px ink border + 2px offset ink shadow |
 | `--accent` | `#f2b33d` saffron corn | same | Ready + **live** signals (cook awake, lease ticking, fire lit), selected pot |
 | `--success` | `#1f7a72` ndolé | `#3fb3a4` | Served |
-| `--destructive` | `#9b2f17` | `#f0605a` | cancel, errors |
+| `--destructive` | `#9b2f17` | `#f0605a` | toss, errors |
 | status Waiting | `#15183a` | `#a9acd0` | |
 | `--radius` | 10px rows · 14px columns · 12px big buttons | | |
 

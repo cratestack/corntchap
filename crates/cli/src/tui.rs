@@ -654,7 +654,7 @@ impl App {
             KeyCode::Char('X') => {
                 if let Some(id) = self.task_id() {
                     self.mode = Mode::Confirm {
-                        prompt: format!("Cancel {id}? (y/n)"),
+                        prompt: format!("Toss {id}? (y/n)"),
                         action: Action::Cancel(id),
                     };
                 }
@@ -1198,7 +1198,7 @@ fn draw_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             "j/k move/scroll  Tab pane  p back to tasks  r refresh  ? help  q quit  (read-only: add memories with `pantry stock`)"
         }
         Mode::Normal => {
-            "j/k move  Tab pane  Enter open  a add  c comment  x tick  d done  u unblock  X cancel  r refresh  ? help  q quit"
+            "j/k move  Tab pane  Enter open  a add  c comment  x tick  d done  u unblock  X toss  r refresh  ? help  q quit"
         }
         Mode::Help => "any key closes help",
         Mode::Add { .. } => {
@@ -1271,7 +1271,7 @@ fn draw_help(f: &mut Frame, th: &Theme) {
         ("c", "comment on the task"),
         ("d", "mark done (claims, then completes)"),
         ("u", "unblock"),
-        ("X", "cancel the task (asks first)"),
+        ("X", "toss the task (asks first)"),
         ("r", "refresh now"),
         ("q / Ctrl-C", "quit"),
     ];
@@ -1462,7 +1462,7 @@ fn dispatch(api: &Api, app: &App, tx: &UnboundedSender<Msg>, action: Action) {
             });
         }
         Action::Unblock(id) | Action::Cancel(id) => {
-            let verb = if is_unblock { "unblock" } else { "cancel" };
+            let verb = if is_unblock { "unblock" } else { "toss" };
             tokio::spawn(async move {
                 let r = api
                     .post(&format!("/tasks/{id}/{verb}"), json!({}))
@@ -1472,7 +1472,7 @@ fn dispatch(api: &Api, app: &App, tx: &UnboundedSender<Msg>, action: Action) {
                 let past = if verb == "unblock" {
                     "unblocked"
                 } else {
-                    "cancelled"
+                    "tossed"
                 };
                 let _ = tx.send(Msg::Acted(format!("{id} {past}"), r));
             });
@@ -1768,7 +1768,7 @@ mod tests {
         let mut app = fixture();
         assert!(app.update(key(KeyCode::Char('X'))).is_empty());
         let s = render(&app, 100, 24);
-        assert!(s.contains("Cancel PAY-2? (y/n)"), "{s}");
+        assert!(s.contains("Toss PAY-2? (y/n)"), "{s}");
         assert_eq!(
             app.update(key(KeyCode::Char('y'))),
             vec![Action::Cancel("PAY-2".into())]

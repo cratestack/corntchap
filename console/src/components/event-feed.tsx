@@ -1,7 +1,7 @@
 import { memo, useMemo } from "react";
 import type { ChangeView } from "@corntchap/api";
 import {
-  Ban,
+  Trash2,
   CheckCheck,
   CirclePlay,
   Flame,
@@ -58,7 +58,9 @@ export function describe(e: ChangeView): Described {
     case "task.unblocked":
       return { icon: Unlock, tone: "text-primary", verb: "unblocked" };
     case "task.cancelled":
-      return { icon: Ban, tone: "text-destructive", verb: "cancelled" };
+      return { icon: Trash2, tone: "text-destructive", verb: "tossed", detail: p.reason ?? undefined };
+    case "task.restored":
+      return { icon: Undo2, tone: "text-primary", verb: "restored" };
     case "task.updated":
       return { icon: Pencil, tone: "text-muted-foreground", verb: "edited" };
     case "memory.saved":

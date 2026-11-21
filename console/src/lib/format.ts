@@ -67,7 +67,7 @@ export const BUCKETS: { id: Bucket; label: string; hint: string }[] = [
   { id: "ready", label: "Ready to scoop", hint: "open, nothing in the way" },
   { id: "waiting", label: "Waiting", hint: "blocked or waiting on other tasks" },
   { id: "done", label: "Served", hint: "completed" },
-  { id: "cancelled", label: "Cancelled", hint: "cancelled by a human" },
+  { id: "cancelled", label: "Tossed", hint: "discarded by a human, can be restored" },
 ];
 
 export const bucketLabel = (b: Bucket) => BUCKETS.find((x) => x.id === b)!.label;
@@ -96,7 +96,7 @@ export function taskNote(t: TaskView): string | null {
   }
   if (t.status === "claimed" && !t.lease_live) return "lease ran out, up for scooping again";
   if (t.status === "done" && t.result) return t.result;
-  if (t.status === "cancelled") return t.result ?? "cancelled";
+  if (t.status === "cancelled") return t.result ? `tossed: ${t.result}` : "tossed";
   if (t.status === "open" && t.result) return `released: ${t.result}`;
   return null;
 }
