@@ -20,6 +20,7 @@ auth Caller {
   ownerId String?
   runtime String?
   agentKind String?
+  grants String?
 }
 
 // The schema is split into parts by concern; each one declares `part of` this file.
@@ -32,12 +33,14 @@ part "types/projects.cstack"
 part "types/feed.cstack"
 part "types/memory.cstack"
 part "types/menus.cstack"
+part "types/admin.cstack"
 part "procedures/reads.cstack"
 part "procedures/tasks.cstack"
 part "procedures/feed.cstack"
 part "procedures/human.cstack"
 part "procedures/memory.cstack"
 part "procedures/menus.cstack"
+part "procedures/admin.cstack"
 part "models/people.cstack"
 part "models/work.cstack"
 part "models/runtime.cstack"

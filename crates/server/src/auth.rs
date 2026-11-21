@@ -64,6 +64,7 @@ struct PrincipalRow {
     max_leases: i64,
     runtime: Option<String>,
     agent_kind: Option<String>,
+    grants: Vec<String>,
     token_id: uuid::Uuid,
     stale: bool,
 }
@@ -79,7 +80,7 @@ impl TokenValidator for DbTokenValidator {
     async fn validate(&self, token: &str) -> std::result::Result<Option<Principal>, AuthError> {
         let hash = sha256(token.as_bytes());
         let row: Option<PrincipalRow> = sqlx::query_as(
-            "select p.id, p.kind, p.name, p.owner_id, p.is_admin, p.max_leases, p.runtime, p.agent_kind,
+            "select p.id, p.kind, p.name, p.owner_id, p.is_admin, p.max_leases, p.runtime, p.agent_kind, p.grants,
                     t.id as token_id, (t.last_used_at is null or t.last_used_at < now() - interval '1 minute') as stale
              from tokens t join principals p on p.id = t.principal_id
              where t.token_hash = $1 and t.revoked_at is null and (t.expires_at is null or t.expires_at > now())
@@ -106,6 +107,7 @@ impl TokenValidator for DbTokenValidator {
             runtime: r.runtime,
             agent_kind: r.agent_kind,
             token_id: Some(r.token_id),
+            grants: r.grants,
         }))
     }
 }
@@ -183,6 +185,7 @@ impl AuthenticationStrategy<Principal> for SessionCookieStrategy {
                 runtime: None,
                 agent_kind: None,
                 token_id: None,
+                grants: vec![],
             },
         ))
     }

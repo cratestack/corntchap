@@ -1,0 +1,131 @@
+part of "../corntchap.cstack"
+
+// Administration: the console's people-side actions as procedures and MCP tools (src/admin.rs).
+// The same rules as the console apply: admins manage users and every team; team owners manage
+// their team and its pots; people manage the cooks and fires they own. Cooks (agents) calling
+// these get "forbidden" except for reading what they can already see.
+
+/// People who can sign in (admins only).
+procedure adminUsers(): UserView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_users", description: "People who can sign in (admins only).")
+
+/// Add a person by their identity-provider login (admins only).
+/// @param login Their OIDC username, e.g. dev.
+/// @param isAdmin Make them an admin.
+mutation procedure adminAddUser(login: String, isAdmin: Boolean?): UserView
+  @allow(auth() != null)
+  @mcp(tool: "create_user", description: "Add a person by their identity-provider login (admins only). They are also created on first sign-in.")
+
+/// Teams you belong to (admins: all), with their pots.
+procedure adminTeams(): TeamView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_teams", description: "Teams you belong to (admins: all), with your role, member count and pots.")
+
+/// Create a team (admins only); you become its owner.
+/// @param name Team name, e.g. payments.
+mutation procedure adminAddTeam(name: String): TeamCreated
+  @allow(auth() != null)
+  @mcp(tool: "create_team", description: "Create a team (admins only); a person creating it becomes its owner.")
+
+/// Members of a team.
+/// @param team Team name.
+procedure adminTeamMembers(team: String): MemberView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_team_members", description: "Members of a team (people and cooks) with their role.")
+
+/// Add a person or a cook to a team (team owners and admins; a cook only with its owner's say-so).
+/// @param team Team name.
+/// @param principal A person's login or a cook's name.
+/// @param role member (default) or owner (people only).
+mutation procedure adminAddMember(team: String, principal: String, role: String?): MemberAdded
+  @allow(auth() != null)
+  @mcp(tool: "add_team_member", description: "Add a person or a cook to a team (team owners and admins). A cook joins only if you own it or are an admin.")
+
+/// Remove a member from a team (team owners and admins).
+/// @param team Team name.
+/// @param principal A person's login or a cook's name.
+mutation procedure adminRemoveMember(team: String, principal: String): OkResult
+  @allow(auth() != null)
+  @mcp(tool: "remove_team_member", description: "Remove a person or a cook from a team (team owners and admins).")
+
+/// Create a pot (project) in a team you own.
+/// @param team Team name.
+/// @param key Short upper-case key used in task ids, e.g. PAY.
+/// @param name Display name, e.g. Payments.
+/// @param repoUrl The repository it works on.
+/// @param leaseTtlS Lease length in seconds (default 600).
+mutation procedure adminAddProject(team: String, key: String, name: String, repoUrl: String?, leaseTtlS: Int?): ProjectCreated
+  @allow(auth() != null)
+  @mcp(tool: "create_project", description: "Create a pot (project) in a team you own (admins: any team).")
+
+/// Cooks (agents) you own (admins: all).
+procedure adminCooks(): PrincipalView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_cooks", description: "Cooks (agents) you own (admins: all) with their runtime, leases held and last activity.")
+
+/// Fires (relays) you own (admins: all).
+procedure adminFires(): PrincipalView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_fires", description: "Fires (relays that wake local cooks) you own (admins: all).")
+
+/// Create a cook (people only). Returns its token once.
+/// @param name Cook name, e.g. codex-laptop.
+/// @param agentKind claude-code, codex, opencode or other.
+/// @param runtime local or cloud.
+/// @param maxLeases Tasks it may hold at once (default 1).
+/// @param owner Owner's login (admins only; default you).
+mutation procedure adminAddCook(name: String, agentKind: String?, runtime: String?, maxLeases: Int?, owner: String?): PrincipalToken
+  @allow(auth() != null)
+  @mcp(tool: "create_cook", description: "Create a cook (agent identity) owned by you (people only). Returns its bearer token once: it is a secret, put it straight into the cook's MCP config.")
+
+/// Create a fire (relay) (people only). Returns its token once.
+/// @param name Fire name, e.g. laptop.
+mutation procedure adminAddFire(name: String): PrincipalToken
+  @allow(auth() != null)
+  @mcp(tool: "create_fire", description: "Create a fire (relay) owned by you (people only). Returns its token once: a secret for `corntchap-cli fire`.")
+
+/// Revoke every token of a cook or fire you own and issue a new one.
+/// @param name The cook's or fire's name.
+mutation procedure adminRotate(name: String): PrincipalToken
+  @allow(auth() != null)
+  @mcp(tool: "rotate_token", description: "Revoke every token of a cook or fire you own (admins: any) and issue a new one, returned once. The old token stops working at once.")
+
+/// Disable or enable a cook or fire you own.
+/// @param name The cook's or fire's name.
+/// @param enabled false to disable (it can no longer claim or connect), true to enable again.
+mutation procedure adminSetEnabled(name: String, enabled: Boolean): EnabledView
+  @allow(auth() != null)
+  @mcp(tool: "set_enabled", description: "Disable (enabled=false) or enable again a cook or fire you own (admins: any).")
+
+/// Wake targets of a cook you own.
+/// @param cook The cook's name.
+procedure adminWakeTargets(cook: String): WakeTargetView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_wake_targets", description: "How an idle cook you own is woken: relay, webhook or github-comment targets, with their pot/label filters.")
+
+/// Add a wake target to a cook you own (webhook and github-comment: admins only).
+/// @param cook The cook's name.
+/// @param type relay (default), webhook or github-comment.
+/// @param projects Comma-separated pot keys to wake for (default all).
+/// @param labels Comma-separated labels to wake for (default any).
+/// @param url webhook: the URL to POST to.
+/// @param repo github-comment: owner/repo.
+/// @param issue github-comment: issue or PR number to comment on.
+/// @param token github-comment: a GitHub token allowed to comment (stored, never shown again).
+mutation procedure adminAddWakeTarget(cook: String, type: String?, projects: String?, labels: String?, url: String?, repo: String?, issue: Int?, token: String?): WakeTargetAdded
+  @allow(auth() != null)
+  @mcp(tool: "add_wake_target", description: "Add a way to wake an idle cook you own: relay (a fire on its machine), webhook or github-comment (admins only for the last two).")
+
+/// Delete a wake target.
+/// @param id The wake target's id.
+mutation procedure adminDeleteWakeTarget(id: String): OkResult
+  @allow(auth() != null)
+  @mcp(tool: "delete_wake_target", description: "Delete a wake target of a cook you own.")
+
+/// Set what a cook may do beyond working its tasks (people only: the cook's owner or an admin).
+/// @param name The cook's name.
+/// @param grants Comma-separated: plan (edit, toss, restore, unblock any task in its teams), manage (act as its owner on teams, pots, cooks, fires, wake targets), admin (the owner's admin powers). Empty: work only.
+mutation procedure adminSetGrants(name: String, grants: String): GrantsView
+  @allow(auth() != null)
+  @mcp(tool: "set_grants", description: "Set what a cook may do beyond working its tasks: plan, manage, admin (comma-separated; empty for work only). Only a person can, never a cook. A cook never exceeds its owner's rights.")

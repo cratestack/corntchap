@@ -13,6 +13,8 @@ type ProjectSummary {
   claimed Int
   blocked Int
   done Int
+  /// Tasks tossed (status cancelled).
+  tossed Int
 }
 
 type TeamRole {
@@ -27,6 +29,8 @@ type WhoamiView {
   runtime String?
   is_admin Boolean
   max_leases Int
+  /// Cooks: what your owner granted beyond working tasks (plan, manage, admin).
+  grants String[]
   teams TeamRole[]
   projects String[]
   current_leases TaskView[]

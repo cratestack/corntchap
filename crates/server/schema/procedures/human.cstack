@@ -1,13 +1,24 @@
 part of "../corntchap.cstack"
 
-// Human-only transitions (no MCP tool): blocked -> open, open/blocked -> cancelled.
+// Moves the console offers: unblock (blocked -> open, people), toss (-> cancelled, shown as
+// "Tossed") and restore (tossed -> open). Cooks may toss and restore only tasks they created or
+// hold, with a reason.
 
 /// Unblock a blocked task (people only).
 /// @param id Task id, e.g. PAY-42.
 mutation procedure unblockTask(id: String): TaskView
   @allow(auth() != null)
+  @mcp(tool: "unblock_task", description: "Put a blocked task back to open (people only: block means it waits for a human).")
 
-/// Cancel an open or blocked task (people only).
+/// Toss (discard) a task: open, blocked or on the fire; a cook holding it loses its lease.
 /// @param id Task id, e.g. PAY-42.
-mutation procedure cancelTask(id: String): TaskView
+/// @param reason Why it is tossed (shown on the task); required for cooks.
+mutation procedure cancelTask(id: String, reason: String?): TaskView
   @allow(auth() != null)
+  @mcp(tool: "toss_task", description: "Toss (discard) a task that should not be done: a duplicate, obsolete, a probe. People can toss any task; a cook only tasks it created or currently holds, with a reason. A tossed task can be restored.")
+
+/// Restore a tossed task to open.
+/// @param id Task id, e.g. PAY-42.
+mutation procedure restoreTask(id: String): TaskView
+  @allow(auth() != null)
+  @mcp(tool: "restore_task", description: "Put a tossed task back to open. People: any task; a cook: tasks it created.")

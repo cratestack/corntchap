@@ -36,7 +36,7 @@ type TaskView {
   /// Higher is picked first by claim_next.
   priority Int
   labels String[]
-  /// open, claimed, blocked, done or cancelled.
+  /// open, claimed, blocked, done or cancelled (shown to people as "Tossed").
   status String
   /// Parent task id when this is a subtask.
   parent String?
@@ -74,7 +74,7 @@ type TaskDetail {
   /// Higher is picked first by claim_next.
   priority Int
   labels String[]
-  /// open, claimed, blocked, done or cancelled.
+  /// open, claimed, blocked, done or cancelled (shown to people as "Tossed").
   status String
   /// Parent task id when this is a subtask.
   parent String?

@@ -5,6 +5,7 @@ use cratestack::{CratestackContext, CratestackError, Value};
 use uuid::Uuid;
 
 use crate::{
+    admin,
     error::Error,
     menus, pantry,
     schema::cratestack_schema::{self, procedures::*},
@@ -62,6 +63,9 @@ pub fn ctx_fields(p: &Principal) -> Vec<(String, Value)> {
     if let Some(k) = &p.agent_kind {
         f.push(("agentKind".to_string(), Value::String(k.clone())));
     }
+    if !p.grants.is_empty() {
+        f.push(("grants".to_string(), Value::String(p.grants.join(","))));
+    }
     f
 }
 
@@ -89,8 +93,42 @@ fn principal(ctx: &CratestackContext) -> Result<Principal, CratestackError> {
         runtime: field_str(ctx, "runtime"),
         agent_kind: field_str(ctx, "agentKind"),
         token_id: None,
+        grants: field_str(ctx, "grants")
+            .map(|g| g.split(',').map(str::to_string).collect())
+            .unwrap_or_default(),
     };
     p.worker().map_err(map_err)
+}
+
+/// Wake targets as the typed view: `config` (which may hold secrets) becomes a short `target`.
+fn wake_target_views(v: serde_json::Value) -> serde_json::Value {
+    let rows = v.as_array().cloned().unwrap_or_default();
+    serde_json::Value::Array(
+        rows.into_iter()
+            .map(|mut w| {
+                let c = w["config"].take();
+                let target = c["url"].as_str().map(str::to_string).or_else(|| {
+                    c["repo"].as_str().map(|r| match &c["issue"] {
+                        serde_json::Value::Null => r.to_string(),
+                        i => format!(
+                            "{r}#{}",
+                            i.as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| i.to_string())
+                        ),
+                    })
+                });
+                if let Some(o) = w.as_object_mut() {
+                    o.remove("config");
+                    o.insert("target".into(), serde_json::json!(target));
+                    if let Some(id) = o.get("id").and_then(|x| x.as_str()).map(str::to_string) {
+                        o.insert("id".into(), serde_json::json!(id));
+                    }
+                }
+                w
+            })
+            .collect(),
+    )
 }
 
 pub fn map_err(e: Error) -> CratestackError {
@@ -311,9 +349,7 @@ impl ProcedureRegistry for Procedures {
         _z: check_item::Authorized,
     ) -> Result<check_item::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(
-            service::check_item(&self.state.db, &p, &a.id, Some(a.epoch), a.position, a.done).await,
-        )
+        typed(service::check_item(&self.state.db, &p, &a.id, a.epoch, a.position, a.done).await)
     }
 
     async fn comment(
@@ -409,7 +445,7 @@ impl ProcedureRegistry for Procedures {
         _z: unblock_task::Authorized,
     ) -> Result<unblock_task::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::human_transition(&self.state.db, &p, &a.id, "unblock").await)
+        typed(service::human_transition(&self.state.db, &p, &a.id, "unblock", None).await)
     }
 
     async fn cancel_task(
@@ -420,7 +456,21 @@ impl ProcedureRegistry for Procedures {
         _z: cancel_task::Authorized,
     ) -> Result<cancel_task::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::human_transition(&self.state.db, &p, &a.id, "cancel").await)
+        typed(
+            service::human_transition(&self.state.db, &p, &a.id, "cancel", a.reason.as_deref())
+                .await,
+        )
+    }
+
+    async fn restore_task(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: restore_task::Args,
+        _z: restore_task::Authorized,
+    ) -> Result<restore_task::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(service::human_transition(&self.state.db, &p, &a.id, "restore", None).await)
     }
 
     async fn memory_recall(
@@ -555,5 +605,304 @@ impl ProcedureRegistry for Procedures {
             status: a.status,
         };
         typed(menus::update(&self.state.db, &p, &a.project, &a.key, e).await)
+    }
+
+    async fn admin_users(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        _a: admin_users::Args,
+        _z: admin_users::Authorized,
+    ) -> Result<admin_users::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::list_users(db, &p).await)
+    }
+
+    async fn admin_add_user(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_add_user::Args,
+        _z: admin_add_user::Authorized,
+    ) -> Result<admin_add_user::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(
+            admin::create_user(db, &p, &a.login, a.isAdmin.unwrap_or(false))
+                .await
+                .map(|mut v| {
+                    v["linked"] = serde_json::json!(false);
+                    v
+                }),
+        )
+    }
+
+    async fn admin_teams(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        _a: admin_teams::Args,
+        _z: admin_teams::Authorized,
+    ) -> Result<admin_teams::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::list_teams(db, &p).await)
+    }
+
+    async fn admin_add_team(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_add_team::Args,
+        _z: admin_add_team::Authorized,
+    ) -> Result<admin_add_team::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::create_team(db, &p, &a.name).await.map(|mut v| {
+            v["id"] = serde_json::json!(
+                v["id"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| v["id"].to_string())
+            );
+            v
+        }))
+    }
+
+    async fn admin_team_members(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_team_members::Args,
+        _z: admin_team_members::Authorized,
+    ) -> Result<admin_team_members::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::list_members(db, &p, &a.team).await)
+    }
+
+    async fn admin_add_member(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_add_member::Args,
+        _z: admin_add_member::Authorized,
+    ) -> Result<admin_add_member::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(
+            admin::add_member(
+                db,
+                &p,
+                &a.team,
+                &a.principal,
+                a.role.as_deref().unwrap_or("member"),
+            )
+            .await,
+        )
+    }
+
+    async fn admin_remove_member(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_remove_member::Args,
+        _z: admin_remove_member::Authorized,
+    ) -> Result<admin_remove_member::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::remove_member(db, &p, &a.team, &a.principal).await)
+    }
+
+    async fn admin_add_project(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_add_project::Args,
+        _z: admin_add_project::Authorized,
+    ) -> Result<admin_add_project::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(
+            admin::create_project(
+                db,
+                &p,
+                &a.team,
+                &a.key,
+                &a.name,
+                a.repoUrl.as_deref(),
+                a.leaseTtlS,
+            )
+            .await,
+        )
+    }
+
+    async fn admin_cooks(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        _a: admin_cooks::Args,
+        _z: admin_cooks::Authorized,
+    ) -> Result<admin_cooks::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::list_principals(db, &p, "agent").await)
+    }
+
+    async fn admin_fires(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        _a: admin_fires::Args,
+        _z: admin_fires::Authorized,
+    ) -> Result<admin_fires::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::list_principals(db, &p, "relay").await)
+    }
+
+    async fn admin_add_cook(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_add_cook::Args,
+        _z: admin_add_cook::Authorized,
+    ) -> Result<admin_add_cook::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(
+            admin::create_principal(
+                db,
+                &p,
+                "agent",
+                &a.name,
+                a.agentKind.as_deref(),
+                a.runtime.as_deref(),
+                a.maxLeases,
+                a.owner.as_deref(),
+            )
+            .await,
+        )
+    }
+
+    async fn admin_add_fire(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_add_fire::Args,
+        _z: admin_add_fire::Authorized,
+    ) -> Result<admin_add_fire::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::create_principal(db, &p, "relay", &a.name, None, None, None, None).await)
+    }
+
+    async fn admin_rotate(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_rotate::Args,
+        _z: admin_rotate::Authorized,
+    ) -> Result<admin_rotate::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::rotate(db, &p, &a.name).await)
+    }
+
+    async fn admin_set_enabled(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_set_enabled::Args,
+        _z: admin_set_enabled::Authorized,
+    ) -> Result<admin_set_enabled::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::set_disabled(db, &p, &a.name, !a.enabled).await)
+    }
+
+    async fn admin_wake_targets(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_wake_targets::Args,
+        _z: admin_wake_targets::Authorized,
+    ) -> Result<admin_wake_targets::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(
+            admin::list_wake_targets(db, &p, &a.cook)
+                .await
+                .map(wake_target_views),
+        )
+    }
+
+    async fn admin_add_wake_target(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_add_wake_target::Args,
+        _z: admin_add_wake_target::Authorized,
+    ) -> Result<admin_add_wake_target::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed({
+            let mut config = serde_json::Map::new();
+            if let Some(u) = a.url {
+                config.insert("url".into(), serde_json::json!(u));
+            }
+            if let Some(r) = a.repo {
+                config.insert("repo".into(), serde_json::json!(r));
+            }
+            if let Some(i) = a.issue {
+                config.insert("issue".into(), serde_json::json!(i));
+            }
+            if let Some(t) = a.token {
+                config.insert("token".into(), serde_json::json!(t));
+            }
+            admin::add_wake_target(
+                db,
+                &p,
+                &a.cook,
+                a.r#type.as_deref().unwrap_or("relay"),
+                csv(&a.projects),
+                csv(&a.labels),
+                serde_json::Value::Object(config),
+            )
+            .await
+            .map(|mut v| {
+                v["id"] =
+                    serde_json::json!(v["id"].as_str().map(str::to_string).unwrap_or_default());
+                v
+            })
+        })
+    }
+
+    async fn admin_delete_wake_target(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_delete_wake_target::Args,
+        _z: admin_delete_wake_target::Authorized,
+    ) -> Result<admin_delete_wake_target::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(match a.id.parse::<Uuid>() {
+            Ok(id) => admin::delete_wake_target(db, &p, id).await,
+            Err(_) => Err(Error::Invalid(format!("bad wake target id {:?}", a.id))),
+        })
+    }
+
+    async fn admin_set_grants(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_set_grants::Args,
+        _z: admin_set_grants::Authorized,
+    ) -> Result<admin_set_grants::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::set_grants(db, &p, &a.name, &csv(&Some(a.grants.clone()))).await)
     }
 }

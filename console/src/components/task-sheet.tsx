@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { TaskDetail } from "@corntchap/api";
-import { Ban, CheckCheck, Loader2, Pencil, Send, Unlock } from "lucide-react";
+import { CheckCheck, Loader2, Pencil, Send, Trash2, Undo2, Unlock } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,7 @@ function TaskDetailBody({ id }: { id: string }) {
   const now = useNow();
   const [editing, setEditing] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [tossReason, setTossReason] = useState("");
   const [serving, setServing] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -175,7 +176,16 @@ function TaskDetailBody({ id }: { id: string }) {
             )}
             {!closed && (
               <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setConfirmCancel(true)} disabled={!!busy}>
-                <Ban /> Cancel
+                <Trash2 /> Toss…
+              </Button>
+            )}
+            {t.status === "cancelled" && (
+              <Button
+                variant="outline"
+                disabled={!!busy}
+                onClick={() => run("restore", () => call("restoreTask", { id: t.id }), `${t.id} is back on the counter`)}
+              >
+                {busy === "restore" ? <Loader2 className="animate-spin" /> : <Undo2 />} Restore
               </Button>
             )}
           </div>
@@ -277,19 +287,33 @@ function TaskDetailBody({ id }: { id: string }) {
       <AlertDialog open={confirmCancel} onOpenChange={setConfirmCancel}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Cancel {t.id}?</AlertDialogTitle>
+            <AlertDialogTitle>Toss {t.id}?</AlertDialogTitle>
             <AlertDialogDescription>
-              The portion leaves the pot for good: “{t.title}”.{" "}
-              {t.status === "claimed" ? "The cook holding it loses its lease and must stop." : "Nobody will scoop it."}
+              “{t.title}” goes to the Tossed shelf: nobody will scoop it.{" "}
+              {t.status === "claimed" ? "The cook holding it loses its lease and must stop. " : ""}
+              You can restore it later.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <Textarea
+            aria-label="Why is it tossed? (optional)"
+            placeholder="Why? (optional, shown on the task) e.g. duplicate of PAY-12"
+            rows={2}
+            value={tossReason}
+            onChange={(e) => setTossReason(e.target.value)}
+          />
           <AlertDialogFooter>
             <AlertDialogCancel>Keep it</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => void run("cancel", () => call("cancelTask", { id: t.id }), `${t.id} cancelled`)}
+              onClick={() =>
+                void run(
+                  "cancel",
+                  () => call("cancelTask", { id: t.id, reason: tossReason.trim() || null }),
+                  `${t.id} tossed`,
+                ).then(() => setTossReason(""))
+              }
             >
-              Cancel the task
+              Toss it
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -54,9 +54,9 @@ mutation procedure heartbeat(id: String, epoch: Int, ttlS: Int?): LeaseRenewal
 /// @param epoch The lease epoch claim_next / claim_task returned for this task.
 /// @param position 1-based position of the item in the checklist.
 /// @param done true to tick, false to untick.
-mutation procedure checkItem(id: String, epoch: Int, position: Int, done: Boolean): TaskDetail
+mutation procedure checkItem(id: String, epoch: Int?, position: Int, done: Boolean): TaskDetail
   @allow(auth() != null)
-  @mcp(tool: "check_item", description: "Tick (or untick) checklist item `position` (1-based). Needs your live lease epoch.")
+  @mcp(tool: "check_item", description: "Tick (or untick) checklist item `position` (1-based). Cooks pass their live lease epoch; people can tick without one.")
 
 /// Comment on a task.
 /// @param id Task id, e.g. PAY-42.
