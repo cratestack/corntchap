@@ -1,0 +1,27 @@
+part of "../corntchap.cstack"
+
+// Read-only procedures: identity, projects, tasks, boards.
+
+procedure whoami(): WhoamiView
+  @allow(auth() != null)
+  @mcp(tool: "whoami", description: "Who you are: name, teams, projects and the leases you currently hold.")
+
+procedure projectOverview(): ProjectSummary[]
+  @allow(auth() != null)
+  @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts.")
+
+procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?): TaskView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts. Optional status/label filters; readyOnly limits to claimable tasks.")
+
+procedure taskDetail(id: String): TaskDetail
+  @allow(auth() != null)
+  @mcp(tool: "get_task", description: "One task with its checklist items, comments, dependencies and subtasks. Task ids look like PAY-42.")
+
+procedure getBoard(project: String): MarkdownDoc
+  @allow(auth() != null)
+  @mcp(tool: "get_board", description: "The project board as markdown with - [ ] checkboxes per task.")
+
+procedure getTaskMarkdown(id: String): MarkdownDoc
+  @allow(auth() != null)
+  @mcp(tool: "get_task_markdown", description: "One task rendered as markdown (the corntchap://task/{id} view): status, body, checklist, dependencies and comments. Returns {markdown}.")

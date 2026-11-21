@@ -1,0 +1,34 @@
+part of "../corntchap.cstack"
+
+// The change feed (changes_since, wait_for_work).
+
+// The keys the event kinds put in `payload` (an open-ended object in the table; task.created's
+// `labels` list is not part of the typed view, read it through the Event model).
+type ChangePayload {
+  title String?
+  agent String?
+  epoch Int?
+  position Int?
+  done Boolean?
+  result String?
+  reason String?
+}
+
+type ChangeView {
+  seq Int
+  kind String
+  project String
+  task String?
+  actor String?
+  at String
+  payload ChangePayload
+}
+
+type ChangeFeed {
+  events ChangeView[]
+  next_cursor Int
+}
+
+type WaitResult {
+  ready TaskView[]
+}

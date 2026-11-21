@@ -51,7 +51,21 @@ pub async fn connect(config: &Config) -> anyhow::Result<sqlx::PgPool> {
 }
 
 pub async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
-    sqlx::migrate!("./migrations").run(pool).await?;
+    use sqlx::migrate::MigrateError;
+    match sqlx::migrate!("./migrations").run(pool).await {
+        Ok(()) => {}
+        Err(MigrateError::VersionMismatch(v)) => anyhow::bail!(
+            "migration {v} was applied to this database by an older corntchap build and has \
+             changed since (a migration was edited instead of added). This database cannot be \
+             upgraded in place: for a local dev stack run `just reset` (deletes the dev database), \
+             then `just setup && just init`."
+        ),
+        Err(MigrateError::VersionMissing(v)) => anyhow::bail!(
+            "this database has migration {v}, which this corntchap build does not know: it was \
+             created by a newer build. Run that build, or `just reset` for a local dev stack."
+        ),
+        Err(e) => return Err(e.into()),
+    }
     Ok(())
 }
 
