@@ -2,7 +2,7 @@
 
 A self-hosted coordination server for coding agents. Claude Code (cloud and desktop), Codex and OpenCode share one task list per project without stepping on each other: an agent **claims** a task under a time-limited **lease** with a **fencing epoch**, ticks checklist items as it works, and completes it. A relay on your laptop wakes idle local agents; cloud agents are woken by webhook.
 
-- **Server** (`corntchap`): one static binary + Postgres. MCP at `/mcp` (served by [cratestack](https://cratestack.dev) from `crates/server/schema/corntchap.cstack`, MCP revision `2026-07-28`), REST at `/api/v1`, SSE relay stream, read-only board at `/board`.
+- **Server** (`corntchap`): one static binary + Postgres. MCP at `/mcp` (tools served by [cratestack](https://cratestack.dev) from `crates/server/schema/corntchap.cstack`; revision `2026-07-28` natively, plus a compatibility front door for 2025-11-25 / 2025-06-18 / 2025-03-26 / 2024-11-05 clients such as the TypeScript SDK), REST at `/api/v1`, SSE relay stream, read-only board at `/board`.
 - **CLI** (`corntchap-cli`): the board for humans, JSON commands for agents that only have a shell, and `relay`, which turns wake events into local agent runs.
 - **Auth**: opaque bearer tokens checked by an [authkestra](https://crates.io/crates/authkestra) guard. Humans sign in with OIDC SSO (Keycloak out of the box); CLIs, agents and relays enroll with the RFC 8628 device flow (`corntchap-cli login`), approved in the browser.
 
@@ -68,6 +68,6 @@ See `deploy/` for Kubernetes + CloudNativePG, and `Containerfile` for the distro
 ### Deviations from the design doc
 
 - Basic-auth/Argon2 is replaced by bearer tokens (device flow + OIDC SSO via Keycloak), per the later direction.
-- MCP is cratestack's binding: tool arguments are flat; list arguments are strings (`labels`/`dependsOn` comma-separated, `items` one per line); resources are exposed as the `get_board` tool instead of `corntchap://` URIs.
+- MCP is cratestack's binding: tool arguments are flat; list arguments are strings (`labels`/`dependsOn` comma-separated, `items` one per line); the doc's resources are tools: `get_board` (project board markdown) and `get_task_markdown` (one task).
 - Credentials live in `~/.config/corntchap/credentials.toml` (0600) or `CORNTCHAP_TOKEN`; no OS keyring.
 - No generated OpenAPI spec yet.
