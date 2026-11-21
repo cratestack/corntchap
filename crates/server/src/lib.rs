@@ -4,6 +4,7 @@ pub mod app;
 pub mod auth;
 pub mod error;
 pub mod jobs;
+pub mod mcp_compat;
 pub mod procs;
 pub mod rest;
 pub mod service;

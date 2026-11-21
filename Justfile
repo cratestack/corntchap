@@ -112,3 +112,7 @@ ps: env-init
 
 logs *args: env-init
     {{load}} docker compose logs {{args}}
+
+# Same check with the official TypeScript MCP SDK (handshake-era revisions). `CORNTCHAP_TOKEN=<agent token> just mcp-check-ts`
+mcp-check-ts project="DEMO":
+    {{load}} mkdir -p .venv-mcp-ts && cd .venv-mcp-ts && ([ -d node_modules/@modelcontextprotocol ] || npm i --silent @modelcontextprotocol/sdk@1.32.2) && cd .. && cp scripts/mcp_check_ts.mjs .venv-mcp-ts/check.mjs && CORNTCHAP_URL="$PUBLIC_URL" PROJECT={{project}} node .venv-mcp-ts/check.mjs

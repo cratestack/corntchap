@@ -161,6 +161,7 @@ const TRIGGERS: &[&str] = &[
     "task.lease_expired",
     "task.completed",
     "task.unblocked",
+    "task.cancelled",
 ];
 
 impl Dispatcher {
@@ -224,7 +225,7 @@ impl Dispatcher {
                and (wt.projects is null or cardinality(wt.projects) = 0 or pr.key = any(wt.projects))
                and exists (select 1 from tasks t where t.project_id = pr.id
                       and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
-                      and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled'))
+                      and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
                       and (wt.labels is null or cardinality(wt.labels) = 0 or t.labels && wt.labels))
                and (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) < a.max_leases",
         )
