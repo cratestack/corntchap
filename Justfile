@@ -46,7 +46,7 @@ image tag="dev":
     rt=$(command -v podman || command -v docker)
     "$rt" build -f Containerfile -t {{image}}:{{tag}} .
 
-# Local Postgres 16 via compose (matches the test defaults on 127.0.0.1:5432).
+# Local Postgres 18 via compose (matches the test defaults on 127.0.0.1:5432).
 db:
     docker compose up -d --wait db
 

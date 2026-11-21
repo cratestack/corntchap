@@ -11,7 +11,6 @@ authkestra = { version = "0.15.3", features = ["axum", "github", "resource"] }
 async-trait = "0.1"
 http = "1"
 anyhow = "1.0.104"
-argon2 = "0.6.0"
 async-stream = "0.3.6"
 axum = "0.8.9"
 base64 = "0.23.1"

@@ -4,6 +4,7 @@ metadata:
   name: corntchap-db
 spec:
   instances: 2
+  imageName: ghcr.io/cloudnative-pg/postgresql:18
   storage:
     size: 5Gi
   bootstrap:

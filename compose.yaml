@@ -5,13 +5,13 @@
 # Postgres alone (for `cargo test` / `just e2e`):  docker compose up -d db
 services:
   db:
-    image: postgres:16
+    image: postgres:18
     environment:
       POSTGRES_USER: corn
       POSTGRES_PASSWORD: corn
       POSTGRES_DB: corntchap
     ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    volumes: ["pgdata:/var/lib/postgresql"]   # PG 18 images keep PGDATA under /var/lib/postgresql/18/docker
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U corn -d corntchap"]
       interval: 3s
