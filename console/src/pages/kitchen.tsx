@@ -28,11 +28,13 @@ import { PaletteButton } from "@/components/shell";
 import { EventFeed } from "@/components/event-feed";
 import { TaskCard, TaskGroup, groupTasks } from "@/components/task-views";
 import { TaskSheet } from "@/components/task-sheet";
+import { NewMemoryDialog, PantryView } from "@/components/pantry";
 
 const VIEWS: { id: BaseView; label: string }[] = [
   { id: "list", label: "List" },
   { id: "board", label: "Board" },
   { id: "activity", label: "Activity" },
+  { id: "pantry", label: "Pantry" },
 ];
 
 function readFilters(p: URLSearchParams): Filters {
@@ -82,7 +84,7 @@ export function PotRedirect() {
 export function KitchenPage() {
   const { key = "", view = "list" } = useParams();
   const potKey = key.toUpperCase();
-  const base: BaseView = view === "board" || view === "activity" ? view : "list";
+  const base: BaseView = view === "board" || view === "activity" || view === "pantry" ? view : "list";
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const openTask = useOpenTask();
@@ -93,6 +95,7 @@ export function KitchenPage() {
   const { events } = useLive();
   const filters = readFilters(params);
   const selected = params.get("task");
+  const [newMemory, setNewMemory] = useState(false);
 
   useEffect(() => {
     if (project) rememberView(potKey, base);
@@ -158,7 +161,7 @@ export function KitchenPage() {
         setFilter={setFilter}
         clearFilters={clearFilters}
         tasks={all}
-        onNew={() => openNewTask(potKey)}
+        onNew={() => (base === "pantry" ? setNewMemory(true) : openNewTask(potKey))}
         applyView={(v) => {
           const qs = new URLSearchParams();
           for (const [k, val] of Object.entries(v.filters)) if (val) qs.set(k, val);
@@ -184,9 +187,16 @@ export function KitchenPage() {
         )}
         {base === "board" && <BoardView loading={tasks.isLoading} tasks={visible} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey)} total={all.length} />}
         {base === "activity" && <ActivityView events={potEvents} />}
+        {base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
       </div>
 
       <TaskSheet id={selected} onClose={closeSheet} />
+      <NewMemoryDialog
+        potKey={potKey}
+        open={newMemory}
+        onClose={() => setNewMemory(false)}
+        onSaved={(k) => setParams((p) => { const n = new URLSearchParams(p); n.set("memory", k); return n; }, { replace: false })}
+      />
     </div>
   );
 }
@@ -239,7 +249,7 @@ function PotHeader({
         <div className="flex items-center gap-2">
           <PaletteButton />
           <Button onClick={onNew}>
-            <Plus /> New task
+            <Plus /> {base === "pantry" ? "Stock the pantry" : "New task"}
           </Button>
         </div>
       </div>
@@ -249,8 +259,8 @@ function PotHeader({
           {VIEWS.map((v) => (
             <Link
               key={v.id}
-              to={{ pathname: `/pots/${project.key}/${v.id}`, search: v.id === "activity" ? "" : loc.search }}
-              aria-current={base === v.id && !active ? "page" : undefined}
+              to={{ pathname: `/pots/${project.key}/${v.id}`, search: v.id === "activity" || v.id === "pantry" || base === "pantry" ? "" : loc.search }}
+              aria-current={base === v.id && !(active && base !== "pantry") ? "page" : undefined}
               className={cn(
                 "rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
                 base === v.id && "bg-card text-foreground shadow-sm",
@@ -278,7 +288,7 @@ function PotHeader({
           />
         </nav>
 
-        {base !== "activity" && (
+        {base !== "activity" && base !== "pantry" && (
           <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
             <FilterChip
               label="Status"
@@ -584,6 +594,7 @@ const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[
   { id: "served", label: "Served", match: (k) => k === "task.completed" },
   { id: "checklist", label: "Checklists", match: (k) => k === "item.checked" },
   { id: "comments", label: "Comments", match: (k) => k === "task.commented" },
+  { id: "pantry", label: "Pantry", match: (k) => k.startsWith("memory.") },
   { id: "edits", label: "New and edited", match: (k) => k === "task.created" || k === "task.updated" },
 ];
 
