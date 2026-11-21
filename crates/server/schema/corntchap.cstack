@@ -1,0 +1,90 @@
+// corntchap: agent coordination. Every MCP tool is a procedure here; the REST surface
+// in src/rest.rs calls the same service functions, so the two cannot disagree.
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+mcp {
+  expose = [tools]
+}
+
+auth Caller {
+  id String
+  name String
+  kind String
+  isAdmin Boolean
+  maxLeases Int
+  ownerId String?
+  runtime String?
+  agentKind String?
+}
+
+procedure whoami(): Json
+  @allow(auth() != null)
+  @mcp(tool: "whoami", description: "Who you are: name, teams, projects and the leases you currently hold.")
+
+procedure listProjects(): Json
+  @allow(auth() != null)
+  @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts.")
+
+procedure listTasks(project: String, status: String?, label: String?, readyOnly: Boolean?): Json
+  @allow(auth() != null)
+  @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts. Optional status/label filters; readyOnly limits to claimable tasks.")
+
+procedure getTask(id: String): Json
+  @allow(auth() != null)
+  @mcp(tool: "get_task", description: "One task with its checklist items, comments, dependencies and subtasks. Task ids look like PAY-42.")
+
+procedure getBoard(project: String): Json
+  @allow(auth() != null)
+  @mcp(tool: "get_board", description: "The project board as markdown with - [ ] checkboxes per task.")
+
+mutation procedure createTask(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?): Json
+  @allow(auth() != null)
+  @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated.")
+
+mutation procedure updateTask(id: String, title: String?, body: String?, priority: Int?, labels: String?): Json
+  @allow(auth() != null)
+  @mcp(tool: "update_task", description: "Edit title, body, priority or labels (labels is comma-separated and replaces the set). Not status. Agents may only edit a task they currently hold.")
+
+mutation procedure claimNext(project: String, labels: String?): Json
+  @allow(auth() != null)
+  @mcp(tool: "claim_next", description: "Atomically take the best ready task in a project. Returns the task and a lease {epoch, expires_at}, or {none: true}. Optional labels (comma-separated) restricts which tasks you accept.")
+
+mutation procedure claimTask(id: String): Json
+  @allow(auth() != null)
+  @mcp(tool: "claim_task", description: "Claim one named task. Returns the task and a lease {epoch, expires_at}.")
+
+mutation procedure heartbeat(id: String, epoch: Int, ttlS: Int?): Json
+  @allow(auth() != null)
+  @mcp(tool: "heartbeat", description: "Extend your lease. Any call carrying the epoch also extends it, so you rarely need this.")
+
+mutation procedure checkItem(id: String, epoch: Int, position: Int, done: Boolean): Json
+  @allow(auth() != null)
+  @mcp(tool: "check_item", description: "Tick (or untick) checklist item `position` (1-based). Needs your live lease epoch.")
+
+mutation procedure comment(id: String, body: String, epoch: Int?): Json
+  @allow(auth() != null)
+  @mcp(tool: "comment", description: "Add a note or handoff to a task. No lease needed; pass epoch to also extend yours.")
+
+mutation procedure complete(id: String, epoch: Int, result: String): Json
+  @allow(auth() != null)
+  @mcp(tool: "complete", description: "Mark the task done. Fails with lease_lost if the epoch is stale: then stop and report, your work is not counted.")
+
+mutation procedure release(id: String, epoch: Int, reason: String): Json
+  @allow(auth() != null)
+  @mcp(tool: "release", description: "Give the task back (status open) for someone else.")
+
+mutation procedure block(id: String, epoch: Int, reason: String): Json
+  @allow(auth() != null)
+  @mcp(tool: "block", description: "Mark the task blocked; it waits for a human to unblock it.")
+
+procedure changesSince(cursor: Int, project: String?, limit: Int?): Json
+  @allow(auth() != null)
+  @mcp(tool: "changes_since", description: "Events after a cursor (0 to start) plus the next cursor; empty when nothing moved.")
+
+procedure waitForWork(project: String?, timeoutS: Int?): Json
+  @allow(auth() != null)
+  @mcp(tool: "wait_for_work", description: "Long-poll (up to 55 s) until a task is ready for you; returns the ready tasks or an empty list. Does not claim.")

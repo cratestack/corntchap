@@ -1,0 +1,90 @@
+use clap::{Parser, Subcommand};
+use corntchap::{
+    admin, app,
+    state::{AppState, Config, GithubConfig},
+};
+
+#[derive(Parser)]
+#[command(name = "corntchap", version, about = "Coordination server for coding agents: tasks, leases, MCP, REST")]
+struct Cli {
+    #[arg(long, env = "DATABASE_URL", global = true)]
+    database_url: Option<String>,
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Run the server (default).
+    Serve,
+    /// Apply the database schema.
+    Migrate,
+    /// Create the first admin (a GitHub login) and print a 7-day bootstrap token.
+    Init {
+        #[arg(long)]
+        admin: String,
+    },
+    /// Mint a token for an existing user/agent/relay (needs database access).
+    Token {
+        #[arg(long)]
+        name: String,
+        /// Lifetime in hours; omit for no expiry.
+        #[arg(long)]
+        hours: Option<i64>,
+    },
+}
+
+fn env(k: &str) -> Option<String> {
+    std::env::var(k).ok().filter(|v| !v.is_empty())
+}
+
+fn config(cli: &Cli) -> anyhow::Result<Config> {
+    let db = cli.database_url.clone().ok_or_else(|| anyhow::anyhow!("DATABASE_URL is required"))?;
+    let bind = env("BIND").unwrap_or_else(|| "0.0.0.0:8080".into());
+    let public = env("PUBLIC_URL").unwrap_or_else(|| format!("http://localhost:{}", bind.rsplit(':').next().unwrap_or("8080")));
+    let mut c = Config::new(db, public, bind);
+    if let (Some(id), Some(secret)) = (env("GITHUB_CLIENT_ID"), env("GITHUB_CLIENT_SECRET")) {
+        c.github = Some(GithubConfig::new(id, secret));
+    }
+    Ok(c)
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())).init();
+    let cli = Cli::parse();
+    let cfg = config(&cli)?;
+    let pool = app::connect(&cfg).await?;
+    match cli.cmd.unwrap_or(Cmd::Serve) {
+        Cmd::Migrate => {
+            app::migrate(&pool).await?;
+            println!("schema is up to date");
+        }
+        Cmd::Init { admin: login } => {
+            let (name, token) = admin::init_admin(&pool, &login).await?;
+            println!("admin: {name}");
+            if let Some(t) = token {
+                println!("bootstrap token (shown once, valid 7 days): {t}");
+                println!("sign in:  corntchap-cli login {}   (or: corntchap-cli login --token <token>)", cfg.public_url);
+            }
+        }
+        Cmd::Token { name, hours } => {
+            println!("{}", admin::operator_token(&pool, &name, hours.map(|h| h * 3600)).await?);
+        }
+        Cmd::Serve => {
+            if env("AUTO_MIGRATE").as_deref() == Some("1") {
+                app::migrate(&pool).await?;
+            }
+            if cfg.github.is_none() {
+                tracing::warn!("GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET not set: browser sign-in and device approval are disabled");
+            }
+            let bind = cfg.bind.clone();
+            let state = AppState::new(pool, cfg);
+            let router = app::build(state)?;
+            let listener = tokio::net::TcpListener::bind(&bind).await?;
+            tracing::info!("listening on {bind}");
+            axum::serve(listener, router).with_graceful_shutdown(async { let _ = tokio::signal::ctrl_c().await; }).await?;
+        }
+    }
+    Ok(())
+}
