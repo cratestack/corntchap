@@ -76,7 +76,9 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                // sqlx's "relation _sqlx_migrations already exists, skipping" notice is noise.
+                .unwrap_or_else(|_| "info,sqlx::postgres::notice=warn".into()),
         )
         .init();
     let cli = Cli::parse();
@@ -93,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(t) = token {
                 println!("bootstrap token (shown once, valid 7 days): {t}");
                 println!(
-                    "sign in:  corntchap-cli login {}   (or: corntchap-cli login --token <token>)",
+                    "sign in:  corntchap-cli login {} --token <token>   (`just init` does this for you)",
                     cfg.public_url
                 );
             }

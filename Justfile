@@ -1,12 +1,13 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set positional-arguments
 
 # Static musl target (needs `musl-tools` on Debian/Ubuntu: apt install musl-tools).
 target := "x86_64-unknown-linux-musl"
 image  := "ghcr.io/stephane-segning/corntchap"
 
 # Local settings: random ports from `just setup` live in .env.dev; optional overrides in .env.
-# Every recipe that needs them starts with {{load}}.
-load := "set -a; [ -f .env ] && . ./.env; [ -f .env.dev ] && . ./.env.dev; set +a;"
+# .env.dev is loaded first, then .env, so values in .env win. Every recipe that needs them starts with {{load}}.
+load := "set -a; if [ -f .env.dev ]; then . ./.env.dev; fi; if [ -f .env ]; then . ./.env; fi; set +a;"
 
 default:
     @just --list
@@ -66,7 +67,7 @@ up: env-init
 
 # Trust mise.toml and install the toolchain (skipped when mise is not installed).
 deps:
-    if command -v mise >/dev/null; then mise trust -y && mise install; else echo "mise not found: install Rust 1.100+ yourself (https://mise.jdx.dev)"; fi
+    if command -v mise >/dev/null; then mise trust -y && mise install; else echo "mise not found: install Rust 1.100 yourself (rust-toolchain.toml pins it) (https://mise.jdx.dev)"; fi
 
 # Toolchain, Postgres + Keycloak (compose, random ports) and the schema.
 setup: deps infra
@@ -77,8 +78,9 @@ setup: deps infra
 init admin="admin": env-init
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; [ -f .env ] && . ./.env; [ -f .env.dev ] && . ./.env.dev; set +a
-    out=$(cargo run -q -p corntchap -- init --admin {{admin}})
+    set -a; if [ -f .env.dev ]; then . ./.env.dev; fi; if [ -f .env ]; then . ./.env; fi; set +a
+    out=$(cargo run -q -p corntchap -- init --admin "{{admin}}")
+    # the bootstrap token is a secret: show it once, never echo the login command
     echo "$out"
     tok=$(printf '%s\n' "$out" | sed -n 's/^bootstrap token[^:]*: //p')
     if [ -n "$tok" ]; then
@@ -93,19 +95,36 @@ serve: env-init run-server
 
 # Any corntchap-cli command: `just cli task ls PAY`.
 cli *args:
-    cargo run -q -p corntchap-cli -- {{args}}
+    @cargo run -q -p corntchap-cli -- "$@"
 
 # Sign in with the device flow (opens the browser). Pass a token to skip it: `just login ct_...`.
 login token="": env-init
-    {{load}} cargo run -q -p corntchap-cli -- login "$PUBLIC_URL" {{ if token == "" { "" } else { "--token " + token } }}
+    @{{load}} cargo run -q -p corntchap-cli -- login "$PUBLIC_URL" ${1:+--token "$1"}
 
-# Demo data: team acme, project DEMO, one agent (its token is printed once), one task.
+# Demo data: team acme, project DEMO, one agent (its token is printed once), one task. Re-runnable: steps that
+# already exist are skipped (the agent token is only printed the first time).
 seed:
-    cargo run -q -p corntchap-cli -- team add acme
-    cargo run -q -p corntchap-cli -- project add acme DEMO Demo
-    cargo run -q -p corntchap-cli -- agent add demo-agent --kind other --runtime local
-    cargo run -q -p corntchap-cli -- team join acme demo-agent
-    cargo run -q -p corntchap-cli -- task add DEMO "Try the board" --item "claim me" --item "tick me"
+    #!/usr/bin/env bash
+    set -uo pipefail
+    step() {
+      local label=$1; shift
+      if out=$(cargo run -q -p corntchap-cli -- "$@" 2>&1); then
+        printf '%s\n' "$out"
+      elif printf '%s' "$out" | grep -qiE '409|already exists|conflict|exists'; then
+        echo "skip: $label (already exists)"
+      else
+        printf '%s\n' "$out" >&2; echo "seed failed at: $label" >&2; exit 1
+      fi
+    }
+    step "team acme" team add acme
+    step "project DEMO" project add acme DEMO Demo
+    step "agent demo-agent" agent add demo-agent --kind other --runtime local
+    step "team membership" team join acme demo-agent
+    if cargo run -q -p corntchap-cli -- task ls DEMO 2>/dev/null | grep -q "Try the board"; then
+      echo "skip: task 'Try the board' (already exists)"
+    else
+      step "task" task add DEMO "Try the board" --item "claim me" --item "tick me"
+    fi
 
 # Drive a running server with the official MCP Python SDK. `CORNTCHAP_TOKEN=<agent token> just mcp-check`
 mcp-check project="DEMO":
@@ -127,8 +146,9 @@ reset: env-init
 ps: env-init
     {{load}} docker compose ps
 
+# e.g. `just logs -f corntchap`
 logs *args: env-init
-    {{load}} docker compose logs {{args}}
+    @{{load}} docker compose logs "$@"
 
 # Same check with the official TypeScript MCP SDK (handshake-era revisions). `CORNTCHAP_TOKEN=<agent token> just mcp-check-ts`
 mcp-check-ts project="DEMO":

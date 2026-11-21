@@ -8,12 +8,12 @@ A self-hosted coordination server for coding agents. Claude Code (cloud and desk
 
 ## Quick start
 
-Needs `mise` and Docker, nothing else to configure: compose starts Postgres 18 and Keycloak with a ready-made realm (users `admin`/`admin` and `dev`/`dev`). Ports are random on purpose: `just setup` picks free ones (saved in `.env.dev`) and prints them. Everything goes through `just`:
+Needs `mise`, Docker and `python3` (random-port picker, e2e and MCP checks), nothing else to configure: compose starts Postgres 18 and Keycloak with a ready-made realm (users `admin`/`admin` and `dev`/`dev`). Ports are random on purpose: `just setup` picks free ones (saved in `.env.dev`) and prints them. Everything goes through `just`:
 
 ```bash
-mise trust && mise install                      # one-time: rust, just (`just setup` also does this)
+mise trust && mise install                      # one-time: rust 1.100 (pinned), just (`just setup` also does this)
 just setup                                      # Postgres + Keycloak via compose, then the schema
-just init                                      # first admin = Keycloak user `admin`; signs the CLI in with the printed 7-day bootstrap token
+just init                                       # first admin = Keycloak user `admin`; signs the CLI in with the printed 7-day bootstrap token
 just serve                                     # server on the random port printed by setup
 ```
 
@@ -26,7 +26,7 @@ corntchap-cli kitchen                          # the live board; or: corntchap-c
 corntchap-cli marabou                           # server, login, relay credential and config in one check
 ```
 
-`just init` stores the bootstrap token for you (`just login` is only needed to sign in again, e.g. through the browser device flow as admin/admin). `just down` stops the containers and keeps the database; `just reset` also deletes the database and your stored CLI tokens (they die with it), so start over with `just setup && just init`. If a command says the server rejected your stored credential, run `corntchap-cli login <server>`; `corntchap-cli logout` signs out (revokes the token on the server and deletes it locally).
+`just init` stores the bootstrap token for you (`just login` is only needed to sign in again, e.g. through the browser device flow as admin/admin; `just login <token>` stores a token you already have, tokens start with `ct_`). `just down` stops the containers and keeps the database; `just reset` also deletes the database and your stored CLI tokens (they die with it), so start over with `just setup && just init`. If a command says the server rejected your stored credential, run `corntchap-cli login <server>`; `corntchap-cli logout` signs out (revokes the token on the server and deletes it locally).
 
 `corntchap-cli user add <login>` is optional pre-provisioning: users are also created on their first OIDC sign-in.
 
@@ -40,7 +40,7 @@ Human output is tidy tables and short confirmations (colour only on a TTY, never
 - `corntchap-cli marabou`: checks the server, your login, the relay credential and `config.toml`.
 - `corntchap-cli logout [--relay | --all]`.
 
-Production: set `DATABASE_URL`, `PUBLIC_URL` (https), `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (a confidential client whose redirect URI is `$PUBLIC_URL/auth/oidc/callback`), then run `corntchap migrate`, `corntchap init --admin <login>`, `corntchap serve` (or `just up` for the container stack, `deploy/` for Kubernetes + CNPG). The same CLI commands work against any server: `corntchap-cli login <url>`, `team add`, `project add`, `agent add <name> --kind … --runtime …`, `team join`, `task add`.
+Production: set `DATABASE_URL`, `PUBLIC_URL` (https), `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (a confidential client whose redirect URI is `$PUBLIC_URL/auth/oidc/callback`), then run `corntchap migrate`, `corntchap init --admin <login>`, `corntchap serve`, or deploy the image (`ghcr.io/stephane-segning/corntchap`) with `deploy/` for Kubernetes + CNPG. (`just up` is the *development* stack with the dev Keycloak realm and well-known passwords; never expose it.) The same CLI commands work against any server: `corntchap-cli login <url>`, `team add`, `project add`, `agent add <name> --kind … --runtime …`, `team join`, `task add`.
 
 Point an agent at the server (Claude Code `.mcp.json`; keep the token in an env var):
 
@@ -53,25 +53,39 @@ Point an agent at the server (Claude Code `.mcp.json`; keep the token in an env 
 
 ```bash
 corntchap-cli fire enroll relay-laptop          # device flow, stores the relay credential
-corntchap-cli fire init                         # writes a commented ~/.config/corntchap/config.toml (never overwrites; --force)
+corntchap-cli fire init                         # writes a commented config.toml (never overwrites; --force)
 corntchap-cli cook setup claude-laptop --kind claude-code --runtime local --team acme
 #   creates the agent, joins the team, adds a relay wake target, and prints the MCP config
 #   (Claude Code .mcp.json / Codex config.toml / OpenCode opencode.json) plus the [[target]] block to paste into config.toml
-corntchap-cli fire doctor && corntchap-cli fire install
+corntchap-cli fire doctor                       # or `marabou`: checks the server, the credential and each target
+corntchap-cli fire install                      # systemd user unit (Linux) / launchd agent (macOS)
 corntchap-cli cook wake ls                      # all your agents' wake targets
 # cloud agents: a webhook (e.g. a Claude routine /fire URL) or a github-comment target
 corntchap-cli cook wake add claude-cloud-1 --type webhook --url https://… --token …
 # an agent registered by device flow instead (token printed once): corntchap-cli cook enroll <name> --kind codex --runtime local
 ```
 
+Config and credentials live in `~/.config/corntchap/` on Linux and `~/Library/Application Support/corntchap/` on macOS; set `CORNTCHAP_CONFIG_DIR` to use another directory. Example `config.toml` (the optional top-level `server = "https://…"` overrides the login's server; `timeout` takes `90`, `90s`, `45m`, `1h30m`):
+
 ```toml
-# ~/.config/corntchap/config.toml  (the optional top-level `server = "https://…"` overrides the login's server)
 [[target]]
-agent = "opencode-laptop"; adapter = "opencode"; url = "http://127.0.0.1:4096"; directory = "~/code/payments"
+agent = "opencode-laptop"
+adapter = "opencode"
+url = "http://127.0.0.1:4096"
+directory = "~/code/payments"
+
 [[target]]
-agent = "codex-laptop"; adapter = "exec"; command = ["codex", "exec", "resume", "--last", "-"]; cwd = "~/code/payments"; timeout = "45m"
+agent = "codex-laptop"
+adapter = "exec"
+command = ["codex", "exec", "resume", "--last", "-"]
+cwd = "~/code/payments"
+timeout = "45m"
+
 [[target]]
-agent = "claude-laptop"; adapter = "exec"; command = ["claude", "-p", "--continue"]; cwd = "~/code/payments"
+agent = "claude-laptop"
+adapter = "exec"
+command = ["claude", "-p", "--continue"]
+cwd = "~/code/payments"
 ```
 
 The relay remembers the last event id it saw (`relay-state.json` next to `credentials.toml`) and sends it as `Last-Event-ID` on restart, so wakes sent while it was down are replayed.
@@ -79,12 +93,15 @@ The relay remembers the last event id it saw (`relay-state.json` next to `creden
 ## Develop
 
 ```bash
-mise trust && mise install    # (trust is a one-time prompt) rust 1.100, just (mise.toml); Postgres runs in Docker
+mise trust && mise install    # (trust is a one-time prompt) rust 1.100 (pinned in rust-toolchain.toml; the workspace minimum is 1.98), just; needs Docker and python3
 just db                      # Postgres via compose.yaml, on a random loopback port (.env.dev)
-just up                      # or the whole stack in containers; just down stops it, just reset wipes it
-just test      # unit + integration (needs Postgres; TEST_DATABASE_ADMIN_URL, default postgres://corn:corn@127.0.0.1/postgres)
+just up                      # or the whole dev stack in containers; just down stops it, just reset wipes it
+just ps / just logs -f       # compose status / logs (plain `docker compose` needs `--env-file .env.dev`, or run it via mise)
+just test      # unit + integration (needs Postgres; `just setup`/`just db` provide it)
 just e2e       # real binaries: server + CLI + relay + a fake agent
 ```
+
+Each checkout gets its own compose project (named after the directory), so two clones do not share containers or volumes. Set `TEST_DATABASE_ADMIN_URL` to point tests at another Postgres.
 
 See `deploy/` for Kubernetes + CloudNativePG, and `Containerfile` for the distroless static image (ghcr.io/stephane-segning/corntchap).
 
@@ -92,5 +109,5 @@ See `deploy/` for Kubernetes + CloudNativePG, and `Containerfile` for the distro
 
 - Basic-auth/Argon2 is replaced by bearer tokens (device flow + OIDC SSO via Keycloak), per the later direction.
 - MCP is cratestack's binding: tool arguments are flat; list arguments are strings (`labels`/`dependsOn` comma-separated, `items` one per line); the doc's resources are tools: `get_board` (project board markdown) and `get_task_markdown` (one task).
-- Credentials live in `~/.config/corntchap/credentials.toml` (0600) or `CORNTCHAP_TOKEN`; no OS keyring.
+- Credentials live in `credentials.toml` in the config dir (see above) (0600) or `CORNTCHAP_TOKEN`; no OS keyring.
 - No generated OpenAPI spec yet.

@@ -1,4 +1,6 @@
 # Dev dependencies: `mise install` then `mise run <task>` (tasks wrap the Justfile).
+# Also needed on the host: Docker and python3 (scripts/devenv.py, e2e, mcp-check).
+# Rust is pinned to 1.100, same as rust-toolchain.toml (workspace rust-version 1.98 is only the minimum cratestack needs).
 [tools]
 rust = { version = "1.100", components = "rustfmt,clippy", targets = "x86_64-unknown-linux-musl" }
 just = "latest"

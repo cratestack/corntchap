@@ -1,0 +1,6 @@
+# Pinned toolchain. Workspace `rust-version` (1.98, the floor cratestack needs) is the minimum; we build with 1.100.
+[toolchain]
+channel = "1.100"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-unknown-linux-musl"]
+profile = "minimal"

@@ -6,5 +6,8 @@ spec:
   # CNPG uses six fields (seconds first): every day at 03:00.
   schedule: "0 0 3 * * *"
   backupOwnerReference: self
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
   cluster:
     name: corntchap-db

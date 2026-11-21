@@ -1,7 +1,11 @@
-# Local stack: Postgres + corntchap built from the Containerfile.
-# Use `just up` / `just db` (they pick random free ports into .env.dev); plain `docker compose` needs
-# PG_PORT, APP_PORT and PUBLIC_URL in the environment.
-#   just up && docker compose exec corntchap /corntchap init --admin <your-github-login>
+# Local DEV stack: Postgres 18, Keycloak (dev realm, users admin/admin and dev/dev) and corntchap built from the
+# Containerfile. Not for production (see deploy/).
+# Use `just setup` / `just up` / `just ps` / `just logs`: they pick random free ports into .env.dev and load them.
+# Plain `docker compose ...` needs KC_PORT, PG_PORT, APP_PORT and PUBLIC_URL in the environment; mise exports
+# COMPOSE_ENV_FILES=.env.dev, or pass `--env-file .env.dev`.
+# The compose project name defaults to this directory's name, so two checkouts get separate containers and volumes;
+# set COMPOSE_PROJECT_NAME to override.
+#   just up && docker compose exec corntchap /corntchap init --admin admin   # or simply: just init
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:latest

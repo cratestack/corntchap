@@ -26,6 +26,16 @@ mkdir -p "$dir"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 echo "downloading $url"
 curl -fsSL "$url" -o "$tmp/$asset"
+curl -fsSL "$url.sha256" -o "$tmp/$asset.sha256"
+want=$(awk '{print $1}' "$tmp/$asset.sha256")
+if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$tmp/$asset" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then got=$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')
+else echo "need sha256sum or shasum to verify the download" >&2; exit 1; fi
+if [ -z "$want" ] || [ "$want" != "$got" ]; then
+  echo "checksum mismatch for $asset (expected ${want:-none}, got $got); not installing" >&2
+  exit 1
+fi
+echo "checksum ok"
 tar xzf "$tmp/$asset" -C "$tmp"
 install -m 0755 "$tmp/corntchap-cli-$os-$arch" "$dir/corntchap-cli"
 echo "installed $dir/corntchap-cli"
