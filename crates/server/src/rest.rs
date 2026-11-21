@@ -3,7 +3,7 @@
 use authkestra::axum::Auth as Authn;
 use axum::{
     extract::{Path, Query, State},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde_json::{json, Value};

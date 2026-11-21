@@ -132,6 +132,7 @@ pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
 
 #[derive(sqlx::FromRow, Debug)]
 struct Candidate {
+    #[allow(dead_code)]
     target_id: Uuid,
     agent_id: Uuid,
     agent: String,

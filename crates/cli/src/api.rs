@@ -118,9 +118,6 @@ impl Api {
     pub async fn post(&self, path: &str, body: Value) -> Result<Value> {
         self.send(self.req(reqwest::Method::POST, path).json(&body)).await
     }
-    pub async fn patch(&self, path: &str, body: Value) -> Result<Value> {
-        self.send(self.req(reqwest::Method::PATCH, path).json(&body)).await
-    }
     pub async fn delete(&self, path: &str) -> Result<Value> {
         self.send(self.req(reqwest::Method::DELETE, path)).await
     }

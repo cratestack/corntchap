@@ -1,7 +1,9 @@
 [package]
 name = "corntchap"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 cratestack = { package = "cratestack-pg", version = "0.20.6", features = ["mcp"] }

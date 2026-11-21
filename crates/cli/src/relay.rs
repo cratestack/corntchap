@@ -26,7 +26,6 @@ pub struct Target {
 
 #[derive(Deserialize, Default)]
 pub struct RelayConfig {
-    pub server: Option<String>,
     #[serde(default)]
     pub target: Vec<Target>,
 }

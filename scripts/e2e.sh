@@ -15,7 +15,7 @@ psql "$ADMIN_URL" -qc "create database $DB"
 export DATABASE_URL="${ADMIN_URL%/*}/$DB" BIND=127.0.0.1:$PORT PUBLIC_URL=http://127.0.0.1:$PORT RUST_LOG=warn
 export CORNTCHAP_CONFIG_DIR=$WORK/cfg CORNTCHAP_NO_BROWSER=1
 SERVER=http://127.0.0.1:$PORT
-CLI=$BIN/corntchap-cli
+CLI=$(cd "$BIN" && pwd)/corntchap-cli
 
 $BIN/corntchap migrate
 BOOT=$($BIN/corntchap init --admin octo | sed -n 's/^bootstrap token[^:]*: //p')
