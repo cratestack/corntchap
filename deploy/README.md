@@ -22,8 +22,17 @@ Humans sign in through any OpenID provider; Keycloak is the reference. In your r
 - Valid redirect URIs: `https://HOST/auth/oidc/callback`
 - Set `OIDC_ISSUER` in `deployment.yaml` to the realm URL (`https://KEYCLOAK/realms/<realm>`).
 
-Users are matched by the `preferred_username` claim (then pinned to the OIDC subject on first sign-in), so disable
-"Edit username" for users in the realm and only provision usernames you control (`corntchap-cli user add <username>`).
+Users are created on first sign-in (just-in-time) with the name from `preferred_username` (or the local part of a
+*verified* e-mail). A user pre-provisioned with `corntchap-cli user add <username>` is linked to the OIDC subject on
+first sign-in. Because the username is trusted for that link, **disable "Edit username"** in the realm (Realm settings,
+Login) so users cannot rename themselves to someone else's login.
+
+Admins come from the IdP: add a realm role named `corntchap-admin` (override with `OIDC_ADMIN_ROLE`) and a client mapper
+"User Realm Role" that puts roles into the ID token (claim `realm_access.roles`, add to ID token). The flag is synced on
+every sign-in; a top-level `roles` or `groups` array also works. Admins made with `corntchap init --admin` or
+`user add --admin` are never demoted by the IdP. Set `OIDC_PUBLIC_ISSUER` when browsers reach Keycloak under a different
+URL than the server does (it is used for the IdP logout redirect). Browser logout (`POST /logout`) also ends the
+Keycloak session.
 
 Store the client credentials (the Deployment reads `client-id` and `client-secret` from this secret):
 

@@ -9,6 +9,10 @@ create table principals (
   runtime text,
   max_leases int not null default 1,
   is_admin bool not null default false,
+  -- who owns the admin flag: 'init' (corntchap init --admin; never demoted by the IdP),
+  -- 'manual' (user add --admin / default; never demoted by the IdP), 'oidc' (granted by the
+  -- IdP role claim; synced, so it is revoked again when the role disappears).
+  admin_source text not null default 'manual' check (admin_source in ('init','manual','oidc')),
   disabled_at timestamptz,
   last_seen_at timestamptz,
   created_at timestamptz not null default now()
@@ -134,7 +138,7 @@ create table tokens (
 );
 create index tokens_principal on tokens(principal_id);
 
--- RFC 8628 device authorization grant. A human approves in the browser (GitHub SSO);
+-- RFC 8628 device authorization grant. A human approves in the browser (OIDC SSO);
 -- the device then exchanges its device_code for a token.
 create table device_requests (
   id uuid primary key default gen_random_uuid(),
@@ -165,6 +169,7 @@ create table web_sessions (
   id_hash bytea primary key,
   user_id uuid not null references principals(id) on delete cascade,
   csrf text not null,
+  id_token text, -- kept as id_token_hint for IdP logout
   created_at timestamptz not null default now(),
   expires_at timestamptz not null
 );

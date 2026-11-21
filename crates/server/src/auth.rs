@@ -1,5 +1,5 @@
 //! Authentication: opaque bearer tokens, checked by an authkestra `Guard`.
-//! Tokens are minted by the RFC 8628 device flow (approved through GitHub SSO)
+//! Tokens are minted by the RFC 8628 device flow (approved through OIDC SSO)
 //! or by `corntchap token` / `agent add`; only a SHA-256 of each is stored.
 
 use std::sync::Arc;
@@ -97,6 +97,7 @@ impl TokenValidator for DbTokenValidator {
             max_leases: r.max_leases,
             runtime: r.runtime,
             agent_kind: r.agent_kind,
+            token_id: Some(r.token_id),
         }))
     }
 }

@@ -64,6 +64,9 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
             issuer,
             client_id: id,
             client_secret: secret,
+            public_issuer: env("OIDC_PUBLIC_ISSUER"),
+            admin_role: env("OIDC_ADMIN_ROLE")
+                .unwrap_or_else(|| corntchap::state::DEFAULT_ADMIN_ROLE.to_string()),
         });
     }
     Ok(c)
