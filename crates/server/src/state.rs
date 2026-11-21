@@ -43,7 +43,14 @@ impl Config {
     pub fn new(database_url: String, public_url: String, bind: String) -> Self {
         let public_url = public_url.trim_end_matches('/').to_string();
         let require_https = public_url.starts_with("https://");
-        Config { database_url, public_url, bind, require_https, github: None, run_background: true }
+        Config {
+            database_url,
+            public_url,
+            bind,
+            require_https,
+            github: None,
+            run_background: true,
+        }
     }
 }
 
@@ -72,7 +79,9 @@ impl Principal {
     /// Users and agents work tasks; relays only listen for wakes.
     pub fn worker(self) -> crate::error::Result<Principal> {
         if self.is_relay() {
-            Err(crate::error::Error::Forbidden("relays cannot read or change tasks".into()))
+            Err(crate::error::Error::Forbidden(
+                "relays cannot read or change tasks".into(),
+            ))
         } else {
             Ok(self)
         }
@@ -114,6 +123,12 @@ impl AppState {
             .build()
             .expect("http client");
         let guard = crate::auth::build_guard(db.clone());
-        AppState(Arc::new(Inner { db, config, http, events, guard }))
+        AppState(Arc::new(Inner {
+            db,
+            config,
+            http,
+            events,
+            guard,
+        }))
     }
 }

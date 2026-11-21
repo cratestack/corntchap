@@ -3,13 +3,13 @@
 use std::{convert::Infallible, time::Duration};
 
 use axum::{
+    Json,
     extract::State,
     http::HeaderMap,
     response::sse::{Event, KeepAlive, Sse},
-    Json,
 };
 use futures::Stream;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     error::{Error, Result},
@@ -20,8 +20,14 @@ use crate::{
 pub const MAX_WAIT_S: i64 = 55;
 
 /// Long-poll: return ready tasks as soon as there are any for this principal, or `[]` at the timeout.
-pub async fn wait_for_work(state: &AppState, p: &Principal, project: Option<&str>, timeout_s: i64) -> Result<Value> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_s.clamp(0, MAX_WAIT_S) as u64);
+pub async fn wait_for_work(
+    state: &AppState,
+    p: &Principal,
+    project: Option<&str>,
+    timeout_s: i64,
+) -> Result<Value> {
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(timeout_s.clamp(0, MAX_WAIT_S) as u64);
     let mut rx = state.events.subscribe();
     loop {
         let ready = service::ready_for(&state.db, p, project).await?;
@@ -47,10 +53,20 @@ pub async fn relay_stream(
     if !relay.is_relay() {
         return Err(Error::Forbidden("the wake stream is for relays".into()));
     }
-    let owner = relay.owner_id.ok_or_else(|| Error::Internal("relay without owner".into()))?;
-    let mut last: i64 = match headers.get("last-event-id").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()) {
+    let owner = relay
+        .owner_id
+        .ok_or_else(|| Error::Internal("relay without owner".into()))?;
+    let mut last: i64 = match headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+    {
         Some(n) => n,
-        None => sqlx::query_scalar("select coalesce(max(seq), 0) from events").fetch_one(&state.db).await?,
+        None => {
+            sqlx::query_scalar("select coalesce(max(seq), 0) from events")
+                .fetch_one(&state.db)
+                .await?
+        }
     };
     let mut rx = state.events.subscribe();
     let relay_id = relay.id;
@@ -84,7 +100,11 @@ pub async fn relay_stream(
             let _ = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
         }
     };
-    Ok(Sse::new(s).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("keep-alive")))
+    Ok(Sse::new(s).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
 }
 
 #[derive(serde::Deserialize)]
@@ -97,7 +117,11 @@ pub struct RunReport {
 }
 
 /// The relay reports which of its owner's agents is awake, so the board can show it.
-pub async fn report_run(State(state): State<AppState>, auth: authkestra::axum::Auth<Principal>, Json(r): Json<RunReport>) -> Result<Json<Value>> {
+pub async fn report_run(
+    State(state): State<AppState>,
+    auth: authkestra::axum::Auth<Principal>,
+    Json(r): Json<RunReport>,
+) -> Result<Json<Value>> {
     let relay = auth.0;
     if !relay.is_relay() {
         return Err(Error::Forbidden("only relays report runs".into()));
@@ -117,8 +141,17 @@ pub async fn report_run(State(state): State<AppState>, auth: authkestra::axum::A
     .bind(r.project.to_uppercase())
     .fetch_optional(&state.db)
     .await?;
-    let (agent_id, project_id) = row.ok_or_else(|| Error::NotFound("unknown agent or project".into()))?;
+    let (agent_id, project_id) =
+        row.ok_or_else(|| Error::NotFound("unknown agent or project".into()))?;
     let mut c = state.db.acquire().await?;
-    service::emit(&mut c, Some(project_id), None, kind, Some(agent_id), json!({"agent": r.agent, "exit_code": r.exit_code})).await?;
+    service::emit(
+        &mut c,
+        Some(project_id),
+        None,
+        kind,
+        Some(agent_id),
+        json!({"agent": r.agent, "exit_code": r.exit_code}),
+    )
+    .await?;
     Ok(Json(json!({"ok": true})))
 }

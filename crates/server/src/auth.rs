@@ -31,7 +31,7 @@ pub fn sha256(data: &[u8]) -> Vec<u8> {
 
 /// A fresh opaque secret: `ct_` + 32 random bytes in URL-safe base64.
 pub fn generate_token() -> String {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     let bytes: [u8; 32] = rand::random();
     format!("{TOKEN_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes))
 }
@@ -110,7 +110,10 @@ pub fn build_guard(db: PgPool) -> Arc<Guard<Principal>> {
 }
 
 /// Authenticate from a bare header map (used by the cratestack MCP auth provider).
-pub async fn authenticate_headers(state: &AppState, headers: &http::HeaderMap) -> Result<Principal> {
+pub async fn authenticate_headers(
+    state: &AppState,
+    headers: &http::HeaderMap,
+) -> Result<Principal> {
     check_transport_headers(state, headers)?;
     let mut req = http::Request::new(());
     *req.headers_mut() = headers.clone();
@@ -137,15 +140,23 @@ pub fn check_transport_headers(state: &AppState, headers: &http::HeaderMap) -> R
     if !state.config.require_https {
         return Ok(());
     }
-    let host = headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
+    let host = headers
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
     if is_loopback_host(host) {
         return Ok(());
     }
-    let proto = headers.get("x-forwarded-proto").and_then(|h| h.to_str().ok()).unwrap_or("");
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
     if proto.eq_ignore_ascii_case("https") {
         Ok(())
     } else {
-        Err(Error::Insecure("plain HTTP is refused: bearer tokens must travel over https".into()))
+        Err(Error::Insecure(
+            "plain HTTP is refused: bearer tokens must travel over https".into(),
+        ))
     }
 }
 

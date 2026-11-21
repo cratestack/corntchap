@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: corntchap
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: corntchap
+  template:
+    metadata:
+      labels:
+        app: corntchap
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: corntchap
+          image: ghcr.io/stephane-segning/corntchap:latest
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: corntchap-db-app   # created by CNPG: <cluster>-app
+                  key: uri
+            - name: PUBLIC_URL
+              value: https://corntchap.example.com   # CHANGE-ME: must match the Ingress host
+            - name: BIND
+              value: 0.0.0.0:8080
+            - name: AUTO_MIGRATE
+              value: "1"
+            - name: GITHUB_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: corntchap-github
+                  key: client-id
+            - name: GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: corntchap-github
+                  key: client-secret
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -1,0 +1,10 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: corntchap-db-daily
+spec:
+  # CNPG uses six fields (seconds first): every day at 03:00.
+  schedule: "0 0 3 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: corntchap-db

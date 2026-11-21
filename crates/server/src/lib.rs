@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub mod admin;
 pub mod app;
 pub mod auth;

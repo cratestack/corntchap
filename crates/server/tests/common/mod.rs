@@ -1,20 +1,35 @@
 #![allow(dead_code)]
-use axum::{extract::Query, response::Redirect, routing::{get, post}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::Query,
+    response::Redirect,
+    routing::{get, post},
+};
 use corntchap::state::{AppState, Config, GithubConfig};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 pub fn admin_url() -> String {
-    std::env::var("TEST_DATABASE_ADMIN_URL").unwrap_or_else(|_| "postgres://corn:corn@127.0.0.1/postgres".into())
+    std::env::var("TEST_DATABASE_ADMIN_URL")
+        .unwrap_or_else(|_| "postgres://corn:corn@127.0.0.1/postgres".into())
 }
 
 /// A fresh, migrated database per test.
 pub async fn fresh_db() -> (sqlx::PgPool, String) {
-    let admin = sqlx::PgPool::connect(&admin_url()).await.expect("admin connection (set TEST_DATABASE_ADMIN_URL)");
+    let admin = sqlx::PgPool::connect(&admin_url())
+        .await
+        .expect("admin connection (set TEST_DATABASE_ADMIN_URL)");
     let name = format!("ct_test_{}", uuid::Uuid::new_v4().simple());
-    sqlx::query(sqlx::AssertSqlSafe(format!("create database {name}"))).execute(&admin).await.unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("create database {name}")))
+        .execute(&admin)
+        .await
+        .unwrap();
     let url = admin_url().rsplit_once('/').unwrap().0.to_string() + "/" + &name;
-    let pool = sqlx::postgres::PgPoolOptions::new().max_connections(30).connect(&url).await.unwrap();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(30)
+        .connect(&url)
+        .await
+        .unwrap();
     corntchap::app::migrate(&pool).await.unwrap();
     (pool, url)
 }
@@ -29,7 +44,10 @@ pub struct TestApp {
 /// A tiny stand-in for GitHub: authorize bounces straight back, token and user are canned.
 pub async fn mock_github() -> String {
     async fn authorize(Query(q): Query<HashMap<String, String>>) -> Redirect {
-        Redirect::to(&format!("{}?code=mockcode&state={}", q["redirect_uri"], q["state"]))
+        Redirect::to(&format!(
+            "{}?code=mockcode&state={}",
+            q["redirect_uri"], q["state"]
+        ))
     }
     let app = Router::new()
         .route("/authorize", get(authorize))
@@ -56,13 +74,30 @@ pub async fn start(background: bool) -> TestApp {
     let state = AppState::new(pool, cfg);
     let app = corntchap::app::build(state.clone()).unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    TestApp { base, state, http, gh }
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    TestApp {
+        base,
+        state,
+        http,
+        gh,
+    }
 }
 
 impl TestApp {
-    pub async fn rest(&self, token: &str, method: reqwest::Method, path: &str, body: Option<Value>) -> (u16, Value) {
-        let mut r = self.http.request(method, format!("{}/api/v1{path}", self.base)).bearer_auth(token);
+    pub async fn rest(
+        &self,
+        token: &str,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> (u16, Value) {
+        let mut r = self
+            .http
+            .request(method, format!("{}/api/v1{path}", self.base))
+            .bearer_auth(token);
         if let Some(b) = body {
             r = r.json(&b);
         }
@@ -71,7 +106,8 @@ impl TestApp {
         (st, resp.json().await.unwrap_or(Value::Null))
     }
     pub async fn post(&self, token: &str, path: &str, body: Value) -> (u16, Value) {
-        self.rest(token, reqwest::Method::POST, path, Some(body)).await
+        self.rest(token, reqwest::Method::POST, path, Some(body))
+            .await
     }
     pub async fn get(&self, token: &str, path: &str) -> (u16, Value) {
         self.rest(token, reqwest::Method::GET, path, None).await
@@ -105,13 +141,35 @@ impl TestApp {
 
     /// Sign in through the mock GitHub and return the session cookie header value.
     pub async fn browser_login(&self, next: &str) -> String {
-        let r = self.http.get(format!("{}/auth/github/login?next={next}", self.base)).send().await.unwrap();
-        let nonce = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
+        let r = self
+            .http
+            .get(format!("{}/auth/github/login?next={next}", self.base))
+            .send()
+            .await
+            .unwrap();
+        let nonce = r.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
         let to_gh = r.headers()["location"].to_str().unwrap().to_string();
         let r = self.http.get(&to_gh).send().await.unwrap();
         let back = r.headers()["location"].to_str().unwrap().to_string();
-        let r = self.http.get(&back).header("cookie", &nonce).send().await.unwrap();
-        assert_eq!(r.status().as_u16(), 303, "callback should redirect, got {}", r.status());
+        let r = self
+            .http
+            .get(&back)
+            .header("cookie", &nonce)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            r.status().as_u16(),
+            303,
+            "callback should redirect, got {}",
+            r.status()
+        );
         let cookie = r.headers()["set-cookie"].to_str().unwrap();
         cookie.split(';').next().unwrap().to_string()
     }

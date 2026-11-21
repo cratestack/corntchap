@@ -6,8 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_json::{json, Value};
-use sqlx::{postgres::PgListener, Connection, PgConnection};
+use serde_json::{Value, json};
+use sqlx::{Connection, PgConnection, postgres::PgListener};
 use uuid::Uuid;
 
 use crate::{service::emit, state::AppState};
@@ -90,10 +90,10 @@ async fn run_jobs(state: AppState) {
                 tracing::warn!("reaper: {e}");
             }
             n += 1;
-            if n % 240 == 1 {
-                if let Err(e) = retain(&s).await {
-                    tracing::warn!("retention: {e}");
-                }
+            if n % 240 == 1
+                && let Err(e) = retain(&s).await
+            {
+                tracing::warn!("retention: {e}");
             }
         }
     };
@@ -155,17 +155,30 @@ struct Dispatcher {
     pending: HashSet<(Uuid, Uuid)>,
 }
 
-const TRIGGERS: &[&str] = &["task.created", "task.released", "task.lease_expired", "task.completed", "task.unblocked"];
+const TRIGGERS: &[&str] = &[
+    "task.created",
+    "task.released",
+    "task.lease_expired",
+    "task.completed",
+    "task.unblocked",
+];
 
 impl Dispatcher {
     fn new(state: AppState) -> Self {
-        Dispatcher { state, last_wake: HashMap::new(), pending: HashSet::new() }
+        Dispatcher {
+            state,
+            last_wake: HashMap::new(),
+            pending: HashSet::new(),
+        }
     }
 
     async fn run(mut self) {
         let mut rx = self.state.events.subscribe();
         // After a (re)start every project with ready work is considered once.
-        if let Ok(projects) = sqlx::query_scalar::<_, Uuid>("select id from projects").fetch_all(&self.state.db).await {
+        if let Ok(projects) = sqlx::query_scalar::<_, Uuid>("select id from projects")
+            .fetch_all(&self.state.db)
+            .await
+        {
             for p in projects {
                 self.consider(p).await;
             }
@@ -189,11 +202,14 @@ impl Dispatcher {
 
     async fn on_event(&mut self, seq: i64) {
         let row: Result<Option<(String, Option<Uuid>)>, _> =
-            sqlx::query_as("select kind, project_id from events where seq = $1").bind(seq).fetch_optional(&self.state.db).await;
-        if let Ok(Some((kind, Some(project)))) = row {
-            if TRIGGERS.contains(&kind.as_str()) {
-                self.consider(project).await;
-            }
+            sqlx::query_as("select kind, project_id from events where seq = $1")
+                .bind(seq)
+                .fetch_optional(&self.state.db)
+                .await;
+        if let Ok(Some((kind, Some(project)))) = row
+            && TRIGGERS.contains(&kind.as_str())
+        {
+            self.consider(project).await;
         }
     }
 
@@ -226,8 +242,16 @@ impl Dispatcher {
         }
         for (agent, targets) in by_agent {
             let cloud = targets[0].runtime.as_deref() == Some("cloud");
-            let window = if cloud { CLOUD_COALESCE } else { LOCAL_COALESCE };
-            let recently = self.last_wake.get(&agent).map(|t| t.elapsed() < window).unwrap_or(false);
+            let window = if cloud {
+                CLOUD_COALESCE
+            } else {
+                LOCAL_COALESCE
+            };
+            let recently = self
+                .last_wake
+                .get(&agent)
+                .map(|t| t.elapsed() < window)
+                .unwrap_or(false);
             // Cloud agents are never woken while they hold a lease: their session is already running.
             if recently || (cloud && targets[0].busy > 0) {
                 self.pending.insert((agent, project));
@@ -253,7 +277,11 @@ impl Dispatcher {
     }
 
     async fn wake(&self, project: Uuid, c: Candidate) {
-        let key: String = match sqlx::query_scalar("select key from projects where id = $1").bind(project).fetch_one(&self.state.db).await {
+        let key: String = match sqlx::query_scalar("select key from projects where id = $1")
+            .bind(project)
+            .fetch_one(&self.state.db)
+            .await
+        {
             Ok(k) => k,
             Err(_) => return,
         };
@@ -263,7 +291,15 @@ impl Dispatcher {
         };
         match c.typ.as_str() {
             "relay" => {
-                let _ = emit(&mut conn, Some(project), None, "wake", None, json!({"agent": c.agent, "agent_id": c.agent_id, "project": key})).await;
+                let _ = emit(
+                    &mut conn,
+                    Some(project),
+                    None,
+                    "wake",
+                    None,
+                    json!({"agent": c.agent, "agent_id": c.agent_id, "project": key}),
+                )
+                .await;
             }
             "webhook" | "github-comment" => {
                 let state = self.state.clone();
@@ -273,10 +309,16 @@ impl Dispatcher {
                 tokio::spawn(async move {
                     let res = deliver(&state, &typ, &config, &agent, &key2, cloud).await;
                     let (kind, payload) = match res {
-                        Ok(status) => ("wake.delivered", json!({"agent": agent, "project": key2, "type": typ, "status": status})),
+                        Ok(status) => (
+                            "wake.delivered",
+                            json!({"agent": agent, "project": key2, "type": typ, "status": status}),
+                        ),
                         Err(e) => {
                             tracing::warn!("wake delivery to {agent} failed: {e}");
-                            ("wake.failed", json!({"agent": agent, "project": key2, "type": typ}))
+                            (
+                                "wake.failed",
+                                json!({"agent": agent, "project": key2, "type": typ}),
+                            )
                         }
                     };
                     if let Ok(mut c) = state.db.acquire().await {
@@ -290,12 +332,26 @@ impl Dispatcher {
 }
 
 /// POST the wake. The text is always a fixed template, never task content.
-async fn deliver(state: &AppState, typ: &str, config: &Value, agent: &str, project: &str, cloud: bool) -> Result<u16, String> {
-    let template = if cloud { CLOUD_WAKE_PROMPT } else { WAKE_PROMPT };
+async fn deliver(
+    state: &AppState,
+    typ: &str,
+    config: &Value,
+    agent: &str,
+    project: &str,
+    cloud: bool,
+) -> Result<u16, String> {
+    let template = if cloud {
+        CLOUD_WAKE_PROMPT
+    } else {
+        WAKE_PROMPT
+    };
     let prompt = template.replace("{project}", project);
     let (url, body, mut req_headers): (String, Value, Vec<(String, String)>) = if typ == "webhook" {
         let url = config["url"].as_str().ok_or("missing url")?.to_string();
-        let body = config.get("body").cloned().unwrap_or_else(|| json!({"text": prompt, "agent": agent, "project": project}));
+        let body = config
+            .get("body")
+            .cloned()
+            .unwrap_or_else(|| json!({"text": prompt, "agent": agent, "project": project}));
         let mut h = vec![];
         if let Some(t) = config["token"].as_str() {
             h.push(("authorization".to_string(), format!("Bearer {t}")));
@@ -310,12 +366,20 @@ async fn deliver(state: &AppState, typ: &str, config: &Value, agent: &str, proje
         let repo = config["repo"].as_str().ok_or("missing repo")?;
         let issue = config["issue"].as_i64().ok_or("issue must be a number")?;
         let token = config["token"].as_str().ok_or("missing token")?;
-        let base = config["api_url"].as_str().unwrap_or("https://api.github.com");
+        let base = config["api_url"]
+            .as_str()
+            .unwrap_or("https://api.github.com");
         let mention = config["mention"].as_str().unwrap_or("@codex");
         (
             format!("{base}/repos/{repo}/issues/{issue}/comments"),
             json!({"body": format!("{mention} {prompt}")}),
-            vec![("authorization".to_string(), format!("Bearer {token}")), ("accept".to_string(), "application/vnd.github+json".to_string())],
+            vec![
+                ("authorization".to_string(), format!("Bearer {token}")),
+                (
+                    "accept".to_string(),
+                    "application/vnd.github+json".to_string(),
+                ),
+            ],
         )
     };
     let mut req = state.http.post(&url).json(&body);

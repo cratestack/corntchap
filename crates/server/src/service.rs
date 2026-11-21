@@ -2,12 +2,12 @@
 //! so the two surfaces cannot disagree.
 
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::{
-    error::{invalid, Error, Result},
+    error::{Error, Result, invalid},
     state::Principal,
 };
 
@@ -68,7 +68,9 @@ pub fn parse_task_ref(s: &str) -> Result<(String, i32)> {
         .trim()
         .rsplit_once('-')
         .ok_or_else(|| Error::Invalid(format!("bad task id {s:?}, expected like PAY-42")))?;
-    let n: i32 = n.parse().map_err(|_| Error::Invalid(format!("bad task id {s:?}, expected like PAY-42")))?;
+    let n: i32 = n
+        .parse()
+        .map_err(|_| Error::Invalid(format!("bad task id {s:?}, expected like PAY-42")))?;
     Ok((k.to_uppercase(), n))
 }
 
@@ -125,8 +127,13 @@ pub async fn emit(
 }
 
 async fn task_json(c: &mut PgConnection, id: Uuid) -> Result<Value> {
-    let sql = format!("select {TASK_JSON} from tasks t join projects pr on pr.id = t.project_id where t.id = $1");
-    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(id).fetch_one(c).await?)
+    let sql = format!(
+        "select {TASK_JSON} from tasks t join projects pr on pr.id = t.project_id where t.id = $1"
+    );
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_one(c)
+        .await?)
 }
 
 /// Task with its items, comments and dependency states.
@@ -190,7 +197,11 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
          from projects pr where {} order by pr.key",
         access_sql("$1", "$2")
     );
-    let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(p.is_admin).bind(p.id).fetch_all(db).await?;
+    let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(p.is_admin)
+        .bind(p.id)
+        .fetch_all(db)
+        .await?;
     Ok(Value::Array(rows))
 }
 
@@ -248,10 +259,12 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     for d in &n.depends_on {
         deps.push(task_by_ref(&mut tx, p, d).await?.id);
     }
-    let number: i32 = sqlx::query_scalar("update projects set next_number = next_number + 1 where id = $1 returning next_number - 1")
-        .bind(pr.id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let number: i32 = sqlx::query_scalar(
+        "update projects set next_number = next_number + 1 where id = $1 returning next_number - 1",
+    )
+    .bind(pr.id)
+    .fetch_one(&mut *tx)
+    .await?;
     let id = Uuid::new_v4();
     sqlx::query(
         "insert into tasks (id, project_id, number, title, body, priority, labels, parent_id, status, created_by)
@@ -277,13 +290,23 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
             .await?;
     }
     for d in deps {
-        sqlx::query("insert into task_deps (task_id, depends_on) values ($1,$2) on conflict do nothing")
-            .bind(id)
-            .bind(d)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "insert into task_deps (task_id, depends_on) values ($1,$2) on conflict do nothing",
+        )
+        .bind(id)
+        .bind(d)
+        .execute(&mut *tx)
+        .await?;
     }
-    emit(&mut tx, Some(pr.id), Some(id), "task.created", Some(p.id), json!({"title": n.title.trim(), "labels": n.labels})).await?;
+    emit(
+        &mut tx,
+        Some(pr.id),
+        Some(id),
+        "task.created",
+        Some(p.id),
+        json!({"title": n.title.trim(), "labels": n.labels}),
+    )
+    .await?;
     let out = task_full(&mut tx, id).await?;
     tx.commit().await?;
     Ok(out)
@@ -308,7 +331,9 @@ pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Re
         .fetch_one(&mut *tx)
         .await?;
         if !live {
-            return Err(Error::Forbidden("agents may only edit tasks they currently hold".into()));
+            return Err(Error::Forbidden(
+                "agents may only edit tasks they currently hold".into(),
+            ));
         }
     }
     sqlx::query(
@@ -322,7 +347,15 @@ pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Re
     .bind(e.priority)
     .execute(&mut *tx)
     .await?;
-    emit(&mut tx, Some(t.project_id), Some(t.id), "task.updated", Some(p.id), json!({})).await?;
+    emit(
+        &mut tx,
+        Some(t.project_id),
+        Some(t.id),
+        "task.updated",
+        Some(p.id),
+        json!({}),
+    )
+    .await?;
     let out = task_full(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(out)
@@ -341,7 +374,12 @@ fn lease_view(t: Value, epoch: i64, expires: DateTime<Utc>) -> Value {
     json!({ "task": t, "lease": { "epoch": epoch, "expires_at": expires } })
 }
 
-pub async fn claim_next(db: &PgPool, p: &Principal, project: &str, labels: &[String]) -> Result<Value> {
+pub async fn claim_next(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    labels: &[String],
+) -> Result<Value> {
     let mut tx = db.begin().await?;
     let pr = project_by_key(&mut tx, p, project).await?;
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
@@ -375,7 +413,15 @@ pub async fn claim_next(db: &PgPool, p: &Principal, project: &str, labels: &[Str
     let Some((id, epoch, exp)) = row else {
         return Ok(json!({"none": true}));
     };
-    emit(&mut tx, Some(pr.id), Some(id), "task.claimed", Some(p.id), json!({"agent": p.name, "epoch": epoch})).await?;
+    emit(
+        &mut tx,
+        Some(pr.id),
+        Some(id),
+        "task.claimed",
+        Some(p.id),
+        json!({"agent": p.name, "epoch": epoch}),
+    )
+    .await?;
     let t = task_full(&mut tx, id).await?;
     tx.commit().await?;
     Ok(lease_view(t, epoch, exp))
@@ -419,7 +465,15 @@ pub async fn claim_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
             format!("{r} is not claimable (status {status})")
         }));
     };
-    emit(&mut tx, Some(t.project_id), Some(t.id), "task.claimed", Some(p.id), json!({"agent": p.name, "epoch": epoch})).await?;
+    emit(
+        &mut tx,
+        Some(t.project_id),
+        Some(t.id),
+        "task.claimed",
+        Some(p.id),
+        json!({"agent": p.name, "epoch": epoch}),
+    )
+    .await?;
     let out = task_full(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(lease_view(out, epoch, exp))
@@ -448,7 +502,13 @@ async fn touch_lease(
     .ok_or(Error::LeaseLost)
 }
 
-pub async fn heartbeat(db: &PgPool, p: &Principal, r: &str, epoch: i64, ttl_s: Option<f64>) -> Result<Value> {
+pub async fn heartbeat(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    epoch: i64,
+    ttl_s: Option<f64>,
+) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
     let exp = touch_lease(&mut tx, p, &t, epoch, ttl_s).await?;
@@ -456,7 +516,14 @@ pub async fn heartbeat(db: &PgPool, p: &Principal, r: &str, epoch: i64, ttl_s: O
     Ok(json!({"id": r, "epoch": epoch, "expires_at": exp}))
 }
 
-pub async fn check_item(db: &PgPool, p: &Principal, r: &str, epoch: Option<i64>, position: i32, done: bool) -> Result<Value> {
+pub async fn check_item(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    epoch: Option<i64>,
+    position: i32,
+    done: bool,
+) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
     match epoch {
@@ -477,13 +544,27 @@ pub async fn check_item(db: &PgPool, p: &Principal, r: &str, epoch: Option<i64>,
     if n == 0 {
         return Err(Error::NotFound(format!("{r} has no item {position}")));
     }
-    emit(&mut tx, Some(t.project_id), Some(t.id), "item.checked", Some(p.id), json!({"position": position, "done": done})).await?;
+    emit(
+        &mut tx,
+        Some(t.project_id),
+        Some(t.id),
+        "item.checked",
+        Some(p.id),
+        json!({"position": position, "done": done}),
+    )
+    .await?;
     let out = task_full(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(out)
 }
 
-pub async fn comment(db: &PgPool, p: &Principal, r: &str, body: &str, epoch: Option<i64>) -> Result<Value> {
+pub async fn comment(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    body: &str,
+    epoch: Option<i64>,
+) -> Result<Value> {
     if body.trim().is_empty() {
         return invalid("comment body is empty");
     }
@@ -494,7 +575,15 @@ pub async fn comment(db: &PgPool, p: &Principal, r: &str, body: &str, epoch: Opt
         let _ = touch_lease(&mut tx, p, &t, e, None).await;
     }
     add_comment(&mut tx, &t, p.id, body).await?;
-    emit(&mut tx, Some(t.project_id), Some(t.id), "task.commented", Some(p.id), json!({})).await?;
+    emit(
+        &mut tx,
+        Some(t.project_id),
+        Some(t.id),
+        "task.commented",
+        Some(p.id),
+        json!({}),
+    )
+    .await?;
     tx.commit().await?;
     Ok(json!({"ok": true}))
 }
@@ -510,7 +599,13 @@ async fn add_comment(c: &mut PgConnection, t: &TaskRef, author: Uuid, body: &str
     Ok(())
 }
 
-pub async fn complete(db: &PgPool, p: &Principal, r: &str, epoch: i64, result: &str) -> Result<Value> {
+pub async fn complete(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    epoch: i64,
+    result: &str,
+) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
     let n = sqlx::query(
@@ -536,12 +631,22 @@ pub async fn complete(db: &PgPool, p: &Principal, r: &str, epoch: i64, result: &
         .fetch_one(&mut *tx)
         .await?;
         return Err(if live {
-            Error::Conflict(format!("{r} has subtasks that are not done or cancelled yet"))
+            Error::Conflict(format!(
+                "{r} has subtasks that are not done or cancelled yet"
+            ))
         } else {
             Error::LeaseLost
         });
     }
-    emit(&mut tx, Some(t.project_id), Some(t.id), "task.completed", Some(p.id), json!({"result": result})).await?;
+    emit(
+        &mut tx,
+        Some(t.project_id),
+        Some(t.id),
+        "task.completed",
+        Some(p.id),
+        json!({"result": result}),
+    )
+    .await?;
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(out)
@@ -575,13 +680,27 @@ async fn end_lease(
     if !reason.trim().is_empty() {
         add_comment(&mut tx, &t, p.id, &format!("[{kind}] {reason}")).await?;
     }
-    emit(&mut tx, Some(t.project_id), Some(t.id), kind, Some(p.id), json!({"reason": reason})).await?;
+    emit(
+        &mut tx,
+        Some(t.project_id),
+        Some(t.id),
+        kind,
+        Some(p.id),
+        json!({"reason": reason}),
+    )
+    .await?;
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(out)
 }
 
-pub async fn release(db: &PgPool, p: &Principal, r: &str, epoch: i64, reason: &str) -> Result<Value> {
+pub async fn release(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    epoch: i64,
+    reason: &str,
+) -> Result<Value> {
     end_lease(db, p, r, epoch, "open", "task.released", reason).await
 }
 
@@ -592,7 +711,9 @@ pub async fn block(db: &PgPool, p: &Principal, r: &str, epoch: i64, reason: &str
 /// Human-only transitions: unblock (blocked -> open) and cancel (open/blocked -> cancelled).
 pub async fn human_transition(db: &PgPool, p: &Principal, r: &str, action: &str) -> Result<Value> {
     if !p.is_user() {
-        return Err(Error::Forbidden(format!("only a human can {action} a task")));
+        return Err(Error::Forbidden(format!(
+            "only a human can {action} a task"
+        )));
     }
     let (from, to, kind): (&[&str], &str, &str) = match action {
         "unblock" => (&["blocked"], "open", "task.unblocked"),
@@ -602,17 +723,30 @@ pub async fn human_transition(db: &PgPool, p: &Principal, r: &str, action: &str)
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
     let from: Vec<String> = from.iter().map(|s| s.to_string()).collect();
-    let n = sqlx::query("update tasks set status = $3, updated_at = now() where id = $1 and status = any($2)")
-        .bind(t.id)
-        .bind(&from)
-        .bind(to)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+    let n = sqlx::query(
+        "update tasks set status = $3, updated_at = now() where id = $1 and status = any($2)",
+    )
+    .bind(t.id)
+    .bind(&from)
+    .bind(to)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
     if n == 0 {
-        return Err(Error::Conflict(format!("{r} is {} and cannot be {action}ed", t.status)));
+        return Err(Error::Conflict(format!(
+            "{r} is {} and cannot be {action}ed",
+            t.status
+        )));
     }
-    emit(&mut tx, Some(t.project_id), Some(t.id), kind, Some(p.id), json!({})).await?;
+    emit(
+        &mut tx,
+        Some(t.project_id),
+        Some(t.id),
+        kind,
+        Some(p.id),
+        json!({}),
+    )
+    .await?;
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(out)
@@ -631,7 +765,10 @@ pub async fn whoami(db: &PgPool, p: &Principal) -> Result<Value> {
         "select {TASK_JSON} from tasks t join projects pr on pr.id = t.project_id
          where t.claimed_by = $1 and t.status = 'claimed' and t.lease_expires_at > now()"
     );
-    let leases: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(p.id).fetch_all(db).await?;
+    let leases: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(p.id)
+        .fetch_all(db)
+        .await?;
     Ok(json!({
         "name": p.name, "kind": p.kind, "agent_kind": p.agent_kind, "runtime": p.runtime,
         "is_admin": p.is_admin, "max_leases": p.max_leases,
@@ -694,7 +831,12 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
          order by t.priority desc, t.created_at limit 20",
         access_sql("$2", "$3")
     );
-    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(pid).bind(p.is_admin).bind(p.id).fetch_all(&mut *c).await?)
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(pid)
+        .bind(p.is_admin)
+        .bind(p.id)
+        .fetch_all(&mut *c)
+        .await?)
 }
 
 /// Markdown board for a project, with checkboxes per task.
@@ -710,7 +852,10 @@ pub async fn board_markdown(db: &PgPool, p: &Principal, key: &str) -> Result<Str
         ("Done", &["done"][..]),
         ("Cancelled", &["cancelled"][..]),
     ] {
-        let group: Vec<&Value> = tasks.iter().filter(|t| statuses.contains(&t["status"].as_str().unwrap_or(""))).collect();
+        let group: Vec<&Value> = tasks
+            .iter()
+            .filter(|t| statuses.contains(&t["status"].as_str().unwrap_or("")))
+            .collect();
         if group.is_empty() {
             continue;
         }
@@ -728,13 +873,20 @@ async fn list_tasks_conn(c: &mut PgConnection, project_id: Uuid) -> Result<Vec<V
             'text', i.text, 'done', i.done) order by i.position) from items i where i.task_id = t.id), '[]'::jsonb))
          from tasks t join projects pr on pr.id = t.project_id where t.project_id = $1 order by t.priority desc, t.number"
     );
-    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(project_id).fetch_all(c).await?)
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(project_id)
+        .fetch_all(c)
+        .await?)
 }
 
 fn task_markdown(t: &Value) -> String {
     let status = t["status"].as_str().unwrap_or("");
     let mark = if status == "done" { "x" } else { " " };
-    let mut s = format!("- [{mark}] **{}** {}", t["id"].as_str().unwrap_or(""), t["title"].as_str().unwrap_or(""));
+    let mut s = format!(
+        "- [{mark}] **{}** {}",
+        t["id"].as_str().unwrap_or(""),
+        t["title"].as_str().unwrap_or("")
+    );
     let mut meta = vec![];
     if let Some(by) = t["claimed_by"].as_str() {
         meta.push(format!("claimed by {by}"));
@@ -743,10 +895,22 @@ fn task_markdown(t: &Value) -> String {
         meta.push(format!("priority {}", t["priority"]));
     }
     if let Some(l) = t["labels"].as_array().filter(|l| !l.is_empty()) {
-        meta.push(format!("labels {}", l.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(",")));
+        meta.push(format!(
+            "labels {}",
+            l.iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
     }
     if let Some(d) = t["depends_on"].as_array().filter(|l| !l.is_empty()) {
-        meta.push(format!("after {}", d.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(",")));
+        meta.push(format!(
+            "after {}",
+            d.iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
     }
     if !meta.is_empty() {
         s.push_str(&format!(" _({})_", meta.join("; ")));
@@ -754,7 +918,11 @@ fn task_markdown(t: &Value) -> String {
     s.push('\n');
     if let Some(items) = t["items"].as_array() {
         for i in items {
-            let m = if i["done"].as_bool().unwrap_or(false) { "x" } else { " " };
+            let m = if i["done"].as_bool().unwrap_or(false) {
+                "x"
+            } else {
+                " "
+            };
             s.push_str(&format!("  - [{m}] {}\n", i["text"].as_str().unwrap_or("")));
         }
     }
@@ -763,17 +931,31 @@ fn task_markdown(t: &Value) -> String {
 
 pub async fn task_markdown_for(db: &PgPool, p: &Principal, r: &str) -> Result<String> {
     let t = get_task(db, p, r).await?;
-    let mut s = format!("# {} {}\n\nstatus: {}\n\n{}\n\n", t["id"].as_str().unwrap_or(""), t["title"].as_str().unwrap_or(""), t["status"].as_str().unwrap_or(""), t["body"].as_str().unwrap_or(""));
+    let mut s = format!(
+        "# {} {}\n\nstatus: {}\n\n{}\n\n",
+        t["id"].as_str().unwrap_or(""),
+        t["title"].as_str().unwrap_or(""),
+        t["status"].as_str().unwrap_or(""),
+        t["body"].as_str().unwrap_or("")
+    );
     if let Some(items) = t["items"].as_array() {
         for i in items {
-            let m = if i["done"].as_bool().unwrap_or(false) { "x" } else { " " };
+            let m = if i["done"].as_bool().unwrap_or(false) {
+                "x"
+            } else {
+                " "
+            };
             s.push_str(&format!("- [{m}] {}\n", i["text"].as_str().unwrap_or("")));
         }
     }
     if let Some(cm) = t["comments"].as_array().filter(|c| !c.is_empty()) {
         s.push_str("\n## Comments\n\n");
         for c in cm {
-            s.push_str(&format!("- **{}**: {}\n", c["author"].as_str().unwrap_or("?"), c["body"].as_str().unwrap_or("")));
+            s.push_str(&format!(
+                "- **{}**: {}\n",
+                c["author"].as_str().unwrap_or("?"),
+                c["body"].as_str().unwrap_or("")
+            ));
         }
     }
     Ok(s)
@@ -790,18 +972,24 @@ pub async fn digest(db: &PgPool, p: &Principal, key: &str, since: i64) -> Result
     .bind(since)
     .fetch_all(&mut *c)
     .await?;
-    let cursor: i64 = sqlx::query_scalar("select coalesce(max(seq), $2) from events where project_id = $1")
-        .bind(pr.id)
-        .bind(since)
-        .fetch_one(&mut *c)
-        .await?;
+    let cursor: i64 =
+        sqlx::query_scalar("select coalesce(max(seq), $2) from events where project_id = $1")
+            .bind(pr.id)
+            .bind(since)
+            .fetch_one(&mut *c)
+            .await?;
     let sql = format!(
         "select {TASK_JSON} from tasks t join projects pr on pr.id = t.project_id
          where t.id in (select task_id from events where project_id = $1 and seq > $2 and task_id is not null)
          order by t.number"
     );
-    let tasks: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql)).bind(pr.id).bind(since).fetch_all(&mut *c).await?;
-    let counts: serde_json::Map<String, Value> = counts.into_iter().map(|(k, n)| (k, json!(n))).collect();
+    let tasks: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(since)
+        .fetch_all(&mut *c)
+        .await?;
+    let counts: serde_json::Map<String, Value> =
+        counts.into_iter().map(|(k, n)| (k, json!(n))).collect();
     Ok(json!({"project": key, "since": since, "cursor": cursor, "counts": counts, "tasks": tasks}))
 }
 

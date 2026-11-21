@@ -2,9 +2,9 @@
 
 use std::{fs, path::PathBuf, time::Duration};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Credentials {
@@ -17,7 +17,9 @@ pub fn config_dir() -> PathBuf {
     if let Ok(d) = std::env::var("CORNTCHAP_CONFIG_DIR") {
         return PathBuf::from(d);
     }
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("corntchap")
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("corntchap")
 }
 
 fn cred_path() -> PathBuf {
@@ -26,7 +28,10 @@ fn cred_path() -> PathBuf {
 
 impl Credentials {
     pub fn load() -> Credentials {
-        let mut c: Credentials = fs::read_to_string(cred_path()).ok().and_then(|s| toml::from_str(&s).ok()).unwrap_or_default();
+        let mut c: Credentials = fs::read_to_string(cred_path())
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default();
         if let Ok(v) = std::env::var("CORNTCHAP_SERVER") {
             c.server = Some(v);
         }
@@ -44,7 +49,10 @@ impl Credentials {
         fs::create_dir_all(&dir)?;
         let path = cred_path();
         // Persist only what is stored on disk, not environment overrides.
-        let mut disk: Credentials = fs::read_to_string(&path).ok().and_then(|s| toml::from_str(&s).ok()).unwrap_or_default();
+        let mut disk: Credentials = fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| toml::from_str(&s).ok())
+            .unwrap_or_default();
         if self.server.is_some() {
             disk.server = self.server.clone();
         }
@@ -76,23 +84,34 @@ impl Api {
         Api {
             server: server.trim_end_matches('/').to_string(),
             token,
-            http: reqwest::Client::builder().user_agent(concat!("corntchap-cli/", env!("CARGO_PKG_VERSION"))).build().unwrap(),
+            http: reqwest::Client::builder()
+                .user_agent(concat!("corntchap-cli/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .unwrap(),
         }
     }
 
     /// Credentials from disk/env; `relay` picks the relay token instead of the user's.
     pub fn from_creds(relay: bool) -> Result<Api> {
         let c = Credentials::load();
-        let server = c.server.ok_or_else(|| anyhow!("not logged in: run `corntchap-cli login <server-url>`"))?;
+        let server = c
+            .server
+            .ok_or_else(|| anyhow!("not logged in: run `corntchap-cli login <server-url>`"))?;
         let token = if relay { c.relay_token } else { c.token };
         if token.is_none() {
-            bail!(if relay { "no relay token: run `corntchap-cli relay enroll <name>`" } else { "not logged in: run `corntchap-cli login <server-url>`" });
+            bail!(if relay {
+                "no relay token: run `corntchap-cli relay enroll <name>`"
+            } else {
+                "not logged in: run `corntchap-cli login <server-url>`"
+            });
         }
         Ok(Api::new(&server, token))
     }
 
     fn req(&self, m: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let mut r = self.http.request(m, format!("{}/api/v1{}", self.server, path));
+        let mut r = self
+            .http
+            .request(m, format!("{}/api/v1{}", self.server, path));
         if let Some(t) = &self.token {
             r = r.bearer_auth(t);
         }
@@ -116,7 +135,8 @@ impl Api {
         self.send(self.req(reqwest::Method::GET, path)).await
     }
     pub async fn post(&self, path: &str, body: Value) -> Result<Value> {
-        self.send(self.req(reqwest::Method::POST, path).json(&body)).await
+        self.send(self.req(reqwest::Method::POST, path).json(&body))
+            .await
     }
     pub async fn delete(&self, path: &str) -> Result<Value> {
         self.send(self.req(reqwest::Method::DELETE, path)).await
@@ -127,7 +147,12 @@ impl Api {
 }
 
 /// RFC 8628 device flow: prints the code, waits for a human to approve it, returns the access token.
-pub async fn device_login(server: &str, kind: &str, name: Option<&str>, extra: Value) -> Result<(String, Value)> {
+pub async fn device_login(
+    server: &str,
+    kind: &str,
+    name: Option<&str>,
+    extra: Value,
+) -> Result<(String, Value)> {
     let http = reqwest::Client::new();
     let server = server.trim_end_matches('/');
     let mut body = json!({"kind": kind});
@@ -139,13 +164,28 @@ pub async fn device_login(server: &str, kind: &str, name: Option<&str>, extra: V
             body[k] = v.clone();
         }
     }
-    let r: Value = http.post(format!("{server}/oauth/device/code")).json(&body).send().await?.error_for_status().context("device authorization request")?.json().await?;
-    let dc = r["device_code"].as_str().ok_or_else(|| anyhow!("bad device response"))?.to_string();
+    let r: Value = http
+        .post(format!("{server}/oauth/device/code"))
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()
+        .context("device authorization request")?
+        .json()
+        .await?;
+    let dc = r["device_code"]
+        .as_str()
+        .ok_or_else(|| anyhow!("bad device response"))?
+        .to_string();
     let url = r["verification_uri_complete"].as_str().unwrap_or("");
-    eprintln!("\nOpen  {url}\nand approve code  {}\n", r["user_code"].as_str().unwrap_or(""));
+    eprintln!(
+        "\nOpen  {url}\nand approve code  {}\n",
+        r["user_code"].as_str().unwrap_or("")
+    );
     open_browser(url);
     let mut interval = r["interval"].as_u64().unwrap_or(5);
-    let deadline = std::time::Instant::now() + Duration::from_secs(r["expires_in"].as_u64().unwrap_or(600));
+    let deadline =
+        std::time::Instant::now() + Duration::from_secs(r["expires_in"].as_u64().unwrap_or(600));
     loop {
         tokio::time::sleep(Duration::from_secs(interval)).await;
         if std::time::Instant::now() > deadline {
@@ -159,7 +199,10 @@ pub async fn device_login(server: &str, kind: &str, name: Option<&str>, extra: V
         let status = resp.status();
         let v: Value = resp.json().await?;
         if status.is_success() {
-            let t = v["access_token"].as_str().ok_or_else(|| anyhow!("no token in response"))?.to_string();
+            let t = v["access_token"]
+                .as_str()
+                .ok_or_else(|| anyhow!("no token in response"))?
+                .to_string();
             return Ok((t, v["principal"].clone()));
         }
         match v["error"].as_str().unwrap_or("") {
@@ -176,6 +219,14 @@ fn open_browser(url: &str) {
     if url.is_empty() || std::env::var("CORNTCHAP_NO_BROWSER").is_ok() {
         return;
     }
-    let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    let _ = std::process::Command::new(cmd).arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+    let cmd = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let _ = std::process::Command::new(cmd)
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }

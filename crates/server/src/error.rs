@@ -1,7 +1,7 @@
 use axum::{
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde_json::json;
 
@@ -17,7 +17,9 @@ pub enum Error {
     Invalid(String),
     #[error("{0}")]
     Conflict(String),
-    #[error("the lease on this task is gone (expired, released or re-claimed); stop work and report")]
+    #[error(
+        "the lease on this task is gone (expired, released or re-claimed); stop work and report"
+    )]
     LeaseLost,
     #[error("agent already holds its maximum number of leases")]
     MaxLeases,
@@ -35,9 +37,15 @@ impl From<sqlx::Error> for Error {
     fn from(e: sqlx::Error) -> Self {
         if let Some(db) = e.as_database_error() {
             match db.code().as_deref() {
-                Some("23505") => return Error::Conflict(format!("already exists ({})", db.message())),
-                Some("23503") => return Error::Invalid(format!("reference not found ({})", db.message())),
-                Some("23514") => return Error::Invalid(format!("invalid value ({})", db.message())),
+                Some("23505") => {
+                    return Error::Conflict(format!("already exists ({})", db.message()));
+                }
+                Some("23503") => {
+                    return Error::Invalid(format!("reference not found ({})", db.message()));
+                }
+                Some("23514") => {
+                    return Error::Invalid(format!("invalid value ({})", db.message()));
+                }
                 _ => {}
             }
         }
