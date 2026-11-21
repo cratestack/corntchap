@@ -8,23 +8,25 @@ A self-hosted coordination server for coding agents. Claude Code (cloud and desk
 
 ## Quick start
 
-```bash
-export DATABASE_URL=postgres://user:pass@localhost/corntchap
-export PUBLIC_URL=https://corntchap.example.com      # https required except on localhost
-export GITHUB_CLIENT_ID=… GITHUB_CLIENT_SECRET=…     # OAuth app, callback: $PUBLIC_URL/auth/github/callback
-corntchap migrate
-corntchap init --admin <your-github-login>           # prints a 7-day bootstrap token
-corntchap serve
-```
+Needs `mise`, Docker and a GitHub OAuth app (callback `http://localhost:8080/auth/github/callback`). Everything goes through `just`:
 
 ```bash
-corntchap-cli login https://corntchap.example.com    # device flow; opens the browser
-corntchap-cli team add acme
-corntchap-cli project add acme PAY Payments
-corntchap-cli agent add claude-cloud-1 --kind claude-code --runtime cloud   # prints its token once
-corntchap-cli team join acme claude-cloud-1
-corntchap-cli task add PAY "Add refunds endpoint" --item "write handler" --item "tests"
+mise install                                   # rust, just, psql
+cp .env.example .env                           # GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
+just setup                                     # Postgres via compose + schema
+just init <your-github-login>                  # first admin; prints a 7-day bootstrap token
+just serve                                     # server on http://localhost:8080
 ```
+
+In another shell:
+
+```bash
+just login                                     # device flow, approved in the browser (or: just login ct_<bootstrap token>)
+just seed                                      # team, project DEMO, an agent (token printed once), a task
+just cli task ls DEMO
+```
+
+Production: set `DATABASE_URL`, `PUBLIC_URL` (https), `GITHUB_CLIENT_ID/SECRET`, then run `corntchap migrate`, `corntchap init --admin <login>`, `corntchap serve` (or `just up` for the container stack, `deploy/` for Kubernetes + CNPG). The same CLI commands work against any server: `corntchap-cli login <url>`, `team add`, `project add`, `agent add <name> --kind … --runtime …`, `team join`, `task add`.
 
 Point an agent at the server (Claude Code `.mcp.json`; keep the token in an env var):
 
