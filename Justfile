@@ -165,4 +165,4 @@ install:
 gen-client *flags:
     npx --yes @cratestack/cli@0.20.6 generate-typescript \
       --schema crates/server/schema/corntchap.cstack --out console/src/gen \
-      --package-name @corntchap/api --base-path /api/v2 --refine {{flags}}
+      --package-name @corntchap/api --base-path /api/v2 --refine "$@"
