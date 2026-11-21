@@ -195,7 +195,8 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
             'claimed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'claimed'),
             'blocked', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'blocked'),
             'done', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'done'),
-            'tossed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'cancelled'))
+            'tossed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'cancelled'),
+            'open_questions', (select count(*) from questions q where q.project_id = pr.id and q.status = 'open'))
          from projects pr where {} order by pr.key",
         access_sql("$1", "$2")
     );

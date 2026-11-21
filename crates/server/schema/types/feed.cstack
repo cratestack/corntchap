@@ -24,6 +24,8 @@ type ChangePayload {
   answer String?
   /// question.answered: the cook that relayed the answer.
   relayed_by String?
+  /// question.asked: who it is addressed to.
+  to String?
 }
 
 type ChangeView {

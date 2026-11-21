@@ -15,6 +15,8 @@ type ProjectSummary {
   done Int
   /// Tasks tossed (status cancelled).
   tossed Int
+  /// Questions waiting for an answer in the pot's pool.
+  open_questions Int
 }
 
 type TeamRole {

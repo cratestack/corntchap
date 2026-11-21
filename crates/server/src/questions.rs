@@ -129,8 +129,16 @@ async fn view(c: &mut PgConnection, id: Uuid) -> Result<Value> {
         .await?)
 }
 
+/// First line, without markdown decoration, cut to 100 characters (event titles).
 fn short(s: &str) -> String {
-    let one = s.lines().next().unwrap_or("").trim();
+    let first = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let plain: String = first
+        .trim()
+        .trim_start_matches(['#', '>', '-', '*', ' '])
+        .chars()
+        .filter(|c| !matches!(c, '*' | '_' | '`'))
+        .collect();
+    let one = plain.trim();
     if one.chars().count() > 100 {
         format!("{}…", one.chars().take(100).collect::<String>())
     } else {
@@ -670,7 +678,13 @@ pub async fn wake(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ref;
+    use super::{parse_ref, short};
+
+    #[test]
+    fn titles_are_plain() {
+        assert_eq!(short("**Round** `down` or _up_?\nmore"), "Round down or up?");
+        assert_eq!(short("\n## Which currency?"), "Which currency?");
+    }
 
     #[test]
     fn question_refs() {
