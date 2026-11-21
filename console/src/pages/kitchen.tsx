@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import type { ProjectSummary, TaskView } from "@corntchap/api";
+import type { MenuView, ProjectSummary, TaskView } from "@corntchap/api";
 import { Bookmark, Check, ChevronDown, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useProc, useProjects } from "@/lib/data";
@@ -17,6 +17,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -30,17 +31,19 @@ import { EventFeed } from "@/components/event-feed";
 import { TaskCard, TaskGroup, groupTasks } from "@/components/task-views";
 import { TaskSheet } from "@/components/task-sheet";
 import { NewMemoryDialog, PantryView } from "@/components/pantry";
+import { MenuDialog, MenuStrip, MenusView, useMenus } from "@/components/menus";
 
 const VIEWS: { id: BaseView; label: string }[] = [
   { id: "list", label: "List" },
   { id: "board", label: "Board" },
   { id: "activity", label: "Activity" },
   { id: "pantry", label: "Pantry" },
+  { id: "menus", label: "Menus" },
 ];
 
 function readFilters(p: URLSearchParams): Filters {
   const f: Filters = {};
-  for (const k of ["status", "label", "holder", "q"] as const) {
+  for (const k of ["status", "label", "holder", "menu", "q"] as const) {
     const v = p.get(k);
     if (v) f[k] = v;
   }
@@ -53,6 +56,7 @@ function applyFilters(tasks: TaskView[], f: Filters): TaskView[] {
     if (f.status && bucketOf(t) !== f.status) return false;
     if (f.label && !t.labels.includes(f.label)) return false;
     if (f.holder && t.claimed_by !== f.holder) return false;
+    if (f.menu && (f.menu === "-" ? !!t.menu : t.menu !== f.menu)) return false;
     if (q && !`${t.id} ${t.title}`.toLowerCase().includes(q)) return false;
     return true;
   });
@@ -85,7 +89,7 @@ export function PotRedirect() {
 export function KitchenPage() {
   const { key = "", view = "list" } = useParams();
   const potKey = key.toUpperCase();
-  const base: BaseView = view === "board" || view === "activity" || view === "pantry" ? view : "list";
+  const base: BaseView = view === "board" || view === "activity" || view === "pantry" || view === "menus" ? view : "list";
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const openTask = useOpenTask();
@@ -97,11 +101,21 @@ export function KitchenPage() {
   const filters = readFilters(params);
   const selected = params.get("task");
   const [newMemory, setNewMemory] = useState(false);
+  const [menuDialog, setMenuDialog] = useState<{ open: boolean; menu: MenuView | null }>({ open: false, menu: null });
+  const menus = useMenus(potKey, !!project);
 
   useEffect(() => {
     if (project) rememberView(potKey, base);
     document.title = project ? `${project.name} · corntchap` : "corntchap";
   }, [potKey, base, project]);
+
+  // `?new=1` (from the command palette) opens the New menu dialog on the Menus tab
+  useEffect(() => {
+    if (base === "menus" && params.get("new")) {
+      setMenuDialog({ open: true, menu: null });
+      setParams((p) => { const n = new URLSearchParams(p); n.delete("new"); return n; }, { replace: true });
+    }
+  }, [base, params, setParams]);
 
   const setFilter = (k: keyof Filters, v: string | undefined) =>
     setParams(
@@ -117,7 +131,7 @@ export function KitchenPage() {
     setParams(
       (p) => {
         const n = new URLSearchParams(p);
-        for (const k of ["status", "label", "holder", "q"]) n.delete(k);
+        for (const k of ["status", "label", "holder", "menu", "q"]) n.delete(k);
         return n;
       },
       { replace: true },
@@ -152,6 +166,9 @@ export function KitchenPage() {
   const all = tasks.data ?? [];
   const visible = applyFilters(all, filters);
   const potEvents = events.filter((e) => e.project === potKey);
+  const selectedMenu = filters.menu ? menus.menus.find((m) => m.key === filters.menu) : undefined;
+  // while one menu is selected every row is on it, so the chip would only repeat the strip
+  const chipNames = filters.menu ? {} : menus.names;
 
   return (
     <div className="px-5 pt-6 pb-16 lg:px-8">
@@ -162,13 +179,18 @@ export function KitchenPage() {
         setFilter={setFilter}
         clearFilters={clearFilters}
         tasks={all}
-        onNew={() => (base === "pantry" ? setNewMemory(true) : openNewTask(potKey))}
+        menus={menus.menus}
+        onNew={() =>
+          base === "pantry" ? setNewMemory(true) : base === "menus" ? setMenuDialog({ open: true, menu: null }) : openNewTask(potKey, filters.menu)
+        }
         applyView={(v) => {
           const qs = new URLSearchParams();
           for (const [k, val] of Object.entries(v.filters)) if (val) qs.set(k, val);
           void navigate(`/pots/${potKey}/${v.base}${qs.size ? `?${qs}` : ""}`);
         }}
       />
+
+      {selectedMenu && (base === "list" || base === "board") && <MenuStrip menu={selectedMenu} />}
 
       <div className="mt-6">
         {base === "list" && (
@@ -183,15 +205,33 @@ export function KitchenPage() {
             events={potEvents}
             potKey={potKey}
             onClear={clearFilters}
-            onNew={() => openNewTask(potKey)}
+            onNew={() => openNewTask(potKey, filters.menu)}
+            menus={chipNames}
           />
         )}
-        {base === "board" && <BoardView loading={tasks.isLoading} tasks={visible} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey)} total={all.length} />}
+        {base === "board" && <BoardView loading={tasks.isLoading} tasks={visible} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} total={all.length} menus={chipNames} />}
         {base === "activity" && <ActivityView events={potEvents} />}
         {base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
+        {base === "menus" && (
+          <MenusView
+            potKey={potKey}
+            menus={menus.menus}
+            open={menus.open}
+            served={menus.served}
+            loading={menus.isLoading}
+            onNew={() => setMenuDialog({ open: true, menu: null })}
+            onEdit={(m) => setMenuDialog({ open: true, menu: m })}
+          />
+        )}
       </div>
 
       <TaskSheet id={selected} onClose={closeSheet} />
+      <MenuDialog
+        potKey={potKey}
+        open={menuDialog.open}
+        menu={menuDialog.menu}
+        onClose={() => setMenuDialog((s) => ({ ...s, open: false }))}
+      />
       <NewMemoryDialog
         potKey={potKey}
         open={newMemory}
@@ -211,6 +251,7 @@ function PotHeader({
   setFilter,
   clearFilters,
   tasks,
+  menus,
   onNew,
   applyView,
 }: {
@@ -220,6 +261,7 @@ function PotHeader({
   setFilter: (k: keyof Filters, v: string | undefined) => void;
   clearFilters: () => void;
   tasks: TaskView[];
+  menus: MenuView[];
   onNew: () => void;
   applyView: (v: SavedView) => void;
 }) {
@@ -251,7 +293,7 @@ function PotHeader({
           <PaletteButton />
           <RefreshButton />
           <Button onClick={onNew}>
-            <Plus /> {base === "pantry" ? "Stock the pantry" : "New task"}
+            <Plus /> {base === "pantry" ? "Stock the pantry" : base === "menus" ? "New menu" : "New task"}
           </Button>
         </div>
       </div>
@@ -261,8 +303,8 @@ function PotHeader({
           {VIEWS.map((v) => (
             <Link
               key={v.id}
-              to={{ pathname: `/pots/${project.key}/${v.id}`, search: v.id === "activity" || v.id === "pantry" || base === "pantry" ? "" : loc.search }}
-              aria-current={base === v.id && !(active && base !== "pantry") ? "page" : undefined}
+              to={{ pathname: `/pots/${project.key}/${v.id}`, search: v.id === "activity" || v.id === "pantry" || v.id === "menus" || base === "pantry" || base === "menus" ? "" : loc.search }}
+              aria-current={base === v.id && !(active && base !== "pantry" && base !== "menus") ? "page" : undefined}
               className={cn(
                 "rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
                 base === v.id && "bg-card text-foreground shadow-sm",
@@ -290,8 +332,45 @@ function PotHeader({
           />
         </nav>
 
-        {base !== "activity" && base !== "pantry" && (
+        {base !== "activity" && base !== "pantry" && base !== "menus" && (
           <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
+            <FilterChip
+              label="Menu"
+              value={filters.menu === "-" ? "No menu" : filters.menu ? (menus.find((m) => m.key === filters.menu)?.name ?? filters.menu) : undefined}
+              onClear={() => setFilter("menu", undefined)}
+            >
+              <DropdownMenuRadioGroup value={filters.menu ?? ""} onValueChange={(v) => setFilter("menu", v || undefined)}>
+                <DropdownMenuRadioItem value="">All menus</DropdownMenuRadioItem>
+                {menus
+                  .filter((m) => m.status !== "served")
+                  .map((m) => (
+                    <DropdownMenuRadioItem key={m.key} value={m.key}>
+                      {m.name}
+                      <span className="ml-auto pl-3 font-mono text-[11px] text-muted-foreground">
+                        {m.done}/{m.total}
+                      </span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                <DropdownMenuRadioItem value="-">No menu</DropdownMenuRadioItem>
+                {menus.some((m) => m.status === "served") && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="label-caps py-1">Served</DropdownMenuLabel>
+                    {menus
+                      .filter((m) => m.status === "served")
+                      .map((m) => (
+                        <DropdownMenuRadioItem key={m.key} value={m.key}>
+                          {m.name}
+                        </DropdownMenuRadioItem>
+                      ))}
+                  </>
+                )}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link to={`/pots/${project.key}/menus`}>Manage menus…</Link>
+              </DropdownMenuItem>
+            </FilterChip>
             <FilterChip
               label="Status"
               value={filters.status ? BUCKETS.find((b) => b.id === filters.status)?.label : undefined}
@@ -472,6 +551,7 @@ function ListView({
   potKey,
   onClear,
   onNew,
+  menus,
 }: {
   loading: boolean;
   error: unknown;
@@ -484,6 +564,7 @@ function ListView({
   potKey: string;
   onClear: () => void;
   onNew: () => void;
+  menus: Record<string, string>;
 }) {
   const groups = useMemo(() => groupTasks(tasks), [tasks]);
   return (
@@ -510,6 +591,7 @@ function ListView({
                 tasks={groups[b.id]}
                 selected={selected}
                 onOpen={onOpen}
+                menus={menus}
                 defaultOpen={b.id !== "cancelled"}
               />
             ) : null,
@@ -541,6 +623,7 @@ function BoardView({
   onOpen,
   onNew,
   total,
+  menus,
 }: {
   loading: boolean;
   tasks: TaskView[];
@@ -548,6 +631,7 @@ function BoardView({
   onOpen: (id: string) => void;
   onNew: () => void;
   total: number;
+  menus: Record<string, string>;
 }) {
   const groups = useMemo(() => groupTasks(tasks), [tasks]);
   if (loading) return <RowSkeleton rows={3} />;
@@ -576,7 +660,7 @@ function BoardView({
               <div className="scrollbar-thin flex-1 space-y-2 overflow-y-auto pr-0.5">
                 {col.length === 0 && <p className="px-2 py-5 text-center text-[12.5px] text-muted-foreground">Nothing here.</p>}
                 {col.map((t) => (
-                  <TaskCard key={t.id} task={t} selected={selected === t.id} onOpen={onOpen} />
+                  <TaskCard key={t.id} task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />
                 ))}
               </div>
             </section>
@@ -597,6 +681,7 @@ const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[
   { id: "checklist", label: "Checklists", match: (k) => k === "item.checked" },
   { id: "comments", label: "Comments", match: (k) => k === "task.commented" },
   { id: "pantry", label: "Pantry", match: (k) => k.startsWith("memory.") },
+  { id: "menus", label: "Menus", match: (k) => k.startsWith("menu.") },
   { id: "edits", label: "New and edited", match: (k) => k === "task.created" || k === "task.updated" },
 ];
 
