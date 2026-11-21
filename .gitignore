@@ -25,3 +25,4 @@ rustc-ice-*.txt
 .venv-mcp/
 .env.dev
 .env
+*.whl
