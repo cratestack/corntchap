@@ -181,6 +181,19 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn get_task_markdown(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: get_task_markdown::Args,
+        _z: get_task_markdown::Authorized,
+    ) -> Res {
+        let p = principal(ctx)?;
+        out(service::task_markdown_for(&self.state.db, &p, &a.id)
+            .await
+            .map(|m| serde_json::json!({"markdown": m})))
+    }
+
     async fn create_task(
         &self,
         _db: &Db,

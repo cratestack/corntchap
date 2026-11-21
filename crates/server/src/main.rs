@@ -119,11 +119,32 @@ async fn main() -> anyhow::Result<()> {
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!("listening on {bind}");
             axum::serve(listener, router)
-                .with_graceful_shutdown(async {
-                    let _ = tokio::signal::ctrl_c().await;
-                })
+                .with_graceful_shutdown(shutdown_signal())
                 .await?;
         }
     }
     Ok(())
+}
+
+/// Resolves on SIGINT or (on unix) SIGTERM, so Kubernetes can stop the pod cleanly.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = term => {},
+    }
+    tracing::info!("shutting down");
 }

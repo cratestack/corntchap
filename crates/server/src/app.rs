@@ -5,7 +5,7 @@ use cratestack::mcp::{ProtectedResource, StreamableHttpServer};
 use cratestack::{AuthProvider, CratestackContext, CratestackError, RequestContext};
 
 use crate::{
-    auth, jobs, procs,
+    auth, jobs, mcp_compat, procs,
     schema::cratestack_schema,
     state::{AppState, Config},
     web,
@@ -52,6 +52,7 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
     let registry = procs::Procedures {
         state: state.clone(),
     };
+    let compat_tools = cratestack_schema::mcp::tools(db.clone(), registry.clone(), ());
     let tools = cratestack_schema::mcp::tools(db, registry, ());
     // We are our own authorization server: only our opaque tokens (device flow) are accepted,
     // never the IdP's JWTs. RFC 8414 metadata at /.well-known/oauth-authorization-server says so.
@@ -68,6 +69,17 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
         resource,
     )
     .build()?;
+
+    // /mcp: handshake-era clients (2025-11-25 and older, no 2026-07-28 header) are answered by
+    // the compat layer on the same generated tool table; everything else goes to cratestack.
+    let compat = mcp_compat::Compat::new(compat_tools, state.clone());
+    let mcp_router =
+        Router::new()
+            .fallback_service(mcp.service())
+            .layer(middleware::from_fn_with_state(
+                compat,
+                mcp_compat::front_door::<_>,
+            ));
 
     let router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
@@ -94,7 +106,7 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
         .nest("/api/v1", crate::rest::routes())
         .merge(web::routes())
         .with_state(state.clone())
-        .nest_service("/mcp", mcp.service())
+        .nest_service("/mcp", mcp_router)
         .merge(mcp.metadata_router())
         .layer(middleware::from_fn_with_state(
             state.clone(),

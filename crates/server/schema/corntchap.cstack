@@ -41,6 +41,10 @@ procedure getBoard(project: String): Json
   @allow(auth() != null)
   @mcp(tool: "get_board", description: "The project board as markdown with - [ ] checkboxes per task.")
 
+procedure getTaskMarkdown(id: String): Json
+  @allow(auth() != null)
+  @mcp(tool: "get_task_markdown", description: "One task rendered as markdown (the corntchap://task/{id} view): status, body, checklist, dependencies and comments. Returns {markdown}.")
+
 mutation procedure createTask(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?): Json
   @allow(auth() != null)
   @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated.")
