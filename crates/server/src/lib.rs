@@ -2,9 +2,11 @@
 pub mod admin;
 pub mod app;
 pub mod auth;
+pub mod console;
 pub mod error;
 pub mod jobs;
 pub mod mcp_compat;
+pub mod pages;
 pub mod procs;
 pub mod rest;
 pub mod service;

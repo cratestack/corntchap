@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["console"]
+# Embed console/dist (the web console) in the binary; without it a "console not built" page is served.
+console = ["dep:rust-embed"]
+
 [dependencies]
 cratestack = { package = "cratestack-pg", version = "0.20.6", features = ["mcp"] }
 authkestra = { version = "0.15.3", features = ["axum", "oidc", "resource"] }
@@ -32,6 +37,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.29.3", features = ["v4", "serde"] }
 serde_urlencoded = "0.7.1"
+rust-embed = { version = "8", optional = true, features = ["interpolate-folder-path", "debug-embed", "mime-guess"] }
 
 [dev-dependencies]
 jsonwebtoken = "11.1"

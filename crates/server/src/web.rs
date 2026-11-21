@@ -1,5 +1,5 @@
 //! Browser-facing and device-facing endpoints: OIDC SSO (authkestra OAuth2/OIDC flow),
-//! sessions, the RFC 8628 device authorization grant, and the read-only board.
+//! sessions, the RFC 8628 device authorization grant. The old server-rendered board now redirects to the console.
 
 use std::{collections::HashMap, time::Duration};
 
@@ -23,14 +23,13 @@ use uuid::Uuid;
 
 use crate::{
     admin,
-    auth::{generate_token, random_hex, sha256},
+    auth::{CONSOLE_HEADER, SESSION_COOKIE, generate_token, random_hex, sha256},
     error::{Error, Result},
-    service,
+    pages::{self, Left, esc},
     sessions::{self, PgSessionStore},
     state::{AppState, Principal},
 };
 
-const SESSION_COOKIE: &str = "ct_session";
 /// Sign-in attempt state: an authkestra `OAuth2State`, AES-GCM encrypted into this cookie.
 const STATE_COOKIE: &str = "ak_state";
 const SESSION_TTL_SECS: i64 = 12 * 3600;
@@ -40,40 +39,22 @@ pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/auth/oidc/login", get(oidc_login))
+        .route("/auth/signin", get(signin_page))
+        .route("/auth/session", get(session_info))
+        .route("/static/fonts/{file}", get(font_file))
         .route("/auth/oidc/callback", get(oidc_callback))
         .route("/logout", get(logout_page).post(logout))
         .route("/oauth/device/code", post(device_code))
         .route("/oauth/token", post(device_token))
         .route("/device", get(device_page).post(device_decision))
-        .route("/board", get(board_index))
-        .route("/board/{key}", get(board_project))
+        .route("/board", get(|| async { Redirect::to("/") }))
+        .route("/board/{key}", get(board_redirect))
 }
 
 // ---------- helpers ----------
 
-pub fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-fn page(title: &str, body: &str, refresh: bool) -> Html<String> {
-    Html(format!(
-        "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">{}<title>{}</title>\
-         <style>body{{font:16px/1.5 system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;color:#1b1b1b}}\
-         code,.code{{font:1.1rem ui-monospace,monospace;background:#f1f1ef;padding:.1rem .4rem;border-radius:4px}}\
-         .code{{font-size:2rem;letter-spacing:.15em;display:inline-block;padding:.4rem 1rem}}\
-         button{{font:inherit;padding:.5rem 1.2rem;margin-right:.5rem;cursor:pointer}}\
-         li.done{{color:#777}}ul{{list-style:none;padding-left:1.2rem}}h2{{margin-top:2rem}}small{{color:#666}}</style></head><body>{}</body></html>",
-        if refresh {
-            "<meta http-equiv=refresh content=15>"
-        } else {
-            ""
-        },
-        esc(title),
-        body
-    ))
+fn page(title: &str, body: &str) -> Html<String> {
+    pages::simple(title, body)
 }
 
 fn safe_next(next: Option<&str>) -> String {
@@ -165,21 +146,6 @@ pub async fn session_from_headers(
     )
 }
 
-/// Session cookie, or a bearer token (so `curl -H "Authorization: Bearer …" /board/PAY` works too).
-async fn web_principal(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<Option<(Principal, Option<String>)>> {
-    if let Some(s) = session_from_headers(state, headers).await? {
-        return Ok(Some((s.user, Some(s.csrf))));
-    }
-    if headers.contains_key(header::AUTHORIZATION) {
-        let p = crate::auth::authenticate_headers(state, headers).await?;
-        return Ok(Some((p, None)));
-    }
-    Ok(None)
-}
-
 fn login_redirect(next: &str) -> Response {
     Redirect::to(&format!("/auth/oidc/login?next={}", urlencode(next))).into_response()
 }
@@ -263,11 +229,7 @@ fn csrf_ok(a: &str, b: &str) -> bool {
 fn error_page(status: StatusCode, title: &str, msg: &str) -> Response {
     (
         status,
-        page(
-            title,
-            &format!("<h1>{}</h1><p>{msg}</p>", esc(title)),
-            false,
-        ),
+        page(title, &format!("<h1>{}</h1><p>{msg}</p>", esc(title))),
     )
         .into_response()
 }
@@ -324,8 +286,10 @@ async fn oidc_callback(
             StatusCode::FORBIDDEN,
             page(
                 "Sign-in refused",
-                &format!("<p>The identity provider said: {}</p>", esc(err)),
-                false,
+                &format!(
+                    "<h1>Sign-in refused</h1><p>The identity provider said: <code>{}</code></p><p><a class=\"btn primary\" href=\"/auth/oidc/login\">Try again</a></p>",
+                    esc(err)
+                ),
             ),
         )
             .into_response());
@@ -455,14 +419,18 @@ async fn logout_page(State(state): State<AppState>, headers: HeaderMap) -> Resul
     let Some(session) = session_from_headers(&state, &headers).await? else {
         return Ok(Redirect::to("/").into_response());
     };
-    Ok(page(
+    Ok(pages::render(
         "Log out",
+        Left {
+            headline: "Leaving the kitchen?",
+            sub: "Your session ends here and at your identity provider. Cooks and relays keep running.",
+            who: None,
+        },
         &format!(
-            "<h1>Log out?</h1><p>Signed in as <b>{}</b>.</p><form method=post action=/logout><input type=hidden name=csrf value=\"{}\"><button>Log out</button></form>",
+            "<h1>Log out?</h1><p>Signed in as <b>{}</b>.</p><form method=post action=/logout><input type=hidden name=csrf value=\"{}\"><div class=actions><button class=primary>Log out</button><a class=btn href=\"/\">Stay</a></div></form>",
             esc(&session.user.name),
             esc(&session.csrf)
         ),
-        false,
     )
     .into_response())
 }
@@ -740,6 +708,14 @@ async fn device_token(
     Ok(resp)
 }
 
+fn device_left<'a>(session: &'a Session) -> Left<'a> {
+    Left {
+        headline: "Approve a device",
+        sub: "A terminal, an agent or a relay asked to join your kitchen. Check the code matches before you say yes.",
+        who: Some((session.user.name.as_str(), session.csrf.as_str())),
+    }
+}
+
 async fn device_page(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -758,11 +734,13 @@ async fn device_page(
         return Ok(login_redirect(&next));
     };
     if code.is_empty() {
-        return Ok(page(
+        return Ok(pages::render(
             "Connect a device",
-            "<h1>Connect a device</h1><form method=get action=/device><p>Enter the code shown in your terminal:</p>\
-             <p><input name=user_code autofocus placeholder=\"ABCD-EFGH\" style=\"font:1.4rem ui-monospace,monospace\"></p><button>Continue</button></form>",
-            false,
+            device_left(&session),
+            "<h1>Enter the code</h1><p>It is shown in the terminal that asked you to connect.</p>\
+             <form method=get action=/device><label class=label for=user_code>Device code</label>\
+             <input id=user_code name=user_code autofocus autocomplete=off spellcheck=false placeholder=\"ABCD-EFGH\">\
+             <div class=actions><button class=primary>Continue</button></div></form>",
         )
         .into_response());
     }
@@ -775,10 +753,10 @@ async fn device_page(
     let Some((kind, name, runtime, agent_kind)) = row else {
         return Ok((
             StatusCode::NOT_FOUND,
-            page(
+            pages::render(
                 "Unknown code",
-                "<h1>Unknown or expired code</h1><p>Start again from your terminal.</p>",
-                false,
+                device_left(&session),
+                "<h1>Unknown or expired code</h1><p>Codes last ten minutes and work once. Start again from your terminal.</p><div class=actions><a class=\"btn primary\" href=\"/device\">Enter another code</a></div>",
             ),
         )
             .into_response());
@@ -792,39 +770,49 @@ async fn device_page(
             .await?,
     };
     let warn = existing
-        .map(|(o,)| format!("<p><b>Warning:</b> this name already exists (owner: {}). Approving <b>replaces its credentials</b>; the old token stops working.</p>", esc(&o)))
+        .map(|(o,)| format!("<div class=warn><b>Heads up:</b> this name already exists (owner: {}). Approving <b>replaces its credentials</b>; the old token stops working.</div>", esc(&o)))
         .unwrap_or_default();
-    let what = match kind.as_str() {
-        "user" => format!(
-            "sign in <b>the CLI</b> as <b>{}</b>",
-            esc(&session.user.name)
-        ),
-        "agent" => format!(
-            "enroll the <b>{}</b> agent <code>{}</code> ({}) owned by <b>{}</b>",
-            esc(agent_kind.as_deref().unwrap_or("other")),
-            esc(name.as_deref().unwrap_or("")),
-            esc(runtime.as_deref().unwrap_or("local")),
-            esc(&session.user.name)
-        ),
-        _ => format!(
-            "enroll the relay <code>{}</code> owned by <b>{}</b>",
-            esc(name.as_deref().unwrap_or("")),
-            esc(&session.user.name)
-        ),
-    };
-    Ok(page(
+    let row = |k: &str, v: &str| format!("<div><dt>{k}</dt><dd>{v}</dd></div>");
+    let mut details = String::new();
+    match kind.as_str() {
+        "user" => {
+            details.push_str(&row("Action", "Sign in the CLI"));
+            details.push_str(&row("As", &esc(&session.user.name)));
+        }
+        "agent" => {
+            details.push_str(&row("Action", "Enroll a cook"));
+            details.push_str(&row(
+                "Name",
+                &format!("<code>{}</code>", esc(name.as_deref().unwrap_or(""))),
+            ));
+            details.push_str(&row(
+                "Runs in",
+                &esc(agent_kind.as_deref().unwrap_or("other")),
+            ));
+            details.push_str(&row("Runtime", &esc(runtime.as_deref().unwrap_or("local"))));
+            details.push_str(&row("Owner", &esc(&session.user.name)));
+        }
+        _ => {
+            details.push_str(&row("Action", "Enroll a fire (relay)"));
+            details.push_str(&row(
+                "Name",
+                &format!("<code>{}</code>", esc(name.as_deref().unwrap_or(""))),
+            ));
+            details.push_str(&row("Owner", &esc(&session.user.name)));
+        }
+    }
+    Ok(pages::render(
         "Approve device",
+        device_left(&session),
         &format!(
-            "<h1>Approve this device?</h1><p>Code <span class=code>{c}</span></p><p>This will {what}.</p>{warn}\
+            "<div class=label>Device code</div><div class=code>{c}</div>\
+             <dl class=details>{details}</dl>{warn}\
              <form method=post action=/device><input type=hidden name=user_code value=\"{c}\"><input type=hidden name=csrf value=\"{csrf}\">\
-             <button name=action value=approve>Approve</button><button name=action value=deny>Deny</button></form>\
-             <p><small>Only approve if you started this from your own terminal. Signed in as {u}.</small></p>",
+             <div class=actions><button class=primary name=action value=approve>Approve</button><button name=action value=deny>Deny</button></div></form>\
+             <p style=\"margin-top:18px\"><small>Only approve if you started this from your own terminal.</small></p>",
             c = esc(&code),
-            warn = warn,
             csrf = esc(&session.csrf),
-            u = esc(&session.user.name)
         ),
-        false,
     )
     .into_response())
 }
@@ -860,7 +848,10 @@ async fn device_decision(
     let Some((id, kind, name, runtime, agent_kind)) = row else {
         return Ok((
             StatusCode::NOT_FOUND,
-            page("Unknown code", "<h1>Unknown or expired code</h1>", false),
+            page(
+                "Unknown code",
+                "<h1>Unknown or expired code</h1><p>Start again from your terminal.</p>",
+            ),
         )
             .into_response());
     };
@@ -870,10 +861,10 @@ async fn device_decision(
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        return Ok(page(
+        return Ok(pages::render(
             "Denied",
-            "<h1>Denied</h1><p>The device was not connected.</p>",
-            false,
+            device_left(&session),
+            "<h1 class=bad>Denied</h1><p>The device was not connected. Nothing was created.</p>",
         )
         .into_response());
     }
@@ -925,100 +916,71 @@ async fn device_decision(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok(page(
+    Ok(pages::render(
         "Approved",
-        "<h1>Approved</h1><p>You can return to your terminal.</p>",
-        false,
+        device_left(&session),
+        "<h1 class=ok>Approved</h1><p>You can return to your terminal. It picks the credential up within a few seconds.</p>",
     )
     .into_response())
 }
 
-// ---------- board ----------
+// ---------- console hand-offs ----------
 
-/// "signed in as X . Log out" (the log-out button only for cookie sessions, which carry a CSRF token).
-fn signed_in_header(p: &Principal, csrf: Option<&str>) -> String {
-    let out = csrf
-        .map(|c| format!(" &middot; <form method=post action=/logout style=display:inline><input type=hidden name=csrf value=\"{}\"><button style=\"padding:0;margin:0;border:0;background:none;color:#06c;text-decoration:underline;font-size:inherit\">Log out</button></form>", esc(c)))
-        .unwrap_or_default();
-    format!(
-        "<p style=\"text-align:right\"><small>Signed in as <b>{}</b>{out}</small></p>",
-        esc(&p.name)
+/// The old read-only board lives in the console now.
+async fn board_redirect(Path(key): Path<String>) -> Redirect {
+    Redirect::to(&format!("/pots/{}", urlencode(&key.to_uppercase())))
+}
+
+/// The sign-in landing (design: Sign-in, split screen): one button into the OIDC flow.
+async fn signin_page(Query(q): Query<HashMap<String, String>>) -> Response {
+    let next = safe_next(q.get("next").map(|s| s.as_str()));
+    pages::render(
+        "Sign in",
+        Left {
+            headline: "Tasks for the cooks you run",
+            sub: "Claim, tick, serve. Humans and coding agents share one pot without stepping on each other.",
+            who: None,
+        },
+        &format!(
+            "<h1>Welcome back</h1><p>Sign in with your organisation's single sign-on to open the kitchen.</p>\
+             <div class=actions><a class=\"btn primary\" href=\"/auth/oidc/login?next={}\">Continue with single sign-on</a></div>",
+            urlencode(&next)
+        ),
     )
+    .into_response()
 }
 
-async fn board_index(State(state): State<AppState>, headers: HeaderMap) -> Result<Response> {
-    let Some((p, csrf)) = web_principal(&state, &headers).await? else {
-        return Ok(login_redirect("/board"));
-    };
-    let projects = service::list_projects(&state.db, &p).await?;
-    let mut body = format!(
-        "{}<h1>Boards</h1><ul>",
-        signed_in_header(&p, csrf.as_deref())
-    );
-    for pr in projects.as_array().into_iter().flatten() {
-        let key = pr["key"].as_str().unwrap_or("");
-        body.push_str(&format!(
-            "<li><a href=\"/board/{k}\"><b>{k}</b></a> {n} — {r} ready, {c} in progress, {d} done</li>",
-            k = esc(key),
-            n = esc(pr["name"].as_str().unwrap_or("")),
-            r = pr["ready"],
-            c = pr["claimed"],
-            d = pr["done"]
-        ));
+/// Who the console is signed in as, plus the CSRF token for the server-rendered `POST /logout`.
+async fn session_info(State(state): State<AppState>, headers: HeaderMap) -> Result<Response> {
+    if headers.get(CONSOLE_HEADER).is_none() {
+        return Err(Error::Unauthorized);
     }
-    body.push_str("</ul>");
-    Ok(page("Boards", &body, false).into_response())
+    let Some(s) = session_from_headers(&state, &headers).await? else {
+        return Err(Error::Unauthorized);
+    };
+    let mut resp = Json(json!({
+        "id": s.user.id,
+        "name": s.user.name,
+        "kind": s.user.kind,
+        "is_admin": s.user.is_admin,
+        "csrf": s.csrf,
+    }))
+    .into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    Ok(resp)
 }
 
-async fn board_project(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(key): Path<String>,
-) -> Result<Response> {
-    let Some((p, csrf)) = web_principal(&state, &headers).await? else {
-        return Ok(login_redirect(&format!("/board/{key}")));
-    };
-    let (title, tasks) = service::board_data(&state.db, &p, &key.to_uppercase()).await?;
-    let mut body = format!(
-        "{}<p><a href=/board>&larr; boards</a></p><h1>{}</h1>",
-        signed_in_header(&p, csrf.as_deref()),
-        esc(&title)
-    );
-    for (heading, status) in [
-        ("In progress", "claimed"),
-        ("Ready / open", "open"),
-        ("Blocked", "blocked"),
-        ("Done", "done"),
-        ("Cancelled", "cancelled"),
-    ] {
-        let group: Vec<&Value> = tasks.iter().filter(|t| t["status"] == status).collect();
-        if group.is_empty() {
-            continue;
-        }
-        body.push_str(&format!("<h2>{heading}</h2><ul>"));
-        for t in group {
-            let mark = if status == "done" { "☑" } else { "☐" };
-            let by = t["claimed_by"]
-                .as_str()
-                .map(|b| format!(" <small>· {}</small>", esc(b)))
-                .unwrap_or_default();
-            body.push_str(&format!(
-                "<li>{mark} <b>{}</b> {}{by}<ul>",
-                esc(t["id"].as_str().unwrap_or("")),
-                esc(t["title"].as_str().unwrap_or(""))
-            ));
-            for i in t["items"].as_array().into_iter().flatten() {
-                let done = i["done"].as_bool().unwrap_or(false);
-                body.push_str(&format!(
-                    "<li class=\"{}\">{} {}</li>",
-                    if done { "done" } else { "" },
-                    if done { "☑" } else { "☐" },
-                    esc(i["text"].as_str().unwrap_or(""))
-                ));
-            }
-            body.push_str("</ul></li>");
-        }
-        body.push_str("</ul>");
+async fn font_file(Path(file): Path<String>) -> Response {
+    match pages::font(&file) {
+        Some(bytes) => (
+            [
+                (header::CONTENT_TYPE, "font/woff2"),
+                (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
     }
-    Ok(page(&title, &body, true).into_response())
 }

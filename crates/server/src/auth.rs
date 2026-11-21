@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use authkestra::core::{
+    auth::{SessionStore, strategy::utils::extract_cookie},
     error::AuthError,
-    strategy::{TokenStrategy, TokenValidator},
+    strategy::{AuthenticationStrategy, TokenStrategy, TokenValidator},
 };
 use authkestra::resource::Guard;
 use axum::{
@@ -20,8 +21,15 @@ use sqlx::PgPool;
 
 use crate::{
     error::{Error, Result},
+    sessions::PgSessionStore,
     state::{AppState, Principal},
 };
+
+/// The browser session cookie set by the OIDC callback.
+pub const SESSION_COOKIE: &str = "ct_session";
+/// The console sends this header on every API call. The session cookie only counts together with it: a
+/// cross-site page cannot add a custom header without a CORS preflight, which this server never grants.
+pub const CONSOLE_HEADER: &str = "x-corntchap-console";
 
 pub const TOKEN_PREFIX: &str = "ct_";
 
@@ -102,21 +110,115 @@ impl TokenValidator for DbTokenValidator {
     }
 }
 
-pub fn build_guard(db: PgPool) -> Arc<Guard<Principal>> {
+/// Cookie-session authentication for the console (`/api/v1` and `/api/v2` see the same `Principal` as with a bearer
+/// token). It applies only when the request carries [`CONSOLE_HEADER`]; for unsafe methods the `Origin` header must
+/// also equal the origin of `PUBLIC_URL` (CSRF). Anything else yields "no credentials" (401), never a guess.
+pub struct SessionCookieStrategy {
+    store: PgSessionStore,
+    origin: String,
+}
+
+/// `https://host:port` of a base URL (no path), for comparing with an `Origin` header.
+pub fn origin_of(url: &str) -> String {
+    url.split('/').take(3).collect::<Vec<_>>().join("/")
+}
+
+pub fn console_request_allowed(
+    method: &http::Method,
+    headers: &http::HeaderMap,
+    origin: &str,
+) -> bool {
+    if headers
+        .get(CONSOLE_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_none_or(|v| v.trim().is_empty())
+    {
+        return false;
+    }
+    let safe = matches!(
+        *method,
+        http::Method::GET | http::Method::HEAD | http::Method::OPTIONS
+    );
+    safe || headers
+        .get(http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|o| o.trim_end_matches('/') == origin)
+}
+
+#[async_trait]
+impl AuthenticationStrategy<Principal> for SessionCookieStrategy {
+    async fn authenticate(
+        &self,
+        parts: &http::request::Parts,
+    ) -> std::result::Result<Option<Principal>, AuthError> {
+        if !console_request_allowed(&parts.method, &parts.headers, &self.origin) {
+            return Ok(None);
+        }
+        let Some(cookie) = extract_cookie(&parts.headers, SESSION_COOKIE) else {
+            return Ok(None);
+        };
+        let Some(session) = self.store.load_session(cookie).await? else {
+            return Ok(None);
+        };
+        let Ok(uid) = session.identity.external_id.parse::<uuid::Uuid>() else {
+            return Ok(None);
+        };
+        let row: Option<(uuid::Uuid, String, String, Option<uuid::Uuid>, bool, i64)> =
+            sqlx::query_as(
+                "select id, kind, name, owner_id, is_admin, max_leases from principals
+                 where id = $1 and kind = 'user' and disabled_at is null",
+            )
+            .bind(uid)
+            .fetch_optional(&self.store.db)
+            .await
+            .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(row.map(
+            |(id, kind, name, owner_id, is_admin, max_leases)| Principal {
+                id,
+                kind,
+                name,
+                owner_id,
+                is_admin,
+                max_leases,
+                runtime: None,
+                agent_kind: None,
+                token_id: None,
+            },
+        ))
+    }
+}
+
+pub fn build_guard(db: PgPool, public_url: &str) -> Arc<Guard<Principal>> {
     Arc::new(
         Guard::builder()
-            .strategy(TokenStrategy::new(DbTokenValidator { db }))
+            .strategy(TokenStrategy::new(DbTokenValidator { db: db.clone() }))
+            .strategy(SessionCookieStrategy {
+                store: PgSessionStore { db },
+                origin: origin_of(public_url),
+            })
             .build(),
     )
 }
 
-/// Authenticate from a bare header map (used by the cratestack MCP auth provider).
+/// Authenticate from a bare header map with a bearer token only (the MCP endpoint: cookies never count there).
 pub async fn authenticate_headers(
     state: &AppState,
     headers: &http::HeaderMap,
 ) -> Result<Principal> {
+    let mut h = headers.clone();
+    h.remove(http::header::COOKIE);
+    authenticate_request(state, &http::Method::POST, &h).await
+}
+
+/// Authenticate a request: bearer token, or (for the console) the session cookie, see [`SessionCookieStrategy`].
+pub async fn authenticate_request(
+    state: &AppState,
+    method: &http::Method,
+    headers: &http::HeaderMap,
+) -> Result<Principal> {
     check_transport_headers(state, headers)?;
     let mut req = http::Request::new(());
+    *req.method_mut() = method.clone();
     *req.headers_mut() = headers.clone();
     let (parts, _) = req.into_parts();
     match state.guard.authenticate(&parts).await {

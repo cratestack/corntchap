@@ -122,7 +122,7 @@ impl AppState {
             .user_agent("corntchap")
             .build()
             .expect("http client");
-        let guard = crate::auth::build_guard(db.clone());
+        let guard = crate::auth::build_guard(db.clone(), &config.public_url);
         AppState(Arc::new(Inner {
             db,
             config,

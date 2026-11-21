@@ -43,21 +43,21 @@ async fn login_raw(app: &common::TestApp) -> reqwest::Response {
 async fn jit_creates_user_and_maps_admin_role() {
     let app = common::start(false).await;
     app.sign_in_as("sub-dev", "Dev", false);
-    app.browser_login("/board").await;
+    app.browser_login("/").await;
     assert_eq!(row(&app, "dev").await, (false, "oidc".to_string()));
 
     // the admin role is synced on every sign-in, both ways
     app.sign_in_as("sub-dev", "Dev", true);
-    app.browser_login("/board").await;
+    app.browser_login("/").await;
     assert_eq!(row(&app, "dev").await, (true, "oidc".to_string()));
     app.sign_in_as("sub-dev", "Dev", false);
-    app.browser_login("/board").await;
+    app.browser_login("/").await;
     assert_eq!(row(&app, "dev").await, (false, "oidc".to_string()));
 
     // admins made by `init` are never demoted by the IdP
     admin::init_admin(&app.state.db, "boss").await.unwrap();
     app.sign_in_as("sub-boss", "Boss", false);
-    app.browser_login("/board").await;
+    app.browser_login("/").await;
     assert_eq!(row(&app, "boss").await, (true, "init".to_string()));
 
     // a name held by an agent is refused with a clear page
@@ -87,7 +87,7 @@ async fn logout_revokes_token_and_session() {
     assert_eq!(app.get(&t2, "/me").await.0, 200, "other tokens survive");
 
     // browser: GET shows a button, POST needs the CSRF token, clears the session and goes to the IdP
-    let cookie = app.browser_login("/board").await;
+    let cookie = app.browser_login("/").await;
     let page = app
         .http
         .get(format!("{}/logout", app.base))
@@ -137,22 +137,13 @@ async fn logout_revokes_token_and_session() {
     );
     let after = app
         .http
-        .get(format!("{}/board", app.base))
+        .get(format!("{}/auth/session", app.base))
         .header("cookie", &cookie)
+        .header("x-corntchap-console", "1")
         .send()
         .await
         .unwrap();
-    assert_eq!(
-        after.status().as_u16(),
-        303,
-        "session is gone: redirected to login"
-    );
-    assert!(
-        after.headers()["location"]
-            .to_str()
-            .unwrap()
-            .starts_with("/auth/oidc/login")
-    );
+    assert_eq!(after.status().as_u16(), 401, "session is gone");
 }
 
 #[tokio::test]
@@ -178,4 +169,76 @@ async fn serves_authorization_server_metadata() {
     assert_eq!(v["token_endpoint"], format!("{}/oauth/token", app.base));
     let r = app.get("ct_garbage", "/me").await;
     assert_eq!(r.0, 401);
+}
+
+#[tokio::test]
+async fn console_cookie_auth_needs_header_and_origin() {
+    let app = common::start(false).await;
+    admin::init_admin(&app.state.db, "octo").await.unwrap();
+    app.sign_in_as("sub-octo", "Octo", false);
+    let cookie = app.browser_login("/").await;
+    let get = |path: &str, header: bool| {
+        let mut r = app
+            .http
+            .get(format!("{}{path}", app.base))
+            .header("cookie", &cookie);
+        if header {
+            r = r.header("x-corntchap-console", "1");
+        }
+        r.send()
+    };
+    // cookie + console header: accepted on both /api/v1 and /api/v2
+    assert_eq!(
+        get("/api/v1/me", true).await.unwrap().status().as_u16(),
+        200
+    );
+    assert_eq!(
+        get("/api/v2/teams", true).await.unwrap().status().as_u16(),
+        200
+    );
+    // cookie alone: rejected
+    assert_eq!(
+        get("/api/v1/me", false).await.unwrap().status().as_u16(),
+        401
+    );
+    assert_eq!(
+        get("/api/v2/teams", false).await.unwrap().status().as_u16(),
+        401
+    );
+    // unsafe method: the Origin must be PUBLIC_URL's
+    let post = |origin: Option<&str>| {
+        let mut r = app
+            .http
+            .post(format!("{}/api/v2/$procs/whoami", app.base))
+            .header("cookie", &cookie)
+            .header("x-corntchap-console", "1")
+            .json(&json!({}));
+        if let Some(o) = origin {
+            r = r.header("origin", o);
+        }
+        r.send()
+    };
+    let own = app.state.config.public_url.clone();
+    assert_eq!(post(Some(&own)).await.unwrap().status().as_u16(), 200);
+    assert_eq!(
+        post(Some("https://evil.example"))
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        401
+    );
+    assert_eq!(post(None).await.unwrap().status().as_u16(), 401);
+    // MCP never takes cookies
+    let r = app
+        .http
+        .post(format!("{}/mcp", app.base))
+        .header("cookie", &cookie)
+        .header("x-corntchap-console", "1")
+        .header("origin", &own)
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(r.status().as_u16(), 200);
 }
