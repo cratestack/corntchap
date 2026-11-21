@@ -68,7 +68,22 @@ corntchap-cli cook wake add claude-cloud-1 --type webhook --url https://… --to
 # an agent registered by device flow instead (token printed once): corntchap-cli cook enroll <name> --kind codex --runtime local
 ```
 
-Config and credentials live in `~/.config/corntchap/` on Linux and `~/Library/Application Support/corntchap/` on macOS; set `CORNTCHAP_CONFIG_DIR` to use another directory. Example `config.toml` (the optional top-level `server = "https://…"` overrides the login's server; `timeout` takes `90`, `90s`, `45m`, `1h30m`):
+#### Stations: wake the exact session, in any folder
+
+You normally need **no `[[target]]` and no `directory` at all.** A *station* is one agent session (the runtime's own session id plus the folder it works in) registered for a cook in a pot. When work lands, the server wakes an idle station and the fire resumes that very session, so any number of repos, worktrees and runtimes work side by side:
+
+```sh
+cd ~/code/payments                      # anywhere inside the repo; all its worktrees are covered
+corntchap-cli station scan --dry-run    # what would be registered
+corntchap-cli station scan              # register it (pot found by matching `origin` with the pots' repo_url)
+corntchap-cli station ls                # id, cook, pot, runtime, label, holding/waiting, last woken
+corntchap-cli station rm st_ab12cd34ef
+corntchap-cli fire doctor               # per station: is its runtime reachable from this machine?
+```
+
+`scan` looks for OpenCode sessions (v2 API; the 1.x API as a fallback), Claude Code sessions (`~/.claude/projects/<dir>/<id>.jsonl`) and Codex sessions (`~/.codex/sessions/**/rollout-*.jsonl`), and registers the most recent one per runtime and folder (`--all`: every session). The cook of each runtime is your cook of that `kind` (`--cook` to choose, `--pot` to override the pot). The fire then resumes the session with built-in defaults: OpenCode through its server API, Claude Code with `claude -p --resume <session>` and Codex with `codex exec resume <session> -`, prompt on stdin and the station's folder as the working directory. A `[[target]]` for the cook is only a fallback (wakes that name no station; `adapter = "webhook"`) and may refine a station's runtime (an OpenCode `password_env`, a custom `command` containing `{session}`).
+
+Config and credentials live in `~/.config/corntchap/` on Linux and `~/Library/Application Support/corntchap/` on macOS; set `CORNTCHAP_CONFIG_DIR` to use another directory. Example `config.toml` (everything in it is optional; the top-level `server = "https://…"` overrides the login's server; `timeout` takes `90`, `90s`, `45m`, `1h30m`):
 
 ```toml
 [[target]]
@@ -91,7 +106,7 @@ command = ["claude", "-p", "--continue"]
 cwd = "~/code/payments"
 ```
 
-OpenCode's desktop app and TUI pick a new port on every start, so the `opencode` adapter finds the running server itself: `OPENCODE_PORT`, then running `opencode*` processes (their `--port`, or the ports they listen on), then `127.0.0.1:4096`, preferring the one with a session in `directory`. A password-protected server gets its password from `password_env` / `password` on the target, `OPENCODE_SERVER_PASSWORD`, or (Linux) the OpenCode process's own environment. `corntchap-cli fire doctor` shows what it found; `corntchap-cli fire poke <cook> --pot PAY` sends a wake right away to check the wiring. (OpenCode 1.x server API; the 2.x API is not supported yet.)
+OpenCode v2 runs one shared background service, which the fire finds with `opencode service status` (its URL) and `opencode service get password` (HTTP basic, user `opencode`), then talks to over `/api` (`/api/session`, `/api/session/{id}/prompt` with durable queued delivery); `fire doctor` prints the API version it found. For OpenCode 1.x, whose desktop app and TUI pick a new port on every start, the `opencode` adapter finds the running server itself: `OPENCODE_PORT`, then running `opencode*` processes (their `--port`, or the ports they listen on), then `127.0.0.1:4096`, preferring the one with a session in `directory`. A password-protected server gets its password from `password_env` / `password` on the target, `OPENCODE_SERVER_PASSWORD`, or (Linux) the OpenCode process's own environment. `corntchap-cli fire doctor` shows what it found; `corntchap-cli fire poke <cook> --pot PAY` sends a wake right away to check the wiring.
 
 The relay remembers the last event id it saw (`relay-state.json` next to `credentials.toml`) and sends it as `Last-Event-ID` on restart, so wakes sent while it was down are replayed.
 
