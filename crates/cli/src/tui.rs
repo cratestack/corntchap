@@ -42,6 +42,13 @@ pub enum Pane {
     Detail,
 }
 
+/// What the two right-hand panes show for the selected project.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum View {
+    Board,
+    Pantry,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AddField {
     Title,
@@ -71,6 +78,8 @@ pub enum Action {
     Refresh,
     LoadTasks(String),
     LoadDetail(String),
+    LoadMemories(String),
+    LoadMemory(String, String),
     Check {
         id: String,
         pos: i64,
@@ -98,6 +107,8 @@ pub enum Msg {
     Projects(Result<Value, String>),
     Tasks(String, Result<Value, String>),
     Detail(String, Result<Value, String>),
+    Memories(String, Result<Value, String>),
+    Memory(String, String, Result<Value, String>),
     Acted(String, Result<(), String>),
 }
 
@@ -112,6 +123,14 @@ pub struct App {
     pub sel_task: usize,
     pub detail: Option<Value>,
     pub item_sel: Option<usize>,
+    pub view: View,
+    /// Pantry memories (excerpts) for `memories_for`, in server order.
+    pub memories: Vec<Value>,
+    pub memories_for: Option<String>,
+    pub sel_memory: usize,
+    /// The selected memory in full.
+    pub memory: Option<Value>,
+    pub memory_scroll: u16,
     pub focus: Pane,
     pub mode: Mode,
     pub notice: Option<String>,
@@ -133,6 +152,12 @@ impl App {
             sel_task: 0,
             detail: None,
             item_sel: None,
+            view: View::Board,
+            memories: vec![],
+            memories_for: None,
+            sel_memory: 0,
+            memory: None,
+            memory_scroll: 0,
             focus: Pane::Projects,
             mode: Mode::Normal,
             notice: None,
@@ -155,6 +180,23 @@ impl App {
             .get(self.sel_task)
             .and_then(|t| t["id"].as_str())
             .map(String::from)
+    }
+
+    pub fn memory_key(&self) -> Option<String> {
+        self.memories
+            .get(self.sel_memory)
+            .and_then(|m| m["key"].as_str())
+            .map(String::from)
+    }
+
+    /// Actions that load the pantry of the selected project when it is not loaded yet.
+    fn pantry_loads(&self) -> Vec<Action> {
+        match self.project_key() {
+            Some(k) if self.view == View::Pantry && self.memories_for.as_deref() != Some(&k) => {
+                vec![Action::LoadMemories(k)]
+            }
+            _ => vec![],
+        }
     }
 
     fn detail_items(&self) -> &[Value] {
@@ -199,12 +241,14 @@ impl App {
                         .and_then(|k| self.projects.iter().position(|p| p["key"] == k.as_str()))
                         .unwrap_or(0)
                         .min(self.projects.len().saturating_sub(1));
-                    match self.project_key() {
+                    let mut acts = match self.project_key() {
                         Some(k) if self.tasks_for.as_deref() != Some(&k) => {
                             vec![Action::LoadTasks(k)]
                         }
                         _ => vec![],
-                    }
+                    };
+                    acts.extend(self.pantry_loads());
+                    acts
                 }
                 Err(e) => {
                     self.error = Some(e);
@@ -264,6 +308,46 @@ impl App {
                 }
                 vec![]
             }
+            Msg::Memories(pot, r) => match r {
+                Ok(v) => {
+                    if self.project_key().as_deref() != Some(&pot) {
+                        return vec![]; // stale answer for a project we left
+                    }
+                    self.error = None;
+                    let keep = self.memory_key();
+                    self.memories = v.as_array().cloned().unwrap_or_default();
+                    self.memories_for = Some(pot.clone());
+                    self.sel_memory = keep
+                        .and_then(|k| self.memories.iter().position(|m| m["key"] == k.as_str()))
+                        .unwrap_or(self.sel_memory)
+                        .min(self.memories.len().saturating_sub(1));
+                    match self.memory_key() {
+                        Some(k) => vec![Action::LoadMemory(pot, k)],
+                        None => {
+                            self.memory = None;
+                            vec![]
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.error = Some(e);
+                    vec![]
+                }
+            },
+            Msg::Memory(pot, key, r) => {
+                match r {
+                    Ok(v)
+                        if self.project_key().as_deref() == Some(&pot)
+                            && self.memory_key().as_deref() == Some(&key) =>
+                    {
+                        self.error = None;
+                        self.memory = Some(v);
+                    }
+                    Ok(_) => {}
+                    Err(e) => self.error = Some(e),
+                }
+                vec![]
+            }
             Msg::Acted(label, r) => match r {
                 Ok(()) => {
                     self.notice = Some(label);
@@ -290,6 +374,23 @@ impl App {
         self.task_id().map(Action::LoadDetail).into_iter().collect()
     }
 
+    fn select_memory(&mut self, i: usize) -> Vec<Action> {
+        if self.memories.is_empty() {
+            return vec![];
+        }
+        let i = i.min(self.memories.len() - 1);
+        if i == self.sel_memory {
+            return vec![];
+        }
+        self.sel_memory = i;
+        self.memory_scroll = 0;
+        self.memory = None;
+        match (self.project_key(), self.memory_key()) {
+            (Some(p), Some(k)) => vec![Action::LoadMemory(p, k)],
+            _ => vec![],
+        }
+    }
+
     fn select_project(&mut self, i: usize) -> Vec<Action> {
         if self.projects.is_empty() {
             return vec![];
@@ -304,10 +405,18 @@ impl App {
         self.tasks.clear();
         self.tasks_for = None;
         self.detail = None;
-        self.project_key()
+        self.sel_memory = 0;
+        self.memories.clear();
+        self.memories_for = None;
+        self.memory = None;
+        self.memory_scroll = 0;
+        let mut acts: Vec<Action> = self
+            .project_key()
             .map(Action::LoadTasks)
             .into_iter()
-            .collect()
+            .collect();
+        acts.extend(self.pantry_loads());
+        acts
     }
 
     fn step(&mut self, delta: i64) -> Vec<Action> {
@@ -316,7 +425,14 @@ impl App {
         };
         match self.focus {
             Pane::Projects => self.select_project(mv(self.sel_project, self.projects.len())),
+            Pane::Tasks if self.view == View::Pantry => {
+                self.select_memory(mv(self.sel_memory, self.memories.len()))
+            }
             Pane::Tasks => self.select_task(mv(self.sel_task, self.tasks.len())),
+            Pane::Detail if self.view == View::Pantry => {
+                self.memory_scroll = (self.memory_scroll as i64 + delta).max(0) as u16;
+                vec![]
+            }
             Pane::Detail => {
                 if let Some(c) = self.cur_item() {
                     self.item_sel = Some(mv(c, self.detail_items().len()));
@@ -440,7 +556,26 @@ impl App {
     }
 
     fn key_normal(&mut self, k: KeyEvent) -> Vec<Action> {
+        // The pantry view is read-only: the task keys do nothing there.
+        if self.view == View::Pantry
+            && matches!(
+                k.code,
+                KeyCode::Char('a' | 'c' | 'x' | ' ' | 'd' | 'u' | 'X')
+            )
+        {
+            return vec![];
+        }
         match k.code {
+            KeyCode::Char('p') => {
+                self.view = if self.view == View::Board {
+                    self.focus = Pane::Tasks;
+                    View::Pantry
+                } else {
+                    View::Board
+                };
+                self.memory_scroll = 0;
+                self.pantry_loads()
+            }
             KeyCode::Char('q') => {
                 self.quit = true;
                 vec![Action::Quit]
@@ -470,7 +605,11 @@ impl App {
                     Pane::Projects => self.focus = Pane::Tasks,
                     Pane::Tasks => self.focus = Pane::Detail,
                     Pane::Detail => {
-                        return self.toggle_item();
+                        return if self.view == View::Pantry {
+                            vec![]
+                        } else {
+                            self.toggle_item()
+                        };
                     }
                 }
                 vec![]
@@ -587,8 +726,13 @@ pub fn draw(f: &mut Frame, app: &App) {
         ])
         .split(rows[0]);
     draw_projects(f, app, &th, cols[0]);
-    draw_tasks(f, app, &th, cols[1]);
-    draw_detail(f, app, &th, cols[2]);
+    if app.view == View::Pantry {
+        draw_memories(f, app, &th, cols[1]);
+        draw_memory(f, app, &th, cols[2]);
+    } else {
+        draw_tasks(f, app, &th, cols[1]);
+        draw_detail(f, app, &th, cols[2]);
+    }
     draw_footer(f, app, &th, rows[1]);
     match &app.mode {
         Mode::Help => draw_help(f, &th),
@@ -712,6 +856,134 @@ fn draw_tasks(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
             area.inner(ratatui::layout::Margin::new(2, 1)),
         );
     }
+}
+
+fn tags_text(m: &Value) -> Option<String> {
+    m["tags"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .filter(|t| !t.is_empty())
+}
+
+fn draw_memories(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let on = app.focus == Pane::Tasks;
+    let title = match app.project_key() {
+        Some(k) => format!("Pantry · {k}"),
+        None => "Pantry".into(),
+    };
+    let items: Vec<ListItem> = app
+        .memories
+        .iter()
+        .map(|m| {
+            let kind = m["kind"].as_str().unwrap_or("note");
+            let mut sub = format!("  {}", m["key"].as_str().unwrap_or("?"));
+            if let Some(t) = tags_text(m) {
+                sub.push_str(&format!(" · {t}"));
+            }
+            if let Some(by) = m["updated_by"].as_str() {
+                let age = crate::ui::age(m["updated_at"].as_str().unwrap_or(""));
+                sub.push_str(&format!(" · {by} {age}"));
+            }
+            ListItem::new(vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!("{kind} "),
+                        th.fg(kind_color(kind)).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(m["title"].as_str().unwrap_or("").to_string()),
+                ]),
+                Line::from(Span::styled(sub, th.fg(Color::DarkGray))),
+            ])
+        })
+        .collect();
+    let mut state =
+        ListState::default().with_selected((!items.is_empty()).then_some(app.sel_memory));
+    let list = List::new(items)
+        .block(pane_block(th, title, on))
+        .highlight_style(th.selected(on));
+    f.render_stateful_widget(list, area, &mut state);
+    if app.memories.is_empty() && app.memories_for.is_some() {
+        f.render_widget(
+            Paragraph::new("the pantry is empty: stock it with `pantry stock`")
+                .style(th.fg(Color::DarkGray)),
+            area.inner(ratatui::layout::Margin::new(2, 1)),
+        );
+    }
+}
+
+fn kind_color(kind: &str) -> Color {
+    match kind {
+        "convention" => Color::Cyan,
+        "gotcha" => Color::Red,
+        "decision" => Color::Magenta,
+        "howto" => Color::Green,
+        "fact" => Color::Blue,
+        _ => Color::Reset,
+    }
+}
+
+fn draw_memory(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
+    let on = app.focus == Pane::Detail;
+    let block = pane_block(th, "Memory".into(), on);
+    let Some(d) = app
+        .memory
+        .as_ref()
+        .filter(|d| d["key"].as_str() == app.memory_key().as_deref())
+    else {
+        let msg = if app.memory_key().is_some() {
+            "loading…"
+        } else {
+            "select a memory"
+        };
+        f.render_widget(
+            Paragraph::new(msg)
+                .style(th.fg(Color::DarkGray))
+                .block(block),
+            area,
+        );
+        return;
+    };
+    let s = |k: &str| d[k].as_str().unwrap_or("").to_string();
+    let kind = s("kind");
+    let mut meta = vec![
+        Span::styled(kind.clone(), th.fg(kind_color(&kind))),
+        Span::raw(format!(
+            "  tags {}  revision {}",
+            tags_text(d).unwrap_or_else(|| "-".into()),
+            d["revision"]
+        )),
+    ];
+    if let Some(by) = d["updated_by"].as_str() {
+        meta.push(Span::raw(format!(
+            "  updated by {by} {}",
+            crate::ui::ago_phrase(&s("updated_at"))
+        )));
+    }
+    if let Some(t) = d["task"].as_str() {
+        meta.push(Span::raw(format!("  task {t}")));
+    }
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(s("key"), th.fg(Color::DarkGray)),
+            Span::raw("  "),
+            Span::styled(s("title"), Style::new().add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(meta),
+        Line::raw(""),
+    ];
+    lines.extend(s("body").lines().map(|l| Line::raw(l.to_string())));
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.memory_scroll, 0))
+            .block(block),
+        area,
+    );
 }
 
 /// Estimated rows a line takes when wrapped to `width`.
@@ -873,6 +1145,9 @@ fn ago(t: Option<Instant>) -> String {
 
 fn draw_footer(f: &mut Frame, app: &App, th: &Theme, area: Rect) {
     let hints = match app.mode {
+        Mode::Normal if app.view == View::Pantry => {
+            "j/k move/scroll  Tab pane  p back to tasks  r refresh  ? help  q quit  (read-only: add memories with `pantry stock`)"
+        }
         Mode::Normal => {
             "j/k move  Tab pane  Enter open  a add  c comment  x tick  d done  u unblock  X cancel  r refresh  ? help  q quit"
         }
@@ -942,6 +1217,7 @@ fn draw_help(f: &mut Frame, th: &Theme) {
             "open (projects > tasks > detail); in detail: tick item",
         ),
         ("x or Space", "tick / untick the highlighted checklist item"),
+        ("p", "toggle the pantry (shared memory) of this project"),
         ("a", "add a task (title, then items one per line)"),
         ("c", "comment on the task"),
         ("d", "mark done (claims, then completes)"),
@@ -1008,6 +1284,8 @@ fn dispatch(api: &Api, app: &App, tx: &UnboundedSender<Msg>, action: Action) {
         Action::Quit => {}
         Action::Refresh => {
             let (pk, tid) = (app.project_key(), app.task_id());
+            let pantry_pot = (app.view == View::Pantry).then(|| pk.clone()).flatten();
+            let pantry_key = app.memory_key();
             tokio::spawn(async move {
                 let _ = tx.send(Msg::Projects(api.get("/projects").await.map_err(err)));
                 if let Some(k) = pk {
@@ -1018,6 +1296,38 @@ fn dispatch(api: &Api, app: &App, tx: &UnboundedSender<Msg>, action: Action) {
                     let r = api.get(&format!("/tasks/{id}")).await.map_err(err);
                     let _ = tx.send(Msg::Detail(id, r));
                 }
+                if let Some(pot) = pantry_pot {
+                    let r = api
+                        .get(&format!("/projects/{pot}/pantry"))
+                        .await
+                        .map_err(err);
+                    let _ = tx.send(Msg::Memories(pot.clone(), r));
+                    if let Some(key) = pantry_key {
+                        let r = api
+                            .get(&format!("/projects/{pot}/pantry/{key}"))
+                            .await
+                            .map_err(err);
+                        let _ = tx.send(Msg::Memory(pot, key, r));
+                    }
+                }
+            });
+        }
+        Action::LoadMemories(pot) => {
+            tokio::spawn(async move {
+                let r = api
+                    .get(&format!("/projects/{pot}/pantry"))
+                    .await
+                    .map_err(err);
+                let _ = tx.send(Msg::Memories(pot, r));
+            });
+        }
+        Action::LoadMemory(pot, key) => {
+            tokio::spawn(async move {
+                let r = api
+                    .get(&format!("/projects/{pot}/pantry/{key}"))
+                    .await
+                    .map_err(err);
+                let _ = tx.send(Msg::Memory(pot, key, r));
             });
         }
         Action::LoadTasks(k) => {
@@ -1415,5 +1725,69 @@ mod tests {
             field: AddField::Title,
         };
         let _ = render(&app, 30, 8);
+    }
+
+    fn memories() -> Value {
+        json!([
+            {"key":"retry-429","title":"Retry on 429","kind":"gotcha","tags":["http"],
+             "updated_by":"ann","updated_at":"2026-11-21T10:00:00Z","revision":1,"body":"excerpt","truncated":true},
+            {"key":"use-sqlx","title":"Use sqlx","kind":"decision","tags":[],
+             "updated_by":"bob","updated_at":"2026-11-21T10:00:00Z","revision":2,"body":"short"}
+        ])
+    }
+
+    #[test]
+    fn p_toggles_the_pantry_and_loads_memories_once() {
+        let mut app = fixture();
+        let acts = app.update(key(KeyCode::Char('p')));
+        assert_eq!(app.view, View::Pantry);
+        assert_eq!(acts, vec![Action::LoadMemories("PAY".into())]);
+        let acts = app.update(Msg::Memories("PAY".into(), Ok(memories())));
+        assert_eq!(
+            acts,
+            vec![Action::LoadMemory("PAY".into(), "retry-429".into())]
+        );
+        // Back to the board and into the pantry again: already loaded.
+        app.update(key(KeyCode::Char('p')));
+        assert_eq!(app.view, View::Board);
+        assert!(app.update(key(KeyCode::Char('p'))).is_empty());
+    }
+
+    #[test]
+    fn pantry_view_lists_memories_and_shows_the_full_body_read_only() {
+        let mut app = fixture();
+        app.update(key(KeyCode::Char('p')));
+        app.update(Msg::Memories("PAY".into(), Ok(memories())));
+        app.update(Msg::Memory(
+            "PAY".into(),
+            "retry-429".into(),
+            Ok(
+                json!({"key":"retry-429","title":"Retry on 429","kind":"gotcha","tags":["http"],
+                "revision":1,"updated_by":"ann","updated_at":"2026-11-21T10:00:00Z",
+                "body":"Back off with jitter.\nNever hammer the API."}),
+            ),
+        ));
+        let s = render(&app, 140, 24);
+        assert!(s.contains("Pantry · PAY") && s.contains("Use sqlx"), "{s}");
+        assert!(
+            s.contains("Back off with jitter.") && s.contains("revision 1"),
+            "{s}"
+        );
+        // Task keys are inert; j moves to the next memory and loads it.
+        assert!(app.update(key(KeyCode::Char('d'))).is_empty());
+        let acts = app.update(key(KeyCode::Char('j')));
+        assert_eq!(
+            acts,
+            vec![Action::LoadMemory("PAY".into(), "use-sqlx".into())]
+        );
+    }
+
+    #[test]
+    fn empty_pantry_shows_a_hint() {
+        let mut app = fixture();
+        app.update(key(KeyCode::Char('p')));
+        app.update(Msg::Memories("PAY".into(), Ok(json!([]))));
+        let s = render(&app, 140, 24);
+        assert!(s.contains("the pantry is empty"), "{s}");
     }
 }

@@ -104,6 +104,128 @@ pub fn dim_cell(v: impl Into<String>) -> Cell {
     colored(v.into(), Color::DarkGrey)
 }
 
+/// Colour of a pantry memory kind.
+pub fn kind_color(kind: &str) -> Color {
+    match kind {
+        "convention" => Color::Cyan,
+        "gotcha" => Color::Red,
+        "decision" => Color::Magenta,
+        "howto" => Color::Green,
+        "fact" => Color::Blue,
+        _ => Color::Reset,
+    }
+}
+
+pub fn kind_cell(kind: &str) -> Cell {
+    colored(kind.to_string(), kind_color(kind))
+}
+
+/// "3m", "5h", "2d" between an RFC 3339 timestamp and `now`; "-" when it does not parse.
+pub fn age_at(ts: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    let Ok(t) = chrono::DateTime::parse_from_rfc3339(ts) else {
+        return "-".into();
+    };
+    let secs = (now - t.with_timezone(&chrono::Utc)).num_seconds().max(0);
+    match secs {
+        0..=59 => "now".into(),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86399 => format!("{}h", secs / 3600),
+        86400..=5_183_999 => format!("{}d", secs / 86400),
+        _ => format!("{}mo", secs / 2_592_000),
+    }
+}
+
+pub fn age(ts: &str) -> String {
+    age_at(ts, chrono::Utc::now())
+}
+
+/// "5m ago", or "just now" within the first minute.
+pub fn ago_phrase(ts: &str) -> String {
+    match age(ts).as_str() {
+        "now" => "just now".into(),
+        "-" => "at an unknown time".into(),
+        a => format!("{a} ago"),
+    }
+}
+
+fn tags_text(v: &Value) -> String {
+    match v["tags"].as_array() {
+        Some(a) if !a.is_empty() => a
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(","),
+        _ => "-".into(),
+    }
+}
+
+/// Pantry list/search results. Server order is kept (best match first when searching); a RANK
+/// column appears only when the server ranked the results.
+pub fn memories_table(v: &Value) -> String {
+    let items = v.as_array().cloned().unwrap_or_default();
+    let ranked = items.iter().any(|m| m["rank"].is_number());
+    let rows = items
+        .iter()
+        .map(|m| {
+            let mut r = vec![
+                dim_cell(s(m, "key")),
+                kind_cell(&s(m, "kind")),
+                plain(s(m, "title")),
+                plain(tags_text(m)),
+                plain(s(m, "updated_by")),
+                plain(age(&s(m, "updated_at"))),
+            ];
+            if ranked {
+                r.insert(
+                    0,
+                    dim_cell(m["rank"].as_f64().map_or("-".into(), |x| format!("{x:.2}"))),
+                );
+            }
+            r
+        })
+        .collect();
+    let headers: &[&str] = if ranked {
+        &["rank", "key", "kind", "title", "tags", "by", "age"]
+    } else {
+        &["key", "kind", "title", "tags", "by", "age"]
+    };
+    table(headers, rows, "")
+}
+
+/// `corntchap-cli pantry show` for humans.
+pub fn memory_detail(v: &Value) -> String {
+    let kind = s(v, "kind");
+    let kind_txt = if color_on() {
+        match kind.as_str() {
+            "convention" => kind.cyan().to_string(),
+            "gotcha" => kind.red().to_string(),
+            "decision" => kind.magenta().to_string(),
+            "howto" => kind.green().to_string(),
+            "fact" => kind.blue().to_string(),
+            _ => kind.clone(),
+        }
+    } else {
+        kind.clone()
+    };
+    let mut meta = vec![kind_txt, format!("tags {}", tags_text(v))];
+    meta.push(format!("revision {}", v["revision"]));
+    meta.push(format!(
+        "updated by {} {}",
+        s(v, "updated_by"),
+        ago_phrase(&s(v, "updated_at"))
+    ));
+    if let Some(t) = v["task"].as_str() {
+        meta.push(format!("task {t}"));
+    }
+    format!(
+        "{} {}\n{}\n\n{}",
+        dim(&s(v, "key")),
+        bold(&s(v, "title")),
+        meta.join("  ·  "),
+        s(v, "body").trim_end()
+    )
+}
+
 /// "3/5" progress text for a task JSON.
 pub fn progress(t: &Value) -> String {
     let total = t["total_items"].as_i64().unwrap_or(0);
@@ -440,5 +562,40 @@ mod tests {
         let d = task_detail(&v);
         assert!(d.contains("[x] a") && d.contains("[ ] b"));
         assert!(d.contains("ann: hi") && d.contains("P-0 [done] base"));
+    }
+
+    #[test]
+    fn age_buckets() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-21T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(age_at("2026-11-21T11:59:30.5+00:00", now), "now");
+        assert_eq!(age_at("2026-11-21T11:45:00+00:00", now), "15m");
+        assert_eq!(age_at("2026-11-21T07:00:00Z", now), "5h");
+        assert_eq!(age_at("2026-11-19T12:00:00Z", now), "2d");
+        assert_eq!(age_at("2026-05-21T12:00:00Z", now), "6mo");
+        assert_eq!(age_at("garbage", now), "-");
+    }
+
+    #[test]
+    fn memories_table_ranks_only_when_searching() {
+        let m = |rank: Value| {
+            json!([{"key":"retries","kind":"gotcha","title":"Retry on 429","tags":["http","api"],
+            "updated_by":"ann","updated_at":"2026-11-21T10:00:00Z","rank":rank}])
+        };
+        let plain_t = memories_table(&m(Value::Null));
+        assert!(!plain_t.contains("RANK") && plain_t.contains("http,api"));
+        let ranked = memories_table(&m(json!(0.5)));
+        assert!(ranked.contains("RANK") && ranked.contains("0.50"));
+    }
+
+    #[test]
+    fn memory_detail_has_meta_and_body() {
+        let d = memory_detail(
+            &json!({"key":"k","title":"T","kind":"howto","tags":[],"revision":3,
+            "updated_by":"bob","updated_at":"2026-11-21T10:00:00Z","task":"PAY-1","body":"hello\n"}),
+        );
+        assert!(d.contains("howto") && d.contains("revision 3") && d.contains("task PAY-1"));
+        assert!(d.ends_with("hello"));
     }
 }
