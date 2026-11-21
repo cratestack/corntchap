@@ -7,11 +7,11 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::Error,
-    menus, pantry,
+    menus, pantry, questions,
     schema::cratestack_schema::{self, procedures::*},
     service,
     state::{AppState, Principal},
-    stream,
+    stations, stream,
 };
 
 fn csv(v: &Option<String>) -> Vec<String> {
@@ -312,6 +312,7 @@ impl ProcedureRegistry for Procedures {
                 &a.project.to_uppercase(),
                 &csv(&a.labels),
                 a.menu.as_deref(),
+                a.station.as_deref(),
             )
             .await,
         )
@@ -325,7 +326,7 @@ impl ProcedureRegistry for Procedures {
         _z: claim_task::Authorized,
     ) -> Result<claim_task::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::claim_task(&self.state.db, &p, &a.id).await)
+        typed(service::claim_task(&self.state.db, &p, &a.id, a.station.as_deref()).await)
     }
 
     async fn heartbeat(
@@ -904,5 +905,178 @@ impl ProcedureRegistry for Procedures {
         let p = principal(ctx)?;
         let db = &self.state.db;
         typed(admin::set_grants(db, &p, &a.name, &csv(&Some(a.grants.clone()))).await)
+    }
+
+    async fn station_register(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: station_register::Args,
+        _z: station_register::Authorized,
+    ) -> Result<station_register::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(
+            stations::register(
+                db,
+                &p,
+                stations::NewStation {
+                    cook: a.cook,
+                    project: a.project,
+                    runtime: a.runtime,
+                    session: a.session,
+                    directory: a.directory,
+                    label: a.label,
+                },
+            )
+            .await,
+        )
+    }
+
+    async fn station_list(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: station_list::Args,
+        _z: station_list::Authorized,
+    ) -> Result<station_list::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(stations::list(db, &p, a.project.as_deref(), a.cook.as_deref()).await)
+    }
+
+    async fn station_remove(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: station_remove::Args,
+        _z: station_remove::Authorized,
+    ) -> Result<station_remove::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(stations::remove(db, &p, &a.id).await)
+    }
+
+    async fn question_ask(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_ask::Args,
+        _z: question_ask::Authorized,
+    ) -> Result<question_ask::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(
+            questions::ask(
+                db,
+                &p,
+                questions::Ask {
+                    project: a.project,
+                    body: a.question,
+                    task: a.task,
+                    options: lines(&a.options),
+                    to: a.to,
+                    wait: a.wait.unwrap_or(false),
+                    station: a.station,
+                },
+            )
+            .await,
+        )
+    }
+
+    async fn question_list(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_list::Args,
+        _z: question_list::Authorized,
+    ) -> Result<question_list::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(questions::list(db, &p, &a.project, a.status.as_deref()).await)
+    }
+
+    async fn question_mine(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_mine::Args,
+        _z: question_mine::Authorized,
+    ) -> Result<question_mine::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(questions::mine(db, &p, a.status.as_deref()).await)
+    }
+
+    async fn question_get(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_get::Args,
+        _z: question_get::Authorized,
+    ) -> Result<question_get::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(questions::get(db, &p, &a.id).await)
+    }
+
+    async fn question_pick(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_pick::Args,
+        _z: question_pick::Authorized,
+    ) -> Result<question_pick::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(questions::pick(db, &p, a.project.as_deref()).await)
+    }
+
+    async fn question_answer(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_answer::Args,
+        _z: question_answer::Authorized,
+    ) -> Result<question_answer::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(questions::answer(db, &p, &a.id, &a.answer, false).await)
+    }
+
+    async fn question_release(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_release::Args,
+        _z: question_release::Authorized,
+    ) -> Result<question_release::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(questions::release(db, &p, &a.id).await)
+    }
+
+    async fn question_note(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_note::Args,
+        _z: question_note::Authorized,
+    ) -> Result<question_note::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(questions::note(db, &p, &a.id, &a.note).await)
+    }
+
+    async fn question_dismiss(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_dismiss::Args,
+        _z: question_dismiss::Authorized,
+    ) -> Result<question_dismiss::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(questions::answer(db, &p, &a.id, a.reason.as_deref().unwrap_or(""), true).await)
     }
 }

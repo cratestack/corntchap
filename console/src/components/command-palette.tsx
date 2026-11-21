@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { BookMarked, ChefHat, Soup, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
+import { BookMarked, ChefHat, MessageCircleQuestion, Soup, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -11,7 +11,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { useUi } from "@/lib/ui";
-import { useProc, useProjects } from "@/lib/data";
+import { useProc, useProjects, useQuestions } from "@/lib/data";
 import { useTheme } from "@/lib/theme";
 import { logout, useSession } from "@/lib/session";
 import { lastView } from "@/lib/views";
@@ -31,6 +31,7 @@ export function CommandPalette() {
   const tasks = useProc("projectTasks", { project: pot ?? "" }, { enabled: !!pot && paletteOpen });
 
   const menus = useMenus(pot ?? "", !!pot && paletteOpen);
+  const asks = useQuestions(pot ?? "", "open", !!pot && paletteOpen).data?.length ?? 0;
 
   const run = (fn: () => void) => () => {
     setPaletteOpen(false);
@@ -56,6 +57,12 @@ export function CommandPalette() {
               onSelect={run(() => navigate(`/pots/${pot}/pantry`, { state: { focus: true } }))}
             >
               <BookMarked /> Search the pantry in {pot}
+            </CommandItem>
+          )}
+          {pot && (
+            <CommandItem value="questions for the chef ask answer decisions" onSelect={run(() => navigate(`/pots/${pot}/questions`))}>
+              <MessageCircleQuestion /> Questions in {pot}
+              {asks > 0 && <span className="ml-auto font-mono text-[11px] text-muted-foreground">{asks} open</span>}
             </CommandItem>
           )}
           {pot && (

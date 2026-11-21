@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from "react-router";
 import {
   ChefHat,
   Command as CommandIcon,
+  CircleHelp,
   Flame,
   FolderKanban,
   LogOut,
@@ -18,8 +19,8 @@ import { cn } from "@/lib/utils";
 import { logout, useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { useLive } from "@/lib/live";
-import { useAgents, useClaimedTasks, useInvalidateAll, useProjects, useV1, type AgentRow } from "@/lib/data";
-import { fmtAgo, useNow } from "@/lib/format";
+import { useAgents, useClaimedTasks, useInvalidateAll, useOpenQuestionCounts, useProjects, useV1, type AgentRow } from "@/lib/data";
+import { fmtAgo, plural, useNow } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import { lastView } from "@/lib/views";
 import { Avatar, StateDot, STATE_LABEL, cookState } from "./bits";
@@ -142,6 +143,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
     for (const t of claimed.tasks) if (t.claimed_by && t.lease_live) m.set(t.claimed_by, t.id);
     return m;
   }, [claimed.tasks]);
+  const asks = useOpenQuestionCounts(projects.data);
   const cooks = (agents.data ?? []).filter((a) => !a.disabled || a.busy > 0).slice(0, 7);
 
   return (
@@ -174,6 +176,13 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
                       {p.key}
                     </span>
                     <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                    {(asks[p.key] ?? 0) > 0 && (
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-primary px-1.5 py-px font-mono text-[10.5px] font-bold text-primary-foreground">
+                        <CircleHelp className="size-3" aria-hidden="true" />
+                        <span aria-hidden="true">{asks[p.key]}</span>
+                        <span className="sr-only">{plural(asks[p.key]!, "open question")}</span>
+                      </span>
+                    )}
                     <span className="font-mono text-[11px] tabular-nums text-sidebar-muted" title={`${live} not served yet`}>
                       {live}
                     </span>

@@ -43,7 +43,12 @@ Each project has a pantry, the memory all agents share: read it with read_pantry
 project and search it with recall before exploring or deciding. When you learn something durable the \
 next agent should know (a convention, a gotcha, a decision and why, how to build/test/deploy), save it \
 with remember, updating the existing memory (same key) rather than adding a duplicate. Task progress \
-goes in comments, never secrets in the pantry.";
+goes in comments, never secrets in the pantry. \
+When a wake prompt names your station (st_...), pass it as `station` to claim_next, claim_task and ask, \
+so leases and answers come back to this very session. When you need a human decision, ask it into the \
+pot's question pool with ask (wait=true on the task you hold parks it for you; the answer wakes you \
+with a fresh lease). When you are chatting with your owner, check list_questions and offer to go \
+through them: pick_question, ask them, then answer_question with their words.";
 
 pub struct Compat<T> {
     tools: T,

@@ -3,7 +3,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import type { MenuView, ProjectSummary, TaskView } from "@corntchap/api";
 import { Bookmark, Check, ChevronDown, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useProc, useProjects } from "@/lib/data";
+import { useProc, useProjects, useQuestions } from "@/lib/data";
 import { useLive } from "@/lib/live";
 import { useUi } from "@/lib/ui";
 import { BUCKETS, bucketOf, plural, type Bucket } from "@/lib/format";
@@ -32,6 +32,7 @@ import { TaskCard, TaskGroup, groupTasks } from "@/components/task-views";
 import { TaskSheet } from "@/components/task-sheet";
 import { NewMemoryDialog, PantryView } from "@/components/pantry";
 import { MenuDialog, MenuStrip, MenusView, useMenus } from "@/components/menus";
+import { AskQuestionDialog, QuestionsView } from "@/components/questions";
 
 const VIEWS: { id: BaseView; label: string }[] = [
   { id: "list", label: "List" },
@@ -39,7 +40,11 @@ const VIEWS: { id: BaseView; label: string }[] = [
   { id: "activity", label: "Activity" },
   { id: "pantry", label: "Pantry" },
   { id: "menus", label: "Menus" },
+  { id: "questions", label: "Questions" },
 ];
+
+/** The views that show tasks (and so take filters). */
+const TASK_VIEWS: BaseView[] = ["list", "board"];
 
 function readFilters(p: URLSearchParams): Filters {
   const f: Filters = {};
@@ -89,7 +94,7 @@ export function PotRedirect() {
 export function KitchenPage() {
   const { key = "", view = "list" } = useParams();
   const potKey = key.toUpperCase();
-  const base: BaseView = view === "board" || view === "activity" || view === "pantry" || view === "menus" ? view : "list";
+  const base: BaseView = view === "board" || view === "activity" || view === "pantry" || view === "menus" || view === "questions" ? view : "list";
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const openTask = useOpenTask();
@@ -101,6 +106,8 @@ export function KitchenPage() {
   const filters = readFilters(params);
   const selected = params.get("task");
   const [newMemory, setNewMemory] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const openQuestions = useQuestions(potKey, "open", !!project).data?.length ?? 0;
   const [menuDialog, setMenuDialog] = useState<{ open: boolean; menu: MenuView | null }>({ open: false, menu: null });
   const menus = useMenus(potKey, !!project);
 
@@ -181,8 +188,15 @@ export function KitchenPage() {
         tasks={all}
         menus={menus.menus}
         onNew={() =>
-          base === "pantry" ? setNewMemory(true) : base === "menus" ? setMenuDialog({ open: true, menu: null }) : openNewTask(potKey, filters.menu)
+          base === "pantry"
+            ? setNewMemory(true)
+            : base === "menus"
+              ? setMenuDialog({ open: true, menu: null })
+              : base === "questions"
+                ? setAsking(true)
+                : openNewTask(potKey, filters.menu)
         }
+        openQuestions={openQuestions}
         applyView={(v) => {
           const qs = new URLSearchParams();
           for (const [k, val] of Object.entries(v.filters)) if (val) qs.set(k, val);
@@ -212,6 +226,7 @@ export function KitchenPage() {
         {base === "board" && <BoardView loading={tasks.isLoading} tasks={visible} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} total={all.length} menus={chipNames} />}
         {base === "activity" && <ActivityView events={potEvents} />}
         {base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
+        {base === "questions" && <QuestionsView potKey={potKey} onAsk={() => setAsking(true)} />}
         {base === "menus" && (
           <MenusView
             potKey={potKey}
@@ -232,6 +247,7 @@ export function KitchenPage() {
         menu={menuDialog.menu}
         onClose={() => setMenuDialog((s) => ({ ...s, open: false }))}
       />
+      <AskQuestionDialog potKey={potKey} open={asking} onClose={() => setAsking(false)} />
       <NewMemoryDialog
         potKey={potKey}
         open={newMemory}
@@ -254,6 +270,7 @@ function PotHeader({
   menus,
   onNew,
   applyView,
+  openQuestions,
 }: {
   project: ProjectSummary;
   base: BaseView;
@@ -264,6 +281,7 @@ function PotHeader({
   menus: MenuView[];
   onNew: () => void;
   applyView: (v: SavedView) => void;
+  openQuestions: number;
 }) {
   const loc = useLocation();
   const [saved, setSaved] = useState<SavedView[]>(() => loadViews(project.key));
@@ -298,7 +316,7 @@ function PotHeader({
           <PaletteButton />
           <RefreshButton />
           <Button onClick={onNew}>
-            <Plus /> {base === "pantry" ? "Stock the pantry" : base === "menus" ? "New menu" : "New task"}
+            <Plus /> {base === "pantry" ? "Stock the pantry" : base === "menus" ? "New menu" : base === "questions" ? "Ask a question" : "New task"}
           </Button>
         </div>
       </div>
@@ -308,14 +326,20 @@ function PotHeader({
           {VIEWS.map((v) => (
             <Link
               key={v.id}
-              to={{ pathname: `/pots/${project.key}/${v.id}`, search: v.id === "activity" || v.id === "pantry" || v.id === "menus" || base === "pantry" || base === "menus" ? "" : loc.search }}
-              aria-current={base === v.id && !(active && base !== "pantry" && base !== "menus") ? "page" : undefined}
+              to={{ pathname: `/pots/${project.key}/${v.id}`, search: !TASK_VIEWS.includes(v.id) || !TASK_VIEWS.includes(base) ? "" : loc.search }}
+              aria-current={base === v.id && !(active && TASK_VIEWS.includes(base)) ? "page" : undefined}
               className={cn(
                 "rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
                 base === v.id && "bg-card text-foreground shadow-sm",
               )}
             >
               {v.label}
+              {v.id === "questions" && openQuestions > 0 && (
+                <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
+                  <span aria-hidden="true">{openQuestions}</span>
+                  <span className="sr-only"> open {openQuestions === 1 ? "question" : "questions"}</span>
+                </span>
+              )}
             </Link>
           ))}
           {saved.map((v) => (
@@ -337,7 +361,7 @@ function PotHeader({
           />
         </nav>
 
-        {base !== "activity" && base !== "pantry" && base !== "menus" && (
+        {TASK_VIEWS.includes(base) && (
           <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
             <FilterChip
               label="Menu"
@@ -691,6 +715,7 @@ const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[
   { id: "comments", label: "Comments", match: (k) => k === "task.commented" },
   { id: "pantry", label: "Pantry", match: (k) => k.startsWith("memory.") },
   { id: "menus", label: "Menus", match: (k) => k.startsWith("menu.") },
+  { id: "questions", label: "Questions", match: (k) => k.startsWith("question.") },
   { id: "edits", label: "New and edited", match: (k) => k === "task.created" || k === "task.updated" },
 ];
 

@@ -32,6 +32,7 @@ import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
 import { PRIORITIES } from "./new-task";
 import { MenuChip, useMenus } from "./menus";
+import { ParkedQuestion, parkedQuestionRef } from "./questions";
 import { projectOfTask } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
@@ -94,6 +95,7 @@ function TaskDetailBody({ id }: { id: string }) {
   const closed = t.status === "done" || t.status === "cancelled";
   const done = t.total_items - t.open_items;
   const note = taskNote(t as never);
+  const parkedRef = parkedQuestionRef(t);
   const canServe = !closed && (bucket === "ready" || mine);
 
   async function run<T>(label: string, fn: () => Promise<T>, ok?: string) {
@@ -200,6 +202,7 @@ function TaskDetailBody({ id }: { id: string }) {
         />
       ) : (
         <div className="flex-1 space-y-7 px-6 py-5">
+          {parkedRef && <ParkedQuestion id={parkedRef} pot={projectOfTask(t.id)} />}
           <section aria-label="Description">
             {t.body.trim() ? (
               <Markdown>{t.body}</Markdown>

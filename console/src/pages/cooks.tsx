@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page";
 import { Avatar, EmptyState, RowSkeleton, StateDot, STATE_LABEL, cookState } from "@/components/bits";
+import { StationList } from "@/components/stations";
 import { McpDialog, TokenDialog } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +26,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import {
   useAgents,
   useClaimedTasks,
+  useProc,
   useProjects,
   useV1,
   useV1Call,
@@ -32,6 +34,7 @@ import {
   type TeamRow,
   type WakeTargetRow,
 } from "@/lib/data";
+import type { StationView } from "@corntchap/api";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { KIND_LABEL } from "@/lib/snippets";
@@ -42,6 +45,7 @@ export function CooksPage() {
   const agents = useAgents();
   const projects = useProjects();
   const claimed = useClaimedTasks(projects.data);
+  const stations = useProc("stationList", {});
   const [creating, setCreating] = useState(false);
   const [token, setToken] = useState<{ name: string; kind: string | null; token: string; title: string; hint?: string } | null>(null);
   const loc = useLocation();
@@ -85,6 +89,7 @@ export function CooksPage() {
               key={a.name}
               a={a}
               current={current.get(a.name)?.id ?? null}
+              stations={(stations.data ?? []).filter((s) => s.cook === a.name)}
               onToken={(t) => setToken({ name: a.name, kind: a.agent_kind, ...t })}
             />
           ))}
@@ -169,10 +174,12 @@ function Grants({ a }: { a: AgentRow }) {
 function CookCard({
   a,
   current,
+  stations,
   onToken,
 }: {
   a: AgentRow;
   current: string | null;
+  stations: StationView[];
   onToken: (t: { token: string; title: string; hint?: string }) => void;
 }) {
   const now = useNow();
@@ -181,6 +188,9 @@ function CookCard({
   const [mcp, setMcp] = useState(false);
   const [confirm, setConfirm] = useState<"rotate" | "disable" | null>(null);
   const [wakeOpen, setWakeOpen] = useState(false);
+  // open by default once the cook has stations; a click overrides
+  const [stationsOpen, setStationsOpen] = useState<boolean | null>(null);
+  const showStations = stationsOpen ?? stations.length > 0;
   const st = cookState(a, now);
 
   async function rotate() {
@@ -208,7 +218,7 @@ function CookCard({
     <article
       id={`cook-${a.name}`}
       aria-label={`Cook ${a.name}`}
-      className={cn("scroll-mt-24 rounded-[14px] border border-border bg-card p-4", a.disabled && "opacity-75")}
+      className={cn("scroll-mt-24 min-w-0 rounded-[14px] border border-border bg-card p-4", a.disabled && "opacity-75")}
     >
       <div className="flex items-start gap-3">
         <Avatar name={a.name} className="size-10 rounded-lg text-[18px]" />
@@ -272,6 +282,18 @@ function CookCard({
           <Power /> {a.disabled ? "Enable" : "Disable"}
         </Button>
       </div>
+
+      <button
+        type="button"
+        aria-expanded={showStations}
+        onClick={() => setStationsOpen(!showStations)}
+        className="mt-4 flex w-full items-center gap-1.5 border-t border-border pt-3 text-left"
+      >
+        <ChevronDown className={cn("size-3.5 text-muted-foreground transition-transform", !showStations && "-rotate-90")} aria-hidden="true" />
+        <span className="label-caps">Stations</span>
+        <span className="font-mono text-[11px] text-muted-foreground">{stations.length}</span>
+      </button>
+      {showStations && <StationList stations={stations} />}
 
       <button
         type="button"

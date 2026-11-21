@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
-import type { CorntchapApiClient, ProjectSummary, TaskView } from "@corntchap/api";
+import type { CorntchapApiClient, ProjectSummary, QuestionView, TaskView } from "@corntchap/api";
 import { v1 } from "./api";
 
 type Procs = CorntchapApiClient["procedures"];
@@ -156,4 +156,31 @@ export interface WakeTargetRow {
 
 export function useAgents() {
   return useV1<AgentRow[]>("/agents");
+}
+
+// ---- the question pool ----
+
+/**
+ * A pot's questions by status. The query key is shared with the sidebar's counts, so the open list is fetched once.
+ * Everything sits under `["data"]`, so the live poller refreshes it on question.* events.
+ */
+export function useQuestions(pot: string, status: "open" | "all", enabled = true) {
+  const dp = useDataProvider();
+  const q = useQuery({
+    queryKey: ["data", "questions", pot, status],
+    queryFn: async () => {
+      const res = await dp().custom!({ url: "", method: "get", meta: { procedure: "questionList" }, payload: { project: pot, status } });
+      return (res as { data: QuestionView[] }).data;
+    },
+    enabled: enabled && !!pot,
+    staleTime: 1500,
+  });
+  return { data: q.data, isLoading: q.isLoading, error: q.error as unknown };
+}
+
+/** Open-question counts per pot, for the sidebar badges (from the pot summaries, no extra requests). */
+export function useOpenQuestionCounts(projects: ProjectSummary[] | undefined): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of projects ?? []) if (p.open_questions > 0) out[p.key] = p.open_questions;
+  return out;
 }

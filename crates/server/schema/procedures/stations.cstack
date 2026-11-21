@@ -1,0 +1,28 @@
+part of "../corntchap.cstack"
+
+// Stations: registered agent sessions (src/stations.rs). `corntchap-cli station scan` registers
+// the sessions it finds in a checkout and its worktrees.
+
+/// Register an agent session as a station of a cook in a pot.
+/// @param project Pot key, e.g. PAY.
+/// @param runtime opencode, claude-code, codex or other.
+/// @param session The runtime's own session id.
+/// @param cook The cook it works as (default: you, when a cook registers its own session).
+/// @param directory Where the session works on its machine.
+/// @param label A short name shown in the console, e.g. ai-helm (feature-x).
+mutation procedure stationRegister(project: String, runtime: String, session: String, cook: String?, directory: String?, label: String?): StationView
+  @allow(auth() != null)
+  @mcp(tool: "register_station", description: "Register an agent session as a station of a cook in a pot, so wakes resume that very session. Usually done by `corntchap-cli station scan`; a cook that knows its own session id can register itself.")
+
+/// Stations you can see.
+/// @param project Only this pot.
+/// @param cook Only this cook.
+procedure stationList(project: String?, cook: String?): StationView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_stations", description: "Registered agent sessions (stations): yours as a cook, or those of the cooks you own, with the tasks each holds or waits on.")
+
+/// Remove a station.
+/// @param id Station id, e.g. st_1a2b3c4d5e.
+mutation procedure stationRemove(id: String): OkResult
+  @allow(auth() != null)
+  @mcp(tool: "remove_station", description: "Forget a registered session (station).")

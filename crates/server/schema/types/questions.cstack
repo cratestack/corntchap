@@ -1,0 +1,48 @@
+part of "../corntchap.cstack"
+
+// The question pool.
+
+type QuestionNote {
+  author String?
+  body String
+  at String
+}
+
+/// A question in a pot's pool.
+type QuestionView {
+  /// Question id, e.g. PAY-Q3.
+  id String
+  project String
+  /// The task it is about, e.g. PAY-42.
+  task String?
+  asked_by String?
+  /// The station (session) that asked: the answer wakes it.
+  station String?
+  /// Addressed to this person or cook (else to the pot's people).
+  to String?
+  body String
+  /// Suggested answers, if the asker offered some.
+  options String[]
+  /// The asker parked its task until the answer.
+  wait Boolean
+  /// open, answered or dismissed.
+  status String
+  /// The cook currently asking it in a chat (held for a few minutes).
+  picked_by String?
+  answer String?
+  /// Who answered (for a relayed answer: the person, not the cook).
+  answered_by String?
+  /// The cook that relayed the answer from its owner's chat, if any.
+  relayed_by String?
+  answered_at String?
+  created_at String
+  updated_at String
+  /// Follow-ups in the question's thread.
+  notes QuestionNote[]
+}
+
+/// What pick_question returns: a question to put to your owner, or none.
+type PickedQuestion {
+  question QuestionView?
+  none Boolean?
+}
