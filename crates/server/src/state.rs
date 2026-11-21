@@ -25,7 +25,14 @@ pub struct OidcConfig {
     pub issuer: String,
     pub client_id: String,
     pub client_secret: String,
+    /// Issuer URL as browsers and API clients see it (defaults to `issuer`). Advertised as the
+    /// OAuth authorization server and used to rewrite the end-session URL for the browser.
+    pub public_issuer: Option<String>,
+    /// IdP role/group that grants admin (`OIDC_ADMIN_ROLE`, default `corntchap-admin`).
+    pub admin_role: String,
 }
+
+pub const DEFAULT_ADMIN_ROLE: &str = "corntchap-admin";
 
 impl Config {
     pub fn new(database_url: String, public_url: String, bind: String) -> Self {
@@ -52,6 +59,9 @@ pub struct Principal {
     pub max_leases: i32,
     pub runtime: Option<String>,
     pub agent_kind: Option<String>,
+    /// The bearer token this request authenticated with (None for sessions and MCP contexts).
+    #[serde(skip)]
+    pub token_id: Option<Uuid>,
 }
 
 impl Principal {

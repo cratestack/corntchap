@@ -24,6 +24,7 @@ type J = Result<Json<Value>>;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/me", get(me))
+        .route("/logout", post(logout))
         .route("/users", get(users_list).post(users_add))
         .route("/teams", get(teams_list).post(teams_add))
         .route("/teams/{team}/members", get(members_list).post(members_add))
@@ -89,6 +90,18 @@ fn ok(v: Value) -> J {
 
 async fn me(State(st): State<AppState>, Authn(p): Auth) -> J {
     ok(service::whoami(&st.db, &p).await?)
+}
+
+/// Revoke exactly the bearer token this request used (the CLI's `logout`).
+async fn logout(State(st): State<AppState>, Authn(p): Auth) -> J {
+    let Some(tid) = p.token_id else {
+        return Err(Error::Invalid("no bearer token on this request".into()));
+    };
+    sqlx::query("update tokens set revoked_at = now() where id = $1 and revoked_at is null")
+        .bind(tid)
+        .execute(&st.db)
+        .await?;
+    ok(json!({"ok": true}))
 }
 
 async fn users_list(State(st): State<AppState>, Authn(p): Auth) -> J {

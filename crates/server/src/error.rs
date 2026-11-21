@@ -100,7 +100,7 @@ impl IntoResponse for Error {
         if matches!(self, Error::Unauthorized) {
             resp.headers_mut().insert(
                 header::WWW_AUTHENTICATE,
-                "Basic realm=\"corntchap\"".parse().unwrap(),
+                "Bearer realm=\"corntchap\"".parse().unwrap(),
             );
         }
         resp

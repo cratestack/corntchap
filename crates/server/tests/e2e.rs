@@ -131,33 +131,28 @@ async fn sso_device_flow_rest_and_mcp() {
         (200, Some("octo"), Some(true))
     );
     assert_eq!(app.get("ct_garbage", "/me").await.0, 401);
-    sqlx::query("update principals set oidc_sub = 'someone-else' where name = 'octo'")
-        .execute(&app.state.db)
-        .await
-        .unwrap();
-    let r = app
+    // A new subject is provisioned just-in-time, as a non-admin user.
+    app.sign_in_as("sub-new", "Newbie", false);
+    let c = app.browser_login("/board").await;
+    let board = app
         .http
-        .get(format!("{}/auth/oidc/login", app.base))
+        .get(format!("{}/board", app.base))
+        .header("cookie", &c)
         .send()
         .await
-        .unwrap();
-    let r = app
-        .http
-        .get(r.headers()["location"].to_str().unwrap())
-        .send()
+        .unwrap()
+        .text()
         .await
         .unwrap();
-    let r = app
-        .http
-        .get(r.headers()["location"].to_str().unwrap())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(
-        r.status().as_u16(),
-        403,
-        "subject sub-4242 is not provisioned (octo is linked to a different subject)"
-    );
+    assert!(board.contains("Signed in as <b>newbie</b>"), "{board}");
+    let (is_admin, src): (bool, String) = sqlx::query_as(
+        "select is_admin, admin_source from principals where name = 'newbie' and oidc_sub = 'sub-new'",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert!(!is_admin);
+    assert_eq!(src, "oidc");
 
     // 5. admin sets up a team, project and an agent with a token
     assert_eq!(

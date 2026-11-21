@@ -53,6 +53,8 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
         state: state.clone(),
     };
     let tools = cratestack_schema::mcp::tools(db, registry, ());
+    // We are our own authorization server: only our opaque tokens (device flow) are accepted,
+    // never the IdP's JWTs. RFC 8414 metadata at /.well-known/oauth-authorization-server says so.
     let resource = ProtectedResource::new(
         format!("{}/mcp", state.config.public_url),
         [state.config.public_url.clone()],
@@ -69,6 +71,22 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
 
     let router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(
+                |axum::extract::State(st): axum::extract::State<AppState>| async move {
+                    let base = &st.config.public_url;
+                    axum::Json(serde_json::json!({
+                        "issuer": base,
+                        "device_authorization_endpoint": format!("{base}/oauth/device/code"),
+                        "token_endpoint": format!("{base}/oauth/token"),
+                        "grant_types_supported": [crate::web::DEVICE_GRANT],
+                        "token_endpoint_auth_methods_supported": ["none"],
+                        "response_types_supported": [],
+                    }))
+                },
+            ),
+        )
         .route(
             "/",
             get(|| async { axum::response::Redirect::to("/board") }),

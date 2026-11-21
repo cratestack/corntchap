@@ -88,6 +88,7 @@ fn principal(ctx: &CratestackContext) -> Result<Principal, CratestackError> {
         owner_id: field_str(ctx, "ownerId").and_then(|s| s.parse::<Uuid>().ok()),
         runtime: field_str(ctx, "runtime"),
         agent_kind: field_str(ctx, "agentKind"),
+        token_id: None,
     };
     p.worker().map_err(map_err)
 }

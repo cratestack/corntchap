@@ -34,15 +34,38 @@ pub async fn fresh_db() -> (sqlx::PgPool, String) {
     (pool, url)
 }
 
+/// Who the mock IdP signs in next.
+#[derive(Clone)]
+pub struct Ident {
+    pub sub: String,
+    pub username: String,
+    pub email: String,
+    pub admin_role: bool,
+}
+
+impl Default for Ident {
+    fn default() -> Self {
+        Ident {
+            sub: "sub-4242".into(),
+            username: "Octo".into(),
+            email: "octo@example.test".into(),
+            admin_role: false,
+        }
+    }
+}
+
+pub type Who = std::sync::Arc<std::sync::Mutex<Ident>>;
+
 pub struct TestApp {
     pub base: String,
     pub state: AppState,
     pub http: reqwest::Client,
     pub gh: String,
+    pub who: Who,
 }
 
 /// A tiny OpenID provider: discovery, authorize (bounces straight back), token (RS256 ID token), JWKS.
-pub async fn mock_oidc() -> String {
+pub async fn mock_oidc(who: Who) -> String {
     use axum::extract::State;
     use std::sync::{Arc, Mutex};
     type Codes = Arc<Mutex<HashMap<String, String>>>; // code -> nonce
@@ -50,6 +73,7 @@ pub async fn mock_oidc() -> String {
     struct Idp {
         base: String,
         codes: Codes,
+        who: Who,
     }
     async fn discovery(State(i): State<Idp>) -> Json<Value> {
         Json(json!({
@@ -57,6 +81,7 @@ pub async fn mock_oidc() -> String {
             "authorization_endpoint": format!("{}/authorize", i.base),
             "token_endpoint": format!("{}/token", i.base),
             "jwks_uri": format!("{}/jwks", i.base),
+            "end_session_endpoint": format!("{}/end-session", i.base),
             "response_types_supported": ["code"],
             "id_token_signing_alg_values_supported": ["RS256"],
         }))
@@ -86,10 +111,14 @@ pub async fn mock_oidc() -> String {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let claims = json!({
-            "iss": i.base, "aud": "cid", "sub": "sub-4242", "iat": now, "exp": now + 300, "nonce": nonce,
-            "preferred_username": "Octo", "email": "octo@example.test", "name": "Octo Cat",
+        let w = i.who.lock().unwrap().clone();
+        let mut claims = json!({
+            "iss": i.base, "aud": "cid", "sub": w.sub, "iat": now, "exp": now + 300, "nonce": nonce,
+            "preferred_username": w.username, "email": w.email, "email_verified": true, "name": "Octo Cat",
         });
+        if w.admin_role {
+            claims["realm_access"] = json!({"roles": ["offline_access", "corntchap-admin"]});
+        }
         let mut h = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
         h.kid = Some("k1".into());
         let key = jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("test_rsa.pem")).unwrap();
@@ -109,12 +138,14 @@ pub async fn mock_oidc() -> String {
     let idp = Idp {
         base: base.clone(),
         codes: Default::default(),
+        who,
     };
     let app = Router::new()
         .route("/.well-known/openid-configuration", get(discovery))
         .route("/authorize", get(authorize))
         .route("/token", post(token))
         .route("/jwks", get(jwks))
+        .route("/end-session", get(|| async { "bye" }))
         .with_state(idp);
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
     base
@@ -122,7 +153,8 @@ pub async fn mock_oidc() -> String {
 
 pub async fn start(background: bool) -> TestApp {
     let (pool, url) = fresh_db().await;
-    let gh = mock_oidc().await;
+    let who: Who = Default::default();
+    let gh = mock_oidc(who.clone()).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let mut cfg = Config::new(url, base.clone(), "127.0.0.1:0".into());
@@ -130,6 +162,8 @@ pub async fn start(background: bool) -> TestApp {
         issuer: gh.clone(),
         client_id: "cid".into(),
         client_secret: "csecret".into(),
+        public_issuer: None,
+        admin_role: "corntchap-admin".into(),
     });
     cfg.run_background = background;
     let state = AppState::new(pool, cfg);
@@ -144,6 +178,7 @@ pub async fn start(background: bool) -> TestApp {
         state,
         http,
         gh,
+        who,
     }
 }
 
@@ -198,6 +233,16 @@ impl TestApp {
     pub fn payload(result: &Value) -> Value {
         let text = result["content"][0]["text"].as_str().unwrap_or("null");
         serde_json::from_str(text).unwrap_or(Value::String(text.to_string()))
+    }
+
+    /// Choose who the mock IdP signs in next.
+    pub fn sign_in_as(&self, sub: &str, username: &str, admin_role: bool) {
+        *self.who.lock().unwrap() = Ident {
+            sub: sub.into(),
+            username: username.into(),
+            email: format!("{username}@example.test"),
+            admin_role,
+        };
     }
 
     /// Sign in through the mock OIDC provider and return the session cookie header value.

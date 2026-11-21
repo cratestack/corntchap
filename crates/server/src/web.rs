@@ -1,4 +1,4 @@
-//! Browser-facing and device-facing endpoints: GitHub SSO (authkestra OAuth2 flow),
+//! Browser-facing and device-facing endpoints: OIDC SSO (authkestra OAuth2/OIDC flow),
 //! sessions, the RFC 8628 device authorization grant, and the read-only board.
 
 use std::{collections::HashMap, time::Duration};
@@ -33,7 +33,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/auth/oidc/login", get(oidc_login))
         .route("/auth/oidc/callback", get(oidc_callback))
-        .route("/logout", get(logout))
+        .route("/logout", get(logout_page).post(logout))
         .route("/oauth/device/code", post(device_code))
         .route("/oauth/token", post(device_token))
         .route("/device", get(device_page).post(device_decision))
@@ -121,6 +121,7 @@ pub async fn session_from_headers(
                 max_leases,
                 runtime: None,
                 agent_kind: None,
+                token_id: None,
             },
             csrf,
         },
@@ -186,13 +187,65 @@ async fn oidc_flow(state: &AppState) -> Result<OAuth2Flow<OidcProvider>> {
     Ok(OAuth2Flow::new(provider.clone()))
 }
 
-/// A claim from the (already signature-checked) ID token's payload.
-fn id_token_claim(id_token: &str, key: &str) -> Option<String> {
+/// A claim (any JSON type) from the (already signature-checked) ID token's payload.
+fn id_token_claim(id_token: &str, key: &str) -> Option<Value> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     let payload = id_token.split('.').nth(1)?;
     let raw = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
     let v: Value = serde_json::from_slice(&raw).ok()?;
-    v.get(key)?.as_str().map(String::from)
+    v.get(key).cloned()
+}
+
+fn id_token_str(id_token: &str, key: &str) -> Option<String> {
+    id_token_claim(id_token, key)?.as_str().map(String::from)
+}
+
+/// True if the ID token carries `role` in Keycloak's `realm_access.roles` or a top-level
+/// `roles` / `groups` array (group paths like `/corntchap-admin` match too).
+fn has_admin_role(id_token: &str, role: &str) -> bool {
+    let matches = |v: &Value| {
+        v.as_array().is_some_and(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .any(|x| x == role || x.trim_start_matches('/') == role)
+        })
+    };
+    id_token_claim(id_token, "realm_access")
+        .and_then(|ra| ra.get("roles").cloned())
+        .is_some_and(|r| matches(&r))
+        || ["roles", "groups"]
+            .iter()
+            .any(|k| id_token_claim(id_token, k).is_some_and(|v| matches(&v)))
+}
+
+fn csrf_ok(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
+fn error_page(status: StatusCode, title: &str, msg: &str) -> Response {
+    (
+        status,
+        page(
+            title,
+            &format!("<h1>{}</h1><p>{msg}</p>", esc(title)),
+            false,
+        ),
+    )
+        .into_response()
+}
+
+/// Drop expired sign-in attempts, sessions and long-dead device requests.
+async fn purge_expired(db: &sqlx::PgPool) {
+    for q in [
+        "delete from oauth_states where expires_at < now()",
+        "delete from web_sessions where expires_at < now()",
+        "delete from device_requests where expires_at < now() - interval '1 day'",
+    ] {
+        if let Err(e) = sqlx::query(q).execute(db).await {
+            tracing::warn!("purge failed: {e}");
+        }
+    }
 }
 
 async fn oidc_login(
@@ -206,9 +259,7 @@ async fn oidc_login(
     let nonce = random_hex(16);
     let mut data = serde_json::to_value(&st).map_err(|e| Error::Internal(e.to_string()))?;
     data["ct_nonce_hash"] = json!(hex::encode(sha256(nonce.as_bytes())));
-    sqlx::query("delete from oauth_states where expires_at < now()")
-        .execute(&state.db)
-        .await?;
+    purge_expired(&state.db).await;
     sqlx::query("insert into oauth_states (state, data, next, expires_at) values ($1,$2,$3, now() + interval '10 minutes')")
         .bind(&st.state)
         .bind(data)
@@ -240,7 +291,7 @@ async fn oidc_callback(
             StatusCode::FORBIDDEN,
             page(
                 "Sign-in refused",
-                &format!("<p>GitHub said: {}</p>", esc(err)),
+                &format!("<p>The identity provider said: {}</p>", esc(err)),
                 false,
             ),
         )
@@ -276,41 +327,87 @@ async fn oidc_callback(
         .finalize_login(code, received, &expected)
         .await
         .map_err(|e| Error::Forbidden(format!("sign-in failed: {e}")))?;
-    let login = token
-        .id_token
-        .as_deref()
-        .and_then(|t| id_token_claim(t, "preferred_username"))
-        .or_else(|| identity.email.clone())
-        .unwrap_or_default()
-        .to_lowercase();
-    let gh_id = identity.external_id.clone();
+    let id_token = token.id_token.clone().unwrap_or_default();
+    let cfg = state.config.oidc.as_ref().expect("oidc configured");
+    let sub = identity.external_id.clone();
+    // The account name: preferred_username, else the local part of a *verified* e-mail address.
+    let verified = id_token_claim(&id_token, "email_verified")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let login = id_token_str(&id_token, "preferred_username")
+        .and_then(|n| admin::norm_name(&n).ok())
+        .or_else(|| {
+            if !verified {
+                return None;
+            }
+            let email = id_token_str(&id_token, "email")?;
+            admin::norm_name(email.split('@').next()?).ok()
+        });
+    let Some(login) = login else {
+        return Ok(error_page(
+            StatusCode::FORBIDDEN,
+            "Cannot create your account",
+            "The identity provider sent no usable <code>preferred_username</code> or verified e-mail; ask an admin.",
+        ));
+    };
+    let want_admin = has_admin_role(&id_token, &cfg.admin_role);
 
     // Match by stable subject first, then link a pre-provisioned login on first sign-in.
-    let user: Option<Uuid> = sqlx::query_scalar(
-        "update principals set oidc_sub = $1, oidc_login = $2
-         where kind = 'user' and disabled_at is null and (oidc_sub = $1 or (oidc_sub is null and oidc_login = $2))
-         returning id",
-    )
-    .bind(&gh_id)
-    .bind(&login)
-    .fetch_optional(&state.db)
-    .await?;
-    let Some(user) = user else {
-        return Ok((
-            StatusCode::FORBIDDEN,
-            page(
-                "Not provisioned",
-                &format!("<h1>Not provisioned</h1><p>Account <code>{}</code> has no user on this instance. Ask an admin to add it.</p>", esc(&login)),
-                false,
-            ),
+    let find = || async {
+        sqlx::query_scalar::<_, Uuid>(
+            "update principals set oidc_sub = $1, oidc_login = $2
+             where kind = 'user' and disabled_at is null and (oidc_sub = $1 or (oidc_sub is null and oidc_login = $2))
+             returning id",
         )
-            .into_response());
+        .bind(&sub)
+        .bind(&login)
+        .fetch_optional(&state.db)
+        .await
     };
+    let mut user = find().await?;
+    if user.is_none() {
+        // Just-in-time provisioning: the IdP is the source of truth for who may sign in.
+        user = sqlx::query_scalar(
+            "insert into principals (id, kind, name, oidc_login, oidc_sub, is_admin, admin_source)
+             values ($1,'user',$2,$2,$3,false,'oidc') on conflict do nothing returning id",
+        )
+        .bind(Uuid::new_v4())
+        .bind(&login)
+        .bind(&sub)
+        .fetch_optional(&state.db)
+        .await?;
+        if user.is_none() {
+            user = find().await?; // lost a race with a concurrent sign-in of the same user
+        }
+    }
+    let Some(user) = user else {
+        return Ok(error_page(
+            StatusCode::CONFLICT,
+            "Name already taken",
+            &format!(
+                "The name <code>{}</code> already belongs to another account on this instance (an agent, a relay, a disabled user or a user linked to a different sign-in). Ask an admin.",
+                esc(&login)
+            ),
+        ));
+    };
+    // Admin flag follows the IdP role, except for admins made by `init` or by hand.
+    sqlx::query(
+        "update principals set
+           admin_source = case when $2 and not is_admin then 'oidc' else admin_source end,
+           is_admin = case when $2 then true when admin_source = 'oidc' then false else is_admin end
+         where id = $1",
+    )
+    .bind(user)
+    .bind(want_admin)
+    .execute(&state.db)
+    .await?;
+    purge_expired(&state.db).await;
     let session = generate_token();
-    sqlx::query("insert into web_sessions (id_hash, user_id, csrf, expires_at) values ($1,$2,$3, now() + make_interval(secs => $4::float8))")
+    sqlx::query("insert into web_sessions (id_hash, user_id, csrf, id_token, expires_at) values ($1,$2,$3,$4, now() + make_interval(secs => $5::float8))")
         .bind(sha256(session.as_bytes()))
         .bind(user)
         .bind(random_hex(16))
+        .bind((!id_token.is_empty()).then_some(id_token))
         .bind(SESSION_TTL_SECS as f64)
         .execute(&state.db)
         .await?;
@@ -329,14 +426,90 @@ async fn oidc_callback(
     Ok(resp)
 }
 
-async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response> {
-    if let Some(tok) = cookie_value(&headers, SESSION_COOKIE) {
-        sqlx::query("delete from web_sessions where id_hash = $1")
-            .bind(sha256(tok.as_bytes()))
-            .execute(&state.db)
-            .await?;
+async fn logout_page(State(state): State<AppState>, headers: HeaderMap) -> Result<Response> {
+    let Some(session) = session_from_headers(&state, &headers).await? else {
+        return Ok(Redirect::to("/").into_response());
+    };
+    Ok(page(
+        "Log out",
+        &format!(
+            "<h1>Log out?</h1><p>Signed in as <b>{}</b>.</p><form method=post action=/logout><input type=hidden name=csrf value=\"{}\"><button>Log out</button></form>",
+            esc(&session.user.name),
+            esc(&session.csrf)
+        ),
+        false,
+    )
+    .into_response())
+}
+
+#[derive(Deserialize)]
+struct LogoutForm {
+    csrf: String,
+}
+
+/// The IdP's end_session_endpoint (from discovery), rewritten to the public issuer if set.
+async fn end_session_url(state: &AppState, id_token: Option<&str>) -> Option<String> {
+    let cfg = state.config.oidc.as_ref()?;
+    let doc: Value = state
+        .http
+        .get(format!(
+            "{}/.well-known/openid-configuration",
+            cfg.issuer.trim_end_matches('/')
+        ))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    let mut ep = doc.get("end_session_endpoint")?.as_str()?.to_string();
+    if let Some(public) = &cfg.public_issuer {
+        for internal in [Some(cfg.issuer.as_str()), doc["issuer"].as_str()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(rest) = ep.strip_prefix(internal.trim_end_matches('/')) {
+                ep = format!("{}{rest}", public.trim_end_matches('/'));
+                break;
+            }
+        }
     }
-    let mut resp = Redirect::to("/").into_response();
+    let mut url = format!(
+        "{ep}{}post_logout_redirect_uri={}/",
+        if ep.contains('?') { '&' } else { '?' },
+        urlencode(&state.config.public_url)
+    );
+    match id_token {
+        Some(t) => url.push_str(&format!("&id_token_hint={}", urlencode(t))),
+        None => url.push_str(&format!("&client_id={}", urlencode(&cfg.client_id))),
+    }
+    Some(url)
+}
+
+async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<LogoutForm>,
+) -> Result<Response> {
+    let mut target = "/".to_string();
+    if let Some(tok) = cookie_value(&headers, SESSION_COOKIE) {
+        let session = session_from_headers(&state, &headers).await?;
+        if let Some(s) = &session
+            && !csrf_ok(&f.csrf, &s.csrf)
+        {
+            return Err(Error::Forbidden("bad CSRF token".into()));
+        }
+        let id_token: Option<String> =
+            sqlx::query_scalar("delete from web_sessions where id_hash = $1 returning id_token")
+                .bind(sha256(tok.as_bytes()))
+                .fetch_optional(&state.db)
+                .await?
+                .flatten();
+        if let Some(u) = end_session_url(&state, id_token.as_deref()).await {
+            target = u;
+        }
+    }
+    let mut resp = Redirect::to(&target).into_response();
     resp.headers_mut().insert(
         header::SET_COOKIE,
         format!("{SESSION_COOKIE}=; Max-Age=0; Path=/")
@@ -408,9 +581,7 @@ async fn device_code(
             ));
         }
     };
-    sqlx::query("delete from device_requests where expires_at < now() - interval '1 day'")
-        .execute(&state.db)
-        .await?;
+    purge_expired(&state.db).await;
     let device_code = generate_token();
     let code = user_code();
     sqlx::query(
@@ -649,7 +820,7 @@ async fn device_decision(
     let Some(session) = session_from_headers(&state, &headers).await? else {
         return Ok(login_redirect("/device"));
     };
-    if f.csrf != session.csrf {
+    if !csrf_ok(&f.csrf, &session.csrf) {
         return Err(Error::Forbidden("bad CSRF token".into()));
     }
     let code = f.user_code.trim().to_uppercase();
@@ -740,14 +911,25 @@ async fn device_decision(
 
 // ---------- board ----------
 
+/// "signed in as X . Log out" (the log-out button only for cookie sessions, which carry a CSRF token).
+fn signed_in_header(p: &Principal, csrf: Option<&str>) -> String {
+    let out = csrf
+        .map(|c| format!(" &middot; <form method=post action=/logout style=display:inline><input type=hidden name=csrf value=\"{}\"><button style=\"padding:0;margin:0;border:0;background:none;color:#06c;text-decoration:underline;font-size:inherit\">Log out</button></form>", esc(c)))
+        .unwrap_or_default();
+    format!(
+        "<p style=\"text-align:right\"><small>Signed in as <b>{}</b>{out}</small></p>",
+        esc(&p.name)
+    )
+}
+
 async fn board_index(State(state): State<AppState>, headers: HeaderMap) -> Result<Response> {
-    let Some((p, _)) = web_principal(&state, &headers).await? else {
+    let Some((p, csrf)) = web_principal(&state, &headers).await? else {
         return Ok(login_redirect("/board"));
     };
     let projects = service::list_projects(&state.db, &p).await?;
     let mut body = format!(
-        "<h1>Boards</h1><p><small>Signed in as {}</small></p><ul>",
-        esc(&p.name)
+        "{}<h1>Boards</h1><ul>",
+        signed_in_header(&p, csrf.as_deref())
     );
     for pr in projects.as_array().into_iter().flatten() {
         let key = pr["key"].as_str().unwrap_or("");
@@ -769,12 +951,13 @@ async fn board_project(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<Response> {
-    let Some((p, _)) = web_principal(&state, &headers).await? else {
+    let Some((p, csrf)) = web_principal(&state, &headers).await? else {
         return Ok(login_redirect(&format!("/board/{key}")));
     };
     let (title, tasks) = service::board_data(&state.db, &p, &key.to_uppercase()).await?;
     let mut body = format!(
-        "<p><a href=/board>&larr; boards</a></p><h1>{}</h1>",
+        "{}<p><a href=/board>&larr; boards</a></p><h1>{}</h1>",
+        signed_in_header(&p, csrf.as_deref()),
         esc(&title)
     );
     for (heading, status) in [

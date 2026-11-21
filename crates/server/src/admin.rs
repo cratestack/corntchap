@@ -455,15 +455,17 @@ pub async fn init_admin(db: &PgPool, login: &str) -> Result<(String, Option<Stri
             .await?;
     let id = match existing {
         Some(id) => {
-            sqlx::query("update principals set is_admin = true where id = $1")
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query(
+                "update principals set is_admin = true, admin_source = 'init' where id = $1",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
             id
         }
         None => {
             let id = Uuid::new_v4();
-            sqlx::query("insert into principals (id, kind, name, oidc_login, is_admin) values ($1,'user',$2,$2,true)")
+            sqlx::query("insert into principals (id, kind, name, oidc_login, is_admin, admin_source) values ($1,'user',$2,$2,true,'init')")
                 .bind(id)
                 .bind(&login)
                 .execute(&mut *tx)

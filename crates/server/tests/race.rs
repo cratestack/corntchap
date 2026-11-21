@@ -21,6 +21,7 @@ async fn ten_agents_race_over_fifty_tasks() {
                 max_leases: 1,
                 runtime: None,
                 agent_kind: None,
+                token_id: None,
             })
             .unwrap();
     admin::create_team(&pool, &admin_p, "acme").await.unwrap();
@@ -60,6 +61,7 @@ async fn ten_agents_race_over_fifty_tasks() {
             max_leases: 1,
             runtime: Some("local".into()),
             agent_kind: Some("other".into()),
+            token_id: None,
         });
     }
     for n in 0..50 {
@@ -137,6 +139,7 @@ async fn expired_lease_is_fenced() {
         max_leases: 1,
         runtime: None,
         agent_kind: None,
+        token_id: None,
     };
     admin::create_team(&pool, &admin_p, "acme").await.unwrap();
     admin::create_project(&pool, &admin_p, "acme", "PAY", "Payments", None, None)
@@ -164,6 +167,7 @@ async fn expired_lease_is_fenced() {
             max_leases: 1,
             runtime: None,
             agent_kind: None,
+            token_id: None,
         });
     }
     service::create_task(
