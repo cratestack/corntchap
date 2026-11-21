@@ -343,7 +343,7 @@ pub struct TaskEdit {
 pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
-    if !p.is_user() {
+    if !p.can_plan() {
         let live: bool = sqlx::query_scalar(
             "select status = 'claimed' and claimed_by = $2 and lease_expires_at > now() from tasks where id = $1",
         )
@@ -352,9 +352,10 @@ pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Re
         .fetch_one(&mut *tx)
         .await?;
         if !live {
-            return Err(Error::Forbidden(
-                "agents may only edit tasks they currently hold".into(),
-            ));
+            return Err(Error::Forbidden(format!(
+                "{} may only edit tasks it currently holds (its owner can grant it `plan`: corntchap-cli cook grant {} plan)",
+                p.name, p.name
+            )));
         }
     }
     sqlx::query(
@@ -567,8 +568,12 @@ pub async fn check_item(
         Some(e) => {
             touch_lease(&mut tx, p, &t, e, None).await?;
         }
-        None if p.is_user() => {}
-        None => return invalid("epoch is required: agents may only tick items under a live lease"),
+        None if p.can_plan() => {}
+        None => {
+            return invalid(
+                "epoch is required: cooks tick items under a live lease (unless granted `plan`)",
+            );
+        }
     }
     let n = sqlx::query("update items set done = $3, done_by = case when $3 then $4 else null end where task_id = $1 and position = $2")
         .bind(t.id)
@@ -756,9 +761,12 @@ pub async fn human_transition(
     action: &str,
     reason: Option<&str>,
 ) -> Result<Value> {
-    if !p.is_user() {
+    if !p.can_plan() {
         return Err(Error::Forbidden(format!(
-            "only a human can {action} a task"
+            "{} may not {} tasks: a person does it, or its owner grants it `plan` (corntchap-cli cook grant {} plan)",
+            p.name,
+            if action == "cancel" { "toss" } else { action },
+            p.name
         )));
     }
     let (from, to, kind, verb): (&[&str], &str, &str, &str) = match action {
@@ -833,7 +841,7 @@ pub async fn whoami(db: &PgPool, p: &Principal) -> Result<Value> {
         .await?;
     Ok(json!({
         "name": p.name, "kind": p.kind, "agent_kind": p.agent_kind, "runtime": p.runtime,
-        "is_admin": p.is_admin, "max_leases": p.max_leases,
+        "is_admin": p.is_admin, "max_leases": p.max_leases, "grants": p.grants,
         "teams": teams,
         "projects": projects.as_array().map(|a| a.iter().map(|x| x["key"].clone()).collect::<Vec<_>>()).unwrap_or_default(),
         "current_leases": leases,

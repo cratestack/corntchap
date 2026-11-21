@@ -118,6 +118,8 @@ export interface AgentRow {
   runtime: string | null;
   max_leases: number;
   owner: string | null;
+  /** Cooks: what a person granted beyond working tasks (plan, manage, admin). */
+  grants?: string[];
   disabled: boolean;
   last_seen_at: string | null;
   busy: number;

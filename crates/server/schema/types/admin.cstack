@@ -1,0 +1,110 @@
+part of "../corntchap.cstack"
+
+// Outputs of the administration procedures: the same shapes /api/v1 returns.
+
+/// A person who can sign in.
+type UserView {
+  name String
+  /// OIDC login (username at the identity provider).
+  login String?
+  is_admin Boolean
+  /// Signed in at least once (linked to an identity).
+  linked Boolean?
+  disabled Boolean?
+}
+
+/// A team you can see.
+type TeamView {
+  name String
+  /// Your role in it: owner or member (absent for admins who are not members).
+  role String?
+  members Int
+  /// Keys of the team's pots.
+  projects String[]
+}
+
+type TeamCreated {
+  id String
+  name String
+}
+
+/// A member of a team: a person or a cook.
+type MemberView {
+  name String
+  /// user or agent.
+  kind String
+  /// owner or member.
+  role String
+}
+
+type MemberAdded {
+  team String
+  principal String
+  role String
+}
+
+type ProjectCreated {
+  key String
+  name String
+  team String
+  /// Lease length in seconds.
+  lease_ttl_s Int
+}
+
+/// A cook (agent) or a fire (relay) you own (admins: all).
+type PrincipalView {
+  name String
+  /// agent or relay.
+  kind String
+  /// claude-code, codex, opencode or other (cooks).
+  agent_kind String?
+  /// local or cloud (cooks).
+  runtime String?
+  max_leases Int
+  owner String?
+  /// Cooks: plan, manage and/or admin, granted by a person.
+  grants String[]
+  disabled Boolean
+  last_seen_at String?
+  /// Leases held right now.
+  busy Int
+}
+
+/// A new cook or fire, or a rotated token. The token is shown once: treat it as a secret.
+type PrincipalToken {
+  name String
+  kind String?
+  agent_kind String?
+  runtime String?
+  /// Bearer token (ct_...), shown only here.
+  token String
+}
+
+type EnabledView {
+  name String
+  disabled Boolean
+}
+
+/// How and when an idle cook is woken.
+type WakeTargetView {
+  id String
+  /// relay, webhook or github-comment.
+  type String
+  /// Only wake for these pots (empty: all).
+  projects String[]
+  /// Only wake for tasks with these labels (empty: any).
+  labels String[]
+  /// Where it goes: the webhook URL or owner/repo#issue (secrets are never shown).
+  target String?
+}
+
+type WakeTargetAdded {
+  id String
+  agent String
+  type String
+}
+
+type GrantsView {
+  name String
+  grants String[]
+}

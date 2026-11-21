@@ -374,7 +374,7 @@ pub async fn forget(db: &PgPool, p: &Principal, project: &str, key: &str) -> Res
     let Some((id, title, created_by)) = row else {
         return Err(Error::NotFound(format!("no memory {key} in {}", pr.key)));
     };
-    if p.kind == "agent" && !p.is_admin && created_by != Some(p.id) {
+    if !p.can_plan() && !p.is_admin && created_by != Some(p.id) {
         return Err(Error::Forbidden(format!(
             "memory {key} was saved by someone else: agents only forget their own memories (overwrite it with remember, or ask a human)"
         )));

@@ -43,7 +43,96 @@ pub async fn mint_token(
     Ok(token)
 }
 
+/// Who an administrative call acts as: a person acts as themselves; a cook granted `manage` acts
+/// as its owner (with the owner's admin powers only if it is also granted `admin`). Anything
+/// else is refused with how to grant it.
+pub async fn acting(db: &PgPool, p: &Principal) -> Result<Principal> {
+    if p.is_user() {
+        return Ok(p.clone());
+    }
+    if p.is_agent() && p.granted("manage") {
+        return owner_of(db, p).await;
+    }
+    Err(Error::Forbidden(format!(
+        "{} may not do that: a person does it, or its owner grants it `manage` (corntchap-cli cook grant {} manage)",
+        p.name, p.name
+    )))
+}
+
+/// For listings: the owner's view for a cook granted `manage`, otherwise the caller's own.
+pub async fn acting_or_self(db: &PgPool, p: &Principal) -> Result<Principal> {
+    if p.is_agent() && p.granted("manage") {
+        return owner_of(db, p).await;
+    }
+    Ok(p.clone())
+}
+
+async fn owner_of(db: &PgPool, p: &Principal) -> Result<Principal> {
+    let owner = p
+        .owner_id
+        .ok_or_else(|| Error::Forbidden(format!("{} has no owner to act for", p.name)))?;
+    let row: Option<(Uuid, String, bool, i64)> = sqlx::query_as(
+        "select id, name, is_admin, max_leases from principals where id = $1 and kind = 'user' and disabled_at is null",
+    )
+    .bind(owner)
+    .fetch_optional(db)
+    .await?;
+    let (id, name, is_admin, max_leases) =
+        row.ok_or_else(|| Error::Forbidden(format!("{}'s owner is disabled", p.name)))?;
+    Ok(Principal {
+        id,
+        kind: "user".into(),
+        name,
+        owner_id: None,
+        is_admin: is_admin && p.granted("admin"),
+        max_leases,
+        runtime: None,
+        agent_kind: None,
+        token_id: None,
+        grants: vec![],
+    })
+}
+
+pub const GRANTS: &[&str] = &["plan", "manage", "admin"];
+
+/// Set what a cook may do beyond working its tasks. Only a person (the cook's owner or an admin)
+/// can, never a cook, even one granted `manage`: a cook cannot raise its own rights.
+pub async fn set_grants(
+    db: &PgPool,
+    p: &Principal,
+    name: &str,
+    grants: &[String],
+) -> Result<Value> {
+    if !p.is_user() {
+        return Err(Error::Forbidden(
+            "only a person can change what a cook may do".into(),
+        ));
+    }
+    let mut g: Vec<String> = grants
+        .iter()
+        .map(|x| x.trim().to_lowercase())
+        .filter(|x| !x.is_empty() && x != "none")
+        .collect();
+    g.sort();
+    g.dedup();
+    if let Some(bad) = g.iter().find(|x| !GRANTS.contains(&x.as_str())) {
+        return invalid(format!("unknown grant {bad:?}: plan, manage or admin"));
+    }
+    let mut c = db.acquire().await?;
+    let (id, kind) = managed(&mut c, p, name).await?;
+    if kind != "agent" {
+        return invalid("grants are for cooks (agents)");
+    }
+    sqlx::query("update principals set grants = $2 where id = $1")
+        .bind(id)
+        .bind(&g)
+        .execute(&mut *c)
+        .await?;
+    Ok(json!({"name": name.to_lowercase(), "grants": g}))
+}
+
 pub async fn create_user(db: &PgPool, p: &Principal, login: &str, is_admin: bool) -> Result<Value> {
+    let p = &acting(db, p).await?;
     if !p.is_admin {
         return Err(Error::Forbidden("only an admin can add users".into()));
     }
@@ -61,6 +150,7 @@ pub async fn create_user(db: &PgPool, p: &Principal, login: &str, is_admin: bool
 }
 
 pub async fn list_users(db: &PgPool, p: &Principal) -> Result<Value> {
+    let p = &acting_or_self(db, p).await?;
     if !p.is_admin {
         return Err(Error::Forbidden("only an admin can list users".into()));
     }
@@ -74,6 +164,7 @@ pub async fn list_users(db: &PgPool, p: &Principal) -> Result<Value> {
 }
 
 pub async fn create_team(db: &PgPool, p: &Principal, name: &str) -> Result<Value> {
+    let p = &acting(db, p).await?;
     if !p.is_admin {
         return Err(Error::Forbidden("only an admin can create teams".into()));
     }
@@ -99,6 +190,7 @@ pub async fn create_team(db: &PgPool, p: &Principal, name: &str) -> Result<Value
 }
 
 pub async fn list_teams(db: &PgPool, p: &Principal) -> Result<Value> {
+    let p = &acting_or_self(db, p).await?;
     let rows: Vec<Value> = sqlx::query_scalar(
         "select jsonb_build_object('name', t.name, 'role', (select role from team_members where team_id = t.id and principal_id = $2),
             'members', (select count(*) from team_members where team_id = t.id),
@@ -144,6 +236,7 @@ pub async fn add_member(
     principal: &str,
     role: &str,
 ) -> Result<Value> {
+    let p = &acting(db, p).await?;
     if role != "owner" && role != "member" {
         return invalid("role must be owner or member");
     }
@@ -186,6 +279,7 @@ pub async fn remove_member(
     team: &str,
     principal: &str,
 ) -> Result<Value> {
+    let p = &acting(db, p).await?;
     let mut c = db.acquire().await?;
     let tid = owned_team(&mut c, p, team).await?;
     sqlx::query("delete from team_members where team_id = $1 and principal_id = (select id from principals where name = $2)")
@@ -197,6 +291,7 @@ pub async fn remove_member(
 }
 
 pub async fn list_members(db: &PgPool, p: &Principal, team: &str) -> Result<Value> {
+    let p = &acting_or_self(db, p).await?;
     let mut c = db.acquire().await?;
     let row: Option<Uuid> = sqlx::query_scalar(
         "select t.id from teams t where t.name = $1 and ($2 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $3))",
@@ -226,6 +321,7 @@ pub async fn create_project(
     repo_url: Option<&str>,
     lease_ttl_s: Option<i64>,
 ) -> Result<Value> {
+    let p = &acting(db, p).await?;
     let mut c = db.acquire().await?;
     let tid = owned_team(&mut c, p, team).await?;
     let key = key.trim().to_uppercase();
@@ -253,6 +349,7 @@ pub async fn create_principal(
     max_leases: Option<i64>,
     owner: Option<&str>,
 ) -> Result<Value> {
+    let p = &acting(db, p).await?;
     if !p.is_user() {
         return Err(Error::Forbidden(
             "only users can create agents and relays".into(),
@@ -309,9 +406,11 @@ pub async fn create_principal(
 }
 
 pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<Value> {
+    let p = &acting_or_self(db, p).await?;
     let rows: Vec<Value> = sqlx::query_scalar(
         "select jsonb_build_object('name', a.name, 'kind', a.kind, 'agent_kind', a.agent_kind, 'runtime', a.runtime,
             'max_leases', a.max_leases, 'owner', (select name from principals where id = a.owner_id),
+            'grants', to_jsonb(a.grants),
             'disabled', a.disabled_at is not null, 'last_seen_at', a.last_seen_at,
             'busy', (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()))
          from principals a where a.kind = $1 and ($2 or a.owner_id = $3) order by a.name",
@@ -339,6 +438,7 @@ async fn managed(c: &mut PgConnection, p: &Principal, name: &str) -> Result<(Uui
 
 /// Revoke every token and issue a fresh one; the old secret stops working at once.
 pub async fn rotate(db: &PgPool, p: &Principal, name: &str) -> Result<Value> {
+    let p = &acting(db, p).await?;
     let mut tx = db.begin().await?;
     let (id, _) = managed(&mut tx, p, name).await?;
     sqlx::query(
@@ -353,6 +453,7 @@ pub async fn rotate(db: &PgPool, p: &Principal, name: &str) -> Result<Value> {
 }
 
 pub async fn set_disabled(db: &PgPool, p: &Principal, name: &str, disabled: bool) -> Result<Value> {
+    let p = &acting(db, p).await?;
     let mut c = db.acquire().await?;
     let (id, _) = managed(&mut c, p, name).await?;
     sqlx::query(
@@ -374,6 +475,7 @@ pub async fn add_wake_target(
     labels: Vec<String>,
     config: Value,
 ) -> Result<Value> {
+    let p = &acting(db, p).await?;
     let mut c = db.acquire().await?;
     let (id, kind) = managed(&mut c, p, agent).await?;
     if kind != "agent" {
@@ -415,6 +517,7 @@ pub async fn add_wake_target(
 }
 
 pub async fn list_wake_targets(db: &PgPool, p: &Principal, agent: &str) -> Result<Value> {
+    let p = &acting_or_self(db, p).await?;
     let mut c = db.acquire().await?;
     let (id, _) = managed(&mut c, p, agent).await?;
     let rows: Vec<Value> = sqlx::query_scalar(
@@ -429,6 +532,7 @@ pub async fn list_wake_targets(db: &PgPool, p: &Principal, agent: &str) -> Resul
 }
 
 pub async fn delete_wake_target(db: &PgPool, p: &Principal, id: Uuid) -> Result<Value> {
+    let p = &acting(db, p).await?;
     let n = sqlx::query(
         "delete from wake_targets w using principals a where w.id = $1 and a.id = w.agent_id and ($2 or a.owner_id = $3)",
     )

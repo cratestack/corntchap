@@ -130,6 +130,7 @@ pub async fn session_from_headers(
                 runtime: None,
                 agent_kind: None,
                 token_id: None,
+                grants: vec![],
             },
             csrf: sess
                 .identity

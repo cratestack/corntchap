@@ -116,6 +116,56 @@ export function CooksPage() {
   );
 }
 
+const GRANTS: { id: string; label: string; hint: string }[] = [
+  { id: "plan", label: "Plan", hint: "Edit, toss, restore and unblock any task in its teams; tick items without a lease" },
+  { id: "manage", label: "Manage", hint: "Act as its owner on teams, pots, cooks, fires and wake targets" },
+  { id: "admin", label: "Admin", hint: "Its owner's admin powers (only if the owner is an admin)" },
+];
+
+/** What a cook may do beyond working its tasks. A cook never exceeds its owner and cannot change this itself. */
+function Grants({ a }: { a: AgentRow }) {
+  const call = useV1Call();
+  const [busy, setBusy] = useState<string | null>(null);
+  const have = new Set(a.grants ?? []);
+  async function toggle(id: string) {
+    const next = have.has(id) ? [...have].filter((g) => g !== id) : [...have, id];
+    setBusy(id);
+    try {
+      await call("POST", `/agents/${a.name}/grants`, { grants: next });
+      toast.success(have.has(id) ? `${a.name} may no longer ${id}` : `${a.name} may now ${id}`);
+    } catch (e) {
+      toast.error("Could not change what this cook may do", { description: errorMessage(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label={`What ${a.name} may also do`}>
+      {GRANTS.map((g) => {
+        const on = have.has(g.id);
+        return (
+          <button
+            key={g.id}
+            type="button"
+            title={g.hint}
+            aria-pressed={on}
+            disabled={!!busy}
+            onClick={() => void toggle(g.id)}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[12px] transition-colors",
+              on ? "border-primary bg-primary/10 font-semibold text-primary" : "border-border text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {busy === g.id && <Loader2 className="size-3 animate-spin" />}
+            {g.label}
+          </button>
+        );
+      })}
+      {have.size === 0 && <span className="self-center text-[11.5px] text-muted-foreground">works its tasks only</span>}
+    </div>
+  );
+}
+
 function CookCard({
   a,
   current,
@@ -199,6 +249,10 @@ function CookCard({
         <dt className="text-muted-foreground">Leases</dt>
         <dd className="font-mono text-[12px]">
           {a.busy} of {a.max_leases}
+        </dd>
+        <dt className="pt-1 text-muted-foreground">May also</dt>
+        <dd>
+          <Grants a={a} />
         </dd>
       </dl>
 

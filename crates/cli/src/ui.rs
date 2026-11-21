@@ -436,6 +436,18 @@ pub fn agents_table(v: &Value) -> String {
                 plain(s(x, "agent_kind")),
                 plain(s(x, "runtime")),
                 plain(s(x, "owner")),
+                plain(
+                    x["grants"]
+                        .as_array()
+                        .filter(|g| !g.is_empty())
+                        .map(|g| {
+                            g.iter()
+                                .filter_map(|x| x.as_str())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_else(|| "-".into()),
+                ),
                 plain(x["busy"].to_string()),
                 if x["disabled"] == true {
                     colored("disabled".into(), Color::Red)
@@ -446,7 +458,9 @@ pub fn agents_table(v: &Value) -> String {
         })
         .collect();
     table(
-        &["name", "kind", "runtime", "owner", "busy", "state"],
+        &[
+            "name", "kind", "runtime", "owner", "grants", "busy", "state",
+        ],
         rows,
         "no agents (create one with `cook setup <name> --kind … --runtime …`)",
     )

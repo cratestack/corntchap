@@ -62,11 +62,22 @@ pub struct Principal {
     /// The bearer token this request authenticated with (None for sessions and MCP contexts).
     #[serde(skip)]
     pub token_id: Option<Uuid>,
+    /// Cooks only: what their owner granted beyond working tasks (plan, manage, admin).
+    #[serde(default)]
+    pub grants: Vec<String>,
 }
 
 impl Principal {
     pub fn is_user(&self) -> bool {
         self.kind == "user"
+    }
+    pub fn granted(&self, g: &str) -> bool {
+        self.grants.iter().any(|x| x == g)
+    }
+    /// People, and cooks granted `plan`: the people-side task actions (edit or toss any task,
+    /// restore, unblock, tick without a lease, forget any memory).
+    pub fn can_plan(&self) -> bool {
+        self.is_user() || (self.is_agent() && self.granted("plan"))
     }
     pub fn is_agent(&self) -> bool {
         self.kind == "agent"

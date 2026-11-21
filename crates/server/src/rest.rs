@@ -64,6 +64,7 @@ pub fn routes() -> Router<AppState> {
         .route("/agents/{name}/rotate", post(rotate))
         .route("/agents/{name}/disable", post(disable))
         .route("/agents/{name}/enable", post(enable))
+        .route("/agents/{name}/grants", post(grants_set))
         .route(
             "/agents/{name}/wake-targets",
             get(targets_list).post(targets_add),
@@ -251,6 +252,16 @@ async fn digest(
 }
 async fn board(State(st): State<AppState>, Authn(p): Auth, Path(k): Path<String>) -> J {
     ok(json!({"markdown": service::board_markdown(&st.db, &p.worker()?, &k.to_uppercase()).await?}))
+}
+
+/// `{"grants": ["plan", "manage"]}`: what a cook may do beyond working its tasks (people only).
+async fn grants_set(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(name): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(admin::set_grants(&st.db, &p, &name, &arr(&b, "grants")).await?)
 }
 
 // ---- menus (milestones) ----

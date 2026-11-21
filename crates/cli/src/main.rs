@@ -7,7 +7,7 @@ mod setup;
 mod tui;
 mod ui;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use api::{Api, Credentials, device_login};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
@@ -346,6 +346,18 @@ enum AgentCmd {
     },
     /// Revoke every token and print a fresh one.
     Rotate { name: String },
+    /// What a cook may do beyond working its tasks: plan (edit, toss, restore, unblock any task in
+    /// its teams), manage (act as you on teams, pots, cooks, fires), admin (your admin powers).
+    /// Replaces the set; `--none` removes them all. A cook never exceeds your own rights.
+    Grant {
+        name: String,
+        /// plan, manage and/or admin.
+        #[arg(value_parser = ["plan", "manage", "admin"])]
+        grants: Vec<String>,
+        /// Take every grant away (work only).
+        #[arg(long, conflicts_with = "grants")]
+        none: bool,
+    },
     /// Stop an agent from claiming work.
     Disable { name: String },
     /// Let a disabled agent claim work again.
@@ -848,6 +860,27 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
         } => agent_setup(api, &name, &kind, &runtime, team.as_deref()).await?,
         AgentCmd::Enroll { .. } => unreachable!(),
         AgentCmd::Ls { json } => show(&api.get("/agents").await?, json, ui::agents_table),
+        AgentCmd::Grant { name, grants, none } => {
+            if grants.is_empty() && !none {
+                bail!(
+                    "say what {name} may do (plan, manage, admin), or --none to take everything away"
+                );
+            }
+            let r = api
+                .post(&format!("/agents/{name}/grants"), json!({"grants": grants}))
+                .await?;
+            let g: Vec<&str> = r["grants"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| x.as_str())
+                .collect();
+            if g.is_empty() {
+                ok_line(format!("{name} works its tasks only"));
+            } else {
+                ok_line(format!("{name} may also {}", g.join(", ")));
+            }
+        }
         AgentCmd::Rotate { name } => {
             let r = api
                 .post(&format!("/agents/{name}/rotate"), json!({}))
