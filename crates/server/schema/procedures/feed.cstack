@@ -1,0 +1,11 @@
+part of "../corntchap.cstack"
+
+// Change feed and long-poll.
+
+procedure changesSince(cursor: Int, project: String?, limit: Int?): ChangeFeed
+  @allow(auth() != null)
+  @mcp(tool: "changes_since", description: "Events after a cursor (0 to start) plus the next cursor; empty when nothing moved.")
+
+procedure waitForWork(project: String?, timeoutS: Int?): WaitResult
+  @allow(auth() != null)
+  @mcp(tool: "wait_for_work", description: "Long-poll (up to 55 s) until a task is ready for you; returns the ready tasks or an empty list. Does not claim.")

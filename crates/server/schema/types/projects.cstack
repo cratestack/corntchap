@@ -1,0 +1,33 @@
+part of "../corntchap.cstack"
+
+// Project, identity and team views.
+
+type ProjectSummary {
+  key String
+  name String
+  repo_url String?
+  team String?
+  lease_ttl_s Float
+  open Int
+  ready Int
+  claimed Int
+  blocked Int
+  done Int
+}
+
+type TeamRole {
+  name String
+  role String
+}
+
+type WhoamiView {
+  name String
+  kind String
+  agent_kind String?
+  runtime String?
+  is_admin Boolean
+  max_leases Int
+  teams TeamRole[]
+  projects String[]
+  current_leases TaskView[]
+}

@@ -1,0 +1,73 @@
+part of "../corntchap.cstack"
+
+// ---------------------------------------------------------------------------------------------
+// Models: the generated REST surface (and the TypeScript client) for the console.
+// Existing snake_case tables and columns are mapped with @@map/@map. Policies:
+//   * relays see nothing (they only listen for wake events);
+//   * admins see and manage everything;
+//   * members see the projects, tasks, items, comments and events of the teams they belong to;
+//   * an agent may only edit a task it currently holds; creating tasks and every lease
+//     operation (claim/heartbeat/complete/...) are procedures that run raw SQL.
+// Uuid columns are compared with the caller through the generated text mirror columns
+// (`*Ref`, migration 0002) because the framework binds the caller id as text.
+// ---------------------------------------------------------------------------------------------
+
+// Principals, teams and memberships.
+
+model Principal {
+  id Uuid @id @default(uuid())
+  kind String @readonly
+  name String @readonly
+  ownerId Uuid? @readonly @map("owner_id")
+  oidcLogin String? @readonly @map("oidc_login")
+  agentKind String? @readonly @map("agent_kind")
+  runtime String? @readonly
+  maxLeases Int @readonly @map("max_leases")
+  isAdmin Boolean @readonly @map("is_admin")
+  disabledAt DateTime? @readonly @map("disabled_at")
+  lastSeenAt DateTime? @readonly @map("last_seen_at")
+  createdAt DateTime @readonly @map("created_at")
+  oidcSub String? @server_only @map("oidc_sub")
+  adminSource String @server_only @map("admin_source")
+  idRef String @server_only @map("id_ref")
+  ownerRef String? @server_only @map("owner_ref")
+  memberships TeamMember[] @relation(fields:[id],references:[principalId])
+
+  @@map("principals")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || idRef == auth().id || ownerRef == auth().id || memberships.some.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "principals")
+}
+
+model Team {
+  id Uuid @id @default(uuid())
+  name String
+  members TeamMember[] @relation(fields:[id],references:[teamId])
+  projects Project[] @relation(fields:[id],references:[teamId])
+
+  @@map("teams")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || members.some.principalRef == auth().id)
+  @@mcp(resource: "teams")
+  @@allow("create", auth().isAdmin == true)
+  @@allow("update", auth().isAdmin == true)
+  @@allow("delete", auth().isAdmin == true)
+}
+
+model TeamMember {
+  id Uuid @id @default(uuid())
+  teamId Uuid @map("team_id")
+  principalId Uuid @map("principal_id")
+  role String
+  principalRef String @server_only @map("principal_ref")
+  team Team @relation(fields:[teamId],references:[id])
+  principal Principal @relation(fields:[principalId],references:[id])
+
+  @@map("team_members")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || principalRef == auth().id)
+  @@mcp(resource: "team-members")
+  @@allow("create", auth().isAdmin == true)
+  @@allow("update", auth().isAdmin == true)
+  @@allow("delete", auth().isAdmin == true)
+}

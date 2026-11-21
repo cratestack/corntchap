@@ -1,0 +1,101 @@
+part of "../corntchap.cstack"
+
+// Typed procedure outputs (MCP `outputSchema`, generated TypeScript types). Field names are the
+// snake_case keys of the JSON the service layer has always returned; timestamps stay strings so
+// the bytes on the wire do not change. Null-valued optionals are omitted by the framework.
+//
+// Task, lease and markdown views returned by the task procedures.
+
+type TaskItemView {
+  position Int
+  text String
+  done Boolean
+  done_by String?
+}
+
+type TaskCommentView {
+  author String?
+  body String
+  at String
+}
+
+type TaskLinkView {
+  id String
+  title String
+  status String
+}
+
+type TaskView {
+  id String
+  project String
+  number Int
+  title String
+  body String
+  priority Int
+  labels String[]
+  status String
+  parent String?
+  depends_on String[]
+  claimed_by String?
+  lease_epoch Int
+  lease_expires_at String?
+  lease_live Boolean?
+  ready Boolean?
+  open_items Int
+  total_items Int
+  result String?
+  created_at String
+  updated_at String
+}
+
+type TaskDetail {
+  id String
+  project String
+  number Int
+  title String
+  body String
+  priority Int
+  labels String[]
+  status String
+  parent String?
+  depends_on String[]
+  claimed_by String?
+  lease_epoch Int
+  lease_expires_at String?
+  lease_live Boolean?
+  ready Boolean?
+  open_items Int
+  total_items Int
+  result String?
+  created_at String
+  updated_at String
+  items TaskItemView[]
+  comments TaskCommentView[]
+  dependencies TaskLinkView[]
+  subtasks TaskLinkView[]
+}
+
+type LeaseView {
+  epoch Int
+  expires_at String
+}
+
+type ClaimResult {
+  task TaskDetail?
+  lease LeaseView?
+  none Boolean?
+}
+
+type LeaseRenewal {
+  id String
+  epoch Int
+  expires_at String
+}
+
+type MarkdownDoc {
+  markdown String
+}
+
+type OkResult {
+  ok Boolean
+}

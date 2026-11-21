@@ -1,0 +1,35 @@
+part of "../corntchap.cstack"
+
+// Wake targets and the append-only change feed.
+
+// Wake targets of the agents you own (admins: all). `config` (webhook URLs and tokens) is
+// deliberately not part of the model; `projects`/`labels` are text[] columns, which cratestack
+// has no scalar for.
+model WakeTarget {
+  id Uuid @id @default(uuid())
+  agentId Uuid @map("agent_id")
+  type String
+  agent Principal @relation(fields:[agentId],references:[id])
+
+  @@map("wake_targets")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || agent.ownerRef == auth().id)
+  @@mcp(resource: "wake-targets")
+}
+
+// The append-only change feed (read-only).
+model Event {
+  seq BigInt @id @default(dbgenerated())
+  projectId Uuid? @map("project_id")
+  taskId Uuid? @map("task_id")
+  kind String
+  actorId Uuid? @map("actor_id")
+  payload Json
+  at DateTime
+  project Project? @relation(fields:[projectId],references:[id])
+
+  @@map("events")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "events")
+}

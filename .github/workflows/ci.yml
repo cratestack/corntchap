@@ -24,6 +24,17 @@ jobs:
       TEST_DATABASE_ADMIN_URL: postgres://corn:corn@127.0.0.1/postgres
     steps:
       - uses: actions/checkout@v5
+      # A migration that has shipped is never edited: databases that applied it would refuse to start.
+      - name: migrations are append-only
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          git fetch -q --depth=1 origin "$BASE"
+          edited=$(git diff --name-only --diff-filter=MDR "$BASE" HEAD -- crates/server/migrations)
+          if [ -n "$edited" ]; then
+            echo "::error::existing migrations were edited or removed: $edited. Add a new migration instead."
+            exit 1
+          fi
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: console/package.json

@@ -1,0 +1,9 @@
+part of "../corntchap.cstack"
+
+// Human-only transitions (no MCP tool): blocked -> open, open/blocked -> cancelled.
+
+mutation procedure unblockTask(id: String): TaskView
+  @allow(auth() != null)
+
+mutation procedure cancelTask(id: String): TaskView
+  @allow(auth() != null)

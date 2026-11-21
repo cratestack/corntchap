@@ -1,0 +1,91 @@
+part of "../corntchap.cstack"
+
+// Projects, tasks and what hangs off a task.
+
+model Project {
+  id Uuid @id @default(uuid())
+  teamId Uuid @map("team_id")
+  key String
+  name String
+  repoUrl String? @map("repo_url")
+  nextNumber Int @readonly @map("next_number")
+  team Team @relation(fields:[teamId],references:[id])
+  tasks Task[] @relation(fields:[id],references:[projectId])
+
+  @@map("projects")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || team.members.some.principalRef == auth().id)
+  @@mcp(resource: "projects")
+  @@allow("create", auth().isAdmin == true)
+  @@allow("update", auth().isAdmin == true)
+}
+
+model Task {
+  id Uuid @id @default(uuid())
+  projectId Uuid @readonly @map("project_id")
+  number Int @readonly
+  title String
+  body String
+  priority Int
+  parentId Uuid? @readonly @map("parent_id")
+  status String @readonly
+  claimedBy Uuid? @readonly @map("claimed_by")
+  leaseEpoch BigInt @readonly @map("lease_epoch")
+  leaseExpiresAt DateTime? @readonly @map("lease_expires_at")
+  result String? @readonly
+  createdBy Uuid? @readonly @map("created_by")
+  createdAt DateTime @readonly @map("created_at")
+  updatedAt DateTime @readonly @map("updated_at")
+  claimedRef String? @server_only @map("claimed_ref")
+  project Project @relation(fields:[projectId],references:[id])
+  items Item[] @relation(fields:[id],references:[taskId])
+  comments Comment[] @relation(fields:[id],references:[taskId])
+
+  @@map("tasks")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "tasks")
+  @@allow("update", auth().isAdmin == true || (auth().kind == "user" && project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && claimedRef == auth().id && status == "claimed"))
+}
+
+model Item {
+  id Uuid @id @default(uuid())
+  taskId Uuid @readonly @map("task_id")
+  position Int @readonly
+  text String @readonly
+  done Boolean
+  doneBy Uuid? @readonly @map("done_by")
+  task Task @relation(fields:[taskId],references:[id])
+
+  @@map("items")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "items")
+  @@allow("update", auth().isAdmin == true || (auth().kind == "user" && task.project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && task.claimedRef == auth().id && task.status == "claimed"))
+}
+
+model Comment {
+  id Uuid @id @default(uuid())
+  taskId Uuid @map("task_id")
+  authorId Uuid? @map("author_id")
+  body String
+  createdAt DateTime @map("created_at")
+  task Task @relation(fields:[taskId],references:[id])
+
+  @@map("comments")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "comments")
+}
+
+model TaskDep {
+  id Uuid @id @default(uuid())
+  taskId Uuid @map("task_id")
+  dependsOn Uuid @map("depends_on")
+  task Task @relation(fields:[taskId],references:[id])
+
+  @@map("task_deps")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "task-deps")
+}
