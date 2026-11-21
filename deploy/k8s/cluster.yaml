@@ -11,17 +11,29 @@ spec:
     initdb:
       database: corntchap
       owner: corntchap
-  backup:
-    barmanObjectStore:
-      # Adjust to your object store; credentials come from the referenced secret.
-      destinationPath: s3://CHANGE-ME-BUCKET/corntchap
-      s3Credentials:
-        accessKeyId:
-          name: corntchap-backup-s3
-          key: ACCESS_KEY_ID
-        secretAccessKey:
-          name: corntchap-backup-s3
-          key: ACCESS_SECRET_KEY
-      wal:
-        compression: gzip
-    retentionPolicy: 14d
+  # Continuous WAL archiving + base backups through the Barman Cloud CNPG-I plugin (the in-tree barmanObjectStore
+  # is deprecated and the PG 18 images no longer ship barman-cloud). The ObjectStore below holds the S3 config.
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: corntchap-backups
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: corntchap-backups
+spec:
+  retentionPolicy: 14d
+  configuration:
+    # Adjust to your object store; credentials come from the referenced secret.
+    destinationPath: s3://CHANGE-ME-BUCKET/corntchap
+    s3Credentials:
+      accessKeyId:
+        name: corntchap-backup-s3
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: corntchap-backup-s3
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: gzip

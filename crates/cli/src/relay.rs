@@ -48,7 +48,14 @@ pub fn load_config() -> Result<RelayConfig> {
             anyhow!("reading {}: {e}", p.display())
         }
     })?;
-    toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))
+    let cfg: RelayConfig =
+        toml::from_str(&s).with_context(|| format!("parsing {}", p.display()))?;
+    for t in &cfg.target {
+        if let Some(d) = t.timeout.as_deref() {
+            parse_duration(d).map_err(|e| anyhow!("{}: target {}: {e}", p.display(), t.agent))?;
+        }
+    }
+    Ok(cfg)
 }
 
 /// The commented starter config written by `relay init`.
@@ -199,15 +206,38 @@ impl SseParser {
     }
 }
 
-fn parse_duration(s: &str) -> Duration {
-    let s = s.trim();
-    let (n, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
-    let n: u64 = n.parse().unwrap_or(30);
-    Duration::from_secs(match unit {
-        "h" => n * 3600,
-        "m" => n * 60,
-        _ => n,
-    })
+/// Parses `45m`, `1h30m`, `90s` or a bare number of seconds (`90`). Units: h, m, s.
+fn parse_duration(s: &str) -> Result<Duration, String> {
+    let bad =
+        || format!("invalid duration {s:?}: use e.g. 90, 90s, 45m, 2h or 1h30m (units h, m, s)");
+    let t = s.trim();
+    if t.is_empty() {
+        return Err(bad());
+    }
+    if let Ok(n) = t.parse::<u64>() {
+        return Ok(Duration::from_secs(n));
+    }
+    let mut total = 0u64;
+    let mut rest = t;
+    while !rest.is_empty() {
+        let end = rest.find(|c: char| !c.is_ascii_digit()).ok_or_else(bad)?;
+        if end == 0 {
+            return Err(bad());
+        }
+        let n: u64 = rest[..end].parse().map_err(|_| bad())?;
+        let mult = match rest[end..].chars().next() {
+            Some('h') => 3600,
+            Some('m') => 60,
+            Some('s') => 1,
+            _ => return Err(bad()),
+        };
+        total = n
+            .checked_mul(mult)
+            .and_then(|v| total.checked_add(v))
+            .ok_or_else(bad)?;
+        rest = &rest[end + 1..];
+    }
+    Ok(Duration::from_secs(total))
 }
 
 fn expand(p: &str) -> String {
@@ -372,6 +402,8 @@ async fn exec(t: &Target, prompt: &str) -> Result<i32> {
         .timeout
         .as_deref()
         .map(parse_duration)
+        .transpose()
+        .map_err(|e| anyhow!("target {}: {e}", t.agent))?
         .unwrap_or(Duration::from_secs(45 * 60));
     match tokio::time::timeout(limit, child.wait()).await {
         Ok(status) => Ok(status?.code().unwrap_or(-1)),
@@ -630,6 +662,20 @@ mod tests {
         let evs = p.feed(b": ping\r\n\r\nid: 1\r\nevent: wake\r\ndata: {}\r\n\r\n");
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].data, "{}");
+    }
+
+    #[test]
+    fn parse_duration_combines_units_and_rejects_garbage() {
+        let secs = |s: &str| parse_duration(s).unwrap().as_secs();
+        assert_eq!(secs("1h30m"), 5400);
+        assert_eq!(secs("45m"), 2700);
+        assert_eq!(secs("2h"), 7200);
+        assert_eq!(secs("1m30s"), 90);
+        assert_eq!(secs("90"), 90);
+        assert_eq!(secs(" 10s "), 10);
+        for bad in ["", "abc", "h", "1x", "1h30", "-5m", "1.5h"] {
+            assert!(parse_duration(bad).is_err(), "{bad} should be rejected");
+        }
     }
 
     #[test]

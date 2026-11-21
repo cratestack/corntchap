@@ -1,5 +1,12 @@
 target
 .git
 .github
+.claude
 deploy
+node_modules
+.env
+.env.dev
+.venv-mcp/
+.venv-mcp-ts/
 *.md
+rust-toolchain.toml

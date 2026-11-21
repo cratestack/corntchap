@@ -3,16 +3,27 @@
 `deploy/k8s` is a kustomize base: a CloudNativePG `Cluster` (2 instances) with a daily `ScheduledBackup`,
 a 2-replica `Deployment`, `Service` and an ingress-nginx `Ingress`.
 
-Prerequisites: the [CloudNativePG operator](https://cloudnative-pg.io), ingress-nginx, and (optionally) cert-manager.
+Prerequisites:
+
+- the [CloudNativePG operator](https://cloudnative-pg.io) (1.26 or newer, for CNPG-I plugin support) and ingress-nginx;
+- cert-manager (required by the Barman Cloud plugin, which is installed through it, and optional otherwise for TLS);
+- the [Barman Cloud plugin](https://cloudnative-pg.io/plugin-barman-cloud/) in the CNPG operator's namespace
+  (usually `cnpg-system`), installed once per cluster: take the manifest from its
+  [releases page](https://github.com/cloudnative-pg/plugin-barman-cloud/releases) and
+  `kubectl apply -f manifest.yaml`. Skip it only if you remove the backup resources (see Configure).
 
 ## Configure
 
 1. Replace `corntchap.example.com` in `deployment.yaml` (`PUBLIC_URL`, as `https://HOST`) and `ingress.yaml`.
-2. Backups: `cluster.yaml` points at an S3 bucket (`destinationPath`, secret `corntchap-backup-s3`). Edit it for your
-   object store, or remove the `backup` block and `scheduledbackup.yaml` if you do not want backups.
+2. Backups: `cluster.yaml` archives WAL and base backups through the Barman Cloud plugin; the `ObjectStore`
+   `corntchap-backups` in the same file holds the S3 settings (`destinationPath`, secret `corntchap-backup-s3`,
+   14-day retention). Edit it for your object store, or remove the `plugins` block, the `ObjectStore` and
+   `scheduledbackup.yaml` (and its line in `kustomization.yaml`) if you do not want backups.
 3. TLS: the Ingress expects cert-manager with a `letsencrypt` ClusterIssuer. Otherwise drop the annotation and
    create the `corntchap-tls` secret yourself.
-4. Pin the image tag in `kustomization.yaml` (`images:`) to a release or `sha-<commit>`.
+4. Pin the image tag in `kustomization.yaml` (`images:`) to a release or `sha-<commit>`. Note: git release tags are
+   `v0.1.0`, but the published image tags drop the `v` (`0.1.0`, `0.1`), so use `newTag: 0.1.0`, not `v0.1.0`.
+   The image is multi-arch (amd64 and arm64).
 
 ## Keycloak (OIDC) client
 
