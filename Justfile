@@ -3,9 +3,10 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # Static musl target (needs `musl-tools` on Debian/Ubuntu: apt install musl-tools).
 target := "x86_64-unknown-linux-musl"
 image  := "ghcr.io/stephane-segning/corntchap"
-pg_url  := "postgres://corn:corn@127.0.0.1/postgres"
-dev_url := "postgres://corn:corn@127.0.0.1:5432/corntchap"
-server  := "http://localhost:8080"
+
+# Local settings: random ports from `just setup` live in .env.dev; secrets (GitHub OAuth) in .env.
+# Every recipe that needs them starts with {{load}}.
+load := "set -a; [ -f .env ] && . ./.env; [ -f .env.dev ] && . ./.env.dev; set +a;"
 
 default:
     @just --list
@@ -17,11 +18,11 @@ release:
     cargo build --workspace --release
 
 test:
-    cargo test --workspace
+    {{load}} cargo test --workspace
 
-# Needs Postgres reachable at TEST_DATABASE_ADMIN_URL (see `just db`).
+# Needs Postgres reachable at TEST_DATABASE_ADMIN_URL (`just setup` / `just db` provide it).
 e2e: build
-    TEST_DATABASE_ADMIN_URL=${TEST_DATABASE_ADMIN_URL:-{{pg_url}}} scripts/e2e.sh
+    {{load}} scripts/e2e.sh
 
 fmt:
     cargo fmt --all
@@ -30,7 +31,7 @@ clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
 run-server:
-    DATABASE_URL=${DATABASE_URL:-{{dev_url}}} AUTO_MIGRATE=1 cargo run -p corntchap -- serve
+    {{load}} AUTO_MIGRATE=1 cargo run -p corntchap -- serve
 
 # Fully static binaries (corntchap and corntchap-cli) under target/<target>/release.
 static:
@@ -46,13 +47,17 @@ image tag="dev":
     rt=$(command -v podman || command -v docker)
     "$rt" build -f Containerfile -t {{image}}:{{tag}} .
 
-# Local Postgres 18 via compose (matches the test defaults on 127.0.0.1:5432).
-db:
-    docker compose up -d --wait db
+# Pick random free ports once (writes .env.dev); delete the file to re-roll.
+env-init:
+    [ -f .env.dev ] || python3 scripts/devenv.py > .env.dev
 
-# The whole stack: Postgres + server image.
-up:
-    docker compose up -d --build
+# Local Postgres 18 via compose, on the random loopback port from .env.dev.
+db: env-init
+    {{load}} docker compose up -d --wait db
+
+# The whole stack: Postgres + server image (server on APP_PORT).
+up: env-init
+    {{load}} docker compose up -d --build
 
 # ---- Quick start: just setup && just init <github-login> && just serve (then, in another shell: just login && just seed) ----
 
@@ -60,24 +65,25 @@ up:
 deps:
     if command -v mise >/dev/null; then mise trust -y && mise install; else echo "mise not found: install Rust 1.100+ yourself (https://mise.jdx.dev)"; fi
 
-# Toolchain, Postgres (compose) and the schema.
+# Toolchain, Postgres (compose, random port) and the schema. Prints the GitHub OAuth callback to register.
 setup: deps db
-    DATABASE_URL=${DATABASE_URL:-{{dev_url}}} cargo run -q -p corntchap -- migrate
+    {{load}} cargo run -q -p corntchap -- migrate
+    @{{load}} echo "Postgres: 127.0.0.1:$PG_PORT   server: $PUBLIC_URL   GitHub OAuth callback: $PUBLIC_URL/auth/github/callback"
 
 # Create the first admin (a GitHub login); prints a 7-day bootstrap token.
-init admin:
-    DATABASE_URL=${DATABASE_URL:-{{dev_url}}} cargo run -q -p corntchap -- init --admin {{admin}}
+init admin: env-init
+    {{load}} cargo run -q -p corntchap -- init --admin {{admin}}
 
-# Run the server on http://localhost:8080 (set GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET for browser sign-in).
-serve: run-server
+# Run the server on the random APP_PORT (set GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET in .env for browser sign-in).
+serve: env-init run-server
 
 # Any corntchap-cli command: `just cli task ls PAY`.
 cli *args:
     cargo run -q -p corntchap-cli -- {{args}}
 
 # Sign in with the device flow (opens the browser). Pass a token to skip it: `just login ct_...`.
-login token="":
-    cargo run -q -p corntchap-cli -- login {{server}} {{ if token == "" { "" } else { "--token " + token } }}
+login token="": env-init
+    {{load}} cargo run -q -p corntchap-cli -- login "$PUBLIC_URL" {{ if token == "" { "" } else { "--token " + token } }}
 
 # Demo data: team acme, project DEMO, one agent (its token is printed once), one task.
 seed:
@@ -89,6 +95,10 @@ seed:
 
 # Drive a running server with the official MCP Python SDK. `CORNTCHAP_TOKEN=<agent token> just mcp-check`
 mcp-check project="DEMO":
-    [ -d .venv-mcp ] || python3 -m venv .venv-mcp
+    {{load}} [ -d .venv-mcp ] || python3 -m venv .venv-mcp
     .venv-mcp/bin/pip install -q mcp
-    PROJECT={{project}} .venv-mcp/bin/python scripts/mcp_check.py
+    {{load}} CORNTCHAP_URL="$PUBLIC_URL" PROJECT={{project}} .venv-mcp/bin/python scripts/mcp_check.py
+
+# Stop the compose stack and delete its data.
+down: env-init
+    {{load}} docker compose down -v

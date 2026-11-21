@@ -1,8 +1,8 @@
 # Local stack: Postgres + corntchap built from the Containerfile.
-#   cp .env.example .env   # fill in the GitHub OAuth app (callback: ${PUBLIC_URL}/auth/github/callback)
-#   docker compose up -d --build
-#   docker compose exec corntchap /corntchap init --admin <your-github-login>
-# Postgres alone (for `cargo test` / `just e2e`):  docker compose up -d db
+# Use `just up` / `just db` (they pick random free ports into .env.dev); plain `docker compose` needs
+# PG_PORT, APP_PORT and PUBLIC_URL in the environment.
+#   cp .env.example .env   # GitHub OAuth app (callback: $PUBLIC_URL/auth/github/callback)
+#   just up && docker compose exec corntchap /corntchap init --admin <your-github-login>
 services:
   db:
     image: postgres:18
@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: corn
       POSTGRES_PASSWORD: corn
       POSTGRES_DB: corntchap
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:${PG_PORT:?run `just setup`: it picks a random port}:5432"]
     volumes: ["pgdata:/var/lib/postgresql"]   # PG 18 images keep PGDATA under /var/lib/postgresql/18/docker
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U corn -d corntchap"]
@@ -27,13 +27,13 @@ services:
       db: { condition: service_healthy }
     environment:
       DATABASE_URL: postgres://corn:corn@db/corntchap
-      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}   # plain http is only accepted on localhost
+      PUBLIC_URL: ${PUBLIC_URL:?run `just setup`}   # plain http is only accepted on localhost
       BIND: 0.0.0.0:8080
       AUTO_MIGRATE: "1"
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
       RUST_LOG: ${RUST_LOG:-info}
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:${APP_PORT:?run `just setup`: it picks a random port}:8080"]
 
 volumes:
   pgdata:

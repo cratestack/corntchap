@@ -3,13 +3,9 @@
 rust = { version = "1.100", components = "rustfmt,clippy", targets = "x86_64-unknown-linux-musl" }
 just = "latest"
 
-[env]
-DATABASE_URL = "postgres://corn:corn@127.0.0.1:5432/corntchap"
-TEST_DATABASE_ADMIN_URL = "postgres://corn:corn@127.0.0.1:5432/postgres"
-
 [tasks.db]
 description = "Start Postgres (docker compose)"
-run = "docker compose up -d --wait db"
+run = "just db"
 
 [tasks.build]
 run = "just build"
@@ -30,4 +26,4 @@ run = ["just fmt", "just clippy"]
 
 [tasks.up]
 description = "Whole stack in containers"
-run = "docker compose up -d --build"
+run = "just up"

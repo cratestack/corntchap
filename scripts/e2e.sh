@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 ADMIN_URL=${TEST_DATABASE_ADMIN_URL:-postgres://corn:corn@127.0.0.1/postgres}
 BIN=${BIN_DIR:-target/debug}
 DB=ct_e2e_$$
-PORT=${PORT:-18080}
+PORT=${PORT:-$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')}
 WORK=$(mktemp -d)
 cleanup() { kill ${SERVER_PID:-} ${RELAY_PID:-} 2>/dev/null || true; psqlc "drop database if exists $DB" >/dev/null 2>&1 || true; rm -rf "$WORK"; }
 trap cleanup EXIT
