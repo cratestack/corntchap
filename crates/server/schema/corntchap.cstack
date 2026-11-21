@@ -7,7 +7,8 @@ datasource db {
 }
 
 mcp {
-  expose = [tools]
+  name = "corntchap"
+  expose = [tools, resources]
 }
 
 auth Caller {
@@ -285,6 +286,7 @@ model Principal {
   @@map("principals")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || idRef == auth().id || ownerRef == auth().id || memberships.some.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "principals")
 }
 
 model Team {
@@ -296,6 +298,7 @@ model Team {
   @@map("teams")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || members.some.principalRef == auth().id)
+  @@mcp(resource: "teams")
   @@allow("create", auth().isAdmin == true)
   @@allow("update", auth().isAdmin == true)
   @@allow("delete", auth().isAdmin == true)
@@ -313,6 +316,7 @@ model TeamMember {
   @@map("team_members")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || principalRef == auth().id)
+  @@mcp(resource: "team-members")
   @@allow("create", auth().isAdmin == true)
   @@allow("update", auth().isAdmin == true)
   @@allow("delete", auth().isAdmin == true)
@@ -331,6 +335,7 @@ model Project {
   @@map("projects")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || team.members.some.principalRef == auth().id)
+  @@mcp(resource: "projects")
   @@allow("create", auth().isAdmin == true)
   @@allow("update", auth().isAdmin == true)
 }
@@ -359,6 +364,7 @@ model Task {
   @@map("tasks")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "tasks")
   @@allow("update", auth().isAdmin == true || (auth().kind == "user" && project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && claimedRef == auth().id && status == "claimed"))
 }
 
@@ -374,6 +380,7 @@ model Item {
   @@map("items")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "items")
   @@allow("update", auth().isAdmin == true || (auth().kind == "user" && task.project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && task.claimedRef == auth().id && task.status == "claimed"))
 }
 
@@ -388,6 +395,7 @@ model Comment {
   @@map("comments")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "comments")
 }
 
 model TaskDep {
@@ -399,6 +407,7 @@ model TaskDep {
   @@map("task_deps")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "task-deps")
 }
 
 // Wake targets of the agents you own (admins: all). `config` (webhook URLs and tokens) is
@@ -413,6 +422,7 @@ model WakeTarget {
   @@map("wake_targets")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || agent.ownerRef == auth().id)
+  @@mcp(resource: "wake-targets")
 }
 
 // The append-only change feed (read-only).
@@ -429,6 +439,7 @@ model Event {
   @@map("events")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "events")
 }
 
 // Human-only transitions (no MCP tool): blocked -> open, open/blocked -> cancelled.

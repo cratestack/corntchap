@@ -225,8 +225,12 @@ impl<T: McpTools> Compat<T> {
                 Ok(r) => rpc_result(id, r),
                 Err(m) => rpc_error(id, -32602, m),
             },
-            "resources/list" => rpc_result(id, json!({"resources": []})),
-            "resources/templates/list" => rpc_result(id, json!({"resourceTemplates": []})),
+            "resources/list" => rpc_result(id, self.list_resources()),
+            "resources/templates/list" => rpc_result(id, self.list_templates()),
+            "resources/read" => match self.read_resource(ctx, &params).await {
+                Ok(r) => rpc_result(id, r),
+                Err((code, m)) => rpc_error(id, code, m),
+            },
             "prompts/list" => rpc_result(id, json!({"prompts": []})),
             m => rpc_error(id, -32601, format!("method not found: {m}")),
         })
@@ -240,10 +244,120 @@ impl<T: McpTools> Compat<T> {
             .unwrap_or(LEGACY_VERSIONS[0]);
         json!({
             "protocolVersion": version,
-            "capabilities": {"tools": {"listChanged": false}},
+            "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}},
             "serverInfo": {"name": "corntchap", "version": env!("CARGO_PKG_VERSION")},
             "instructions": INSTRUCTIONS,
         })
+    }
+
+    /// Model collections, the same ones cratestack serves on 2026-07-28 (`cratestack://<name>/<segment>`).
+    fn list_resources(&self) -> Value {
+        let resources: Vec<Value> = self
+            .tools
+            .resources()
+            .iter()
+            .map(|r| {
+                json!({
+                    "uri": r.collection_uri(),
+                    "name": r.segment,
+                    "description": format!("Every `{}` record you may read, a page at a time (?limit, ?cursor).", r.segment),
+                    "mimeType": "application/json",
+                })
+            })
+            .collect();
+        json!({"resources": resources})
+    }
+
+    fn list_templates(&self) -> Value {
+        let templates: Vec<Value> = self
+            .tools
+            .resources()
+            .iter()
+            .flat_map(|r| {
+                let base = r.collection_uri();
+                [
+                    json!({"uriTemplate": format!("{base}/{{id}}"), "name": r.segment,
+                        "description": format!("One `{}` record by id.", r.segment), "mimeType": "application/json"}),
+                    json!({"uriTemplate": format!("{base}{{?limit,cursor}}"), "name": r.segment,
+                        "description": format!("A page of `{}` records.", r.segment), "mimeType": "application/json"}),
+                ]
+            })
+            .collect();
+        json!({"resourceTemplates": templates})
+    }
+
+    /// `cratestack://<name>/<segment>[/<id>][?limit=&cursor=]`, read under the caller's policies.
+    async fn read_resource(
+        &self,
+        ctx: &CratestackContext,
+        params: &Value,
+    ) -> Result<Value, (i64, String)> {
+        const NOT_FOUND: i64 = -32002;
+        let uri = params
+            .get("uri")
+            .and_then(Value::as_str)
+            .ok_or((-32602, "missing uri".to_string()))?;
+        let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
+        let resource = self
+            .tools
+            .resources()
+            .iter()
+            .find(|r| {
+                path == r.collection_uri() || path.starts_with(&format!("{}/", r.collection_uri()))
+            })
+            .ok_or((NOT_FOUND, "resource not found".to_string()))?;
+        let rest = &path[resource.collection_uri().len()..];
+        let body = if let Some(id) = rest.strip_prefix('/').filter(|id| !id.is_empty()) {
+            if !query.is_empty() {
+                return Err((-32602, "a record URI takes no query".into()));
+            }
+            match self.tools.read_record(resource.segment, id, ctx).await {
+                Ok(Some(v)) => v,
+                Ok(None) => return Err((NOT_FOUND, "resource not found".into())),
+                Err(e) => return Err((-32603, e.to_string())),
+            }
+        } else if rest.is_empty() {
+            let mut limit: Option<u64> = None;
+            let mut offset: u64 = 0;
+            for pair in query.split('&').filter(|p| !p.is_empty()) {
+                match pair.split_once('=') {
+                    Some(("limit", v)) => {
+                        limit = Some(
+                            v.parse()
+                                .map_err(|_| (-32602, "limit must be a number".to_string()))?,
+                        )
+                    }
+                    Some(("cursor", v)) => {
+                        offset = decode_cursor(resource.segment, v).ok_or((
+                            -32602,
+                            "cursor was not issued for this resource".to_string(),
+                        ))?
+                    }
+                    _ => return Err((-32602, format!("unknown query parameter {pair}"))),
+                }
+            }
+            let size = limit
+                .unwrap_or(50)
+                .clamp(1, 200)
+                .min(resource.max_page_size as u64) as u32;
+            let items = self
+                .tools
+                .read_page(resource.segment, size + 1, offset, ctx)
+                .await
+                .map_err(|e| (-32603, e.to_string()))?;
+            let more = items.len() as u32 > size;
+            let items: Vec<Value> = items.into_iter().take(size as usize).collect();
+            let mut page = json!({"items": items});
+            if more {
+                page["nextCursor"] = json!(encode_cursor(resource.segment, offset + size as u64));
+            }
+            page
+        } else {
+            return Err((NOT_FOUND, "resource not found".into()));
+        };
+        Ok(
+            json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": body.to_string()}]}),
+        )
     }
 
     fn list_tools(&self) -> Value {
@@ -326,4 +440,17 @@ fn failure(d: &ToolDescriptor, e: CratestackError) -> Value {
         )
     });
     json!({"content": [{"type": "text", "text": text}], "isError": true})
+}
+
+/// Opaque, resource-bound page cursor (`<segment>:<offset>`, base64url).
+fn encode_cursor(segment: &str, offset: u64) -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    URL_SAFE_NO_PAD.encode(format!("{segment}:{offset}"))
+}
+
+fn decode_cursor(segment: &str, raw: &str) -> Option<u64> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let text = String::from_utf8(URL_SAFE_NO_PAD.decode(raw).ok()?).ok()?;
+    let (seg, offset) = text.rsplit_once(':')?;
+    (seg == segment).then(|| offset.parse().ok()).flatten()
 }
