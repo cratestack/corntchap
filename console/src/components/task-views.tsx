@@ -3,6 +3,7 @@ import type { TaskView } from "@corntchap/api";
 import { ChevronRight, Flame } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BUCKETS, bucketOf, taskNote, type Bucket } from "@/lib/format";
+import { MenuChip } from "./menus";
 import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar } from "./bits";
 
 function priorityTag(p: number) {
@@ -12,7 +13,10 @@ function priorityTag(p: number) {
   return null;
 }
 
-export function TaskRow({ task, selected, onOpen }: { task: TaskView; selected: boolean; onOpen: (id: string) => void }) {
+type MenuNames = Record<string, string>;
+
+export function TaskRow({ task, selected, onOpen, menus }: { task: TaskView; selected: boolean; onOpen: (id: string) => void; menus?: MenuNames | undefined }) {
+  const menuName = task.menu ? (menus?.[task.menu] ?? undefined) : undefined;
   const note = taskNote(task);
   const prio = priorityTag(task.priority);
   const live = task.status === "claimed" && task.lease_live;
@@ -49,6 +53,7 @@ export function TaskRow({ task, selected, onOpen }: { task: TaskView; selected: 
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
           {task.total_items > 0 && <ProgressBar done={done} total={task.total_items} />}
+          {menuName && <MenuChip name={menuName} />}
           {task.labels.map((l) => (
             <LabelChip key={l}>{l}</LabelChip>
           ))}
@@ -74,12 +79,14 @@ export function TaskGroup({
   tasks,
   selected,
   onOpen,
+  menus,
   defaultOpen = true,
 }: {
   bucket: Bucket;
   tasks: TaskView[];
   selected: string | null;
   onOpen: (id: string) => void;
+  menus?: MenuNames | undefined;
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -108,7 +115,7 @@ export function TaskGroup({
       {open && (
         <div className="mt-1.5 space-y-1.5">
           {shown.map((t) => (
-            <TaskRow key={t.id} task={t} selected={selected === t.id} onOpen={onOpen} />
+            <TaskRow key={t.id} task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />
           ))}
           {!all && tasks.length > shown.length && (
             <button type="button" onClick={() => setAll(true)} className="px-2 py-1 text-[12.5px] text-primary hover:underline">
@@ -121,7 +128,8 @@ export function TaskGroup({
   );
 }
 
-export function TaskCard({ task, selected, onOpen }: { task: TaskView; selected: boolean; onOpen: (id: string) => void }) {
+export function TaskCard({ task, selected, onOpen, menus }: { task: TaskView; selected: boolean; onOpen: (id: string) => void; menus?: MenuNames | undefined }) {
+  const menuName = task.menu ? (menus?.[task.menu] ?? undefined) : undefined;
   const live = task.status === "claimed" && task.lease_live;
   const done = task.total_items - task.open_items;
   const note = taskNote(task);
@@ -142,8 +150,9 @@ export function TaskCard({ task, selected, onOpen }: { task: TaskView; selected:
       <p className="line-clamp-3 text-[13.5px] font-medium leading-snug">{task.title}</p>
       {note && <p className="line-clamp-2 text-[12px] text-muted-foreground">{note}</p>}
       {task.total_items > 0 && <ProgressBar done={done} total={task.total_items} />}
-      {(task.labels.length > 0 || task.claimed_by) && (
+      {(task.labels.length > 0 || task.claimed_by || menuName) && (
         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+          {menuName && <MenuChip name={menuName} />}
           {task.labels.map((l) => (
             <LabelChip key={l}>{l}</LabelChip>
           ))}

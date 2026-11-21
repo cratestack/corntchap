@@ -15,8 +15,12 @@ import {
   Pencil,
   BookMarked,
   Eraser,
+  PartyPopper,
+  RotateCcw,
+  Soup,
   type LucideIcon,
 } from "lucide-react";
+import { Link } from "react-router";
 import { cn } from "@/lib/utils";
 import { fmtAgo, useNow } from "@/lib/format";
 import { Avatar } from "./bits";
@@ -66,6 +70,14 @@ export function describe(e: ChangeView): Described {
       };
     case "memory.forgotten":
       return { icon: Eraser, tone: "text-destructive", verb: "forgot", detail: p.title ?? undefined };
+    case "menu.created":
+      return { icon: Soup, tone: "text-corn-text", verb: "put a new" };
+    case "menu.updated":
+      return { icon: Pencil, tone: "text-muted-foreground", verb: "edited the" };
+    case "menu.served":
+      return { icon: PartyPopper, tone: "text-success", verb: "served the" };
+    case "menu.reopened":
+      return { icon: RotateCcw, tone: "text-primary", verb: "reopened the" };
     case "task.lease_expired":
       return { icon: Hourglass, tone: "text-corn-text", verb: "lease ran out on" };
     default:
@@ -98,6 +110,17 @@ const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: b
             >
               {e.task}
             </button>
+          )}
+          {e.kind.startsWith("menu.") && (
+            <>
+              <Link
+                to={`/pots/${e.project}/list?menu=${encodeURIComponent(e.payload.menu ?? "")}`}
+                className="rounded font-semibold underline-offset-2 hover:underline focus-visible:underline"
+              >
+                {e.payload.title ?? e.payload.menu}
+              </Link>{" "}
+              <span className="text-muted-foreground">menu</span>
+            </>
           )}
           {e.kind === "memory.saved" && e.payload.key && (
             <button

@@ -13,6 +13,7 @@ import { useProc, useProcCall, useProjects } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { lastView } from "@/lib/views";
 import { TagInput } from "./tag-input";
+import { useMenus } from "./menus";
 
 export const PRIORITIES = [
   { v: -1, label: "Low" },
@@ -34,6 +35,7 @@ export function NewTaskDialog() {
   const [labels, setLabels] = useState<string[]>([]);
   const [deps, setDeps] = useState<string[]>([]);
   const [priority, setPriority] = useState("0");
+  const [menu, setMenu] = useState("-");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -45,6 +47,7 @@ export function NewTaskDialog() {
       setLabels([]);
       setDeps([]);
       setPriority("0");
+      setMenu(newTask.menu && newTask.menu !== "-" ? newTask.menu : "-");
     }
     // reset only when the dialog opens
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -54,6 +57,7 @@ export function NewTaskDialog() {
     if (newTask.open && !pot && projects.data?.[0]) setPot(projects.data[0].key);
   }, [newTask.open, pot, projects.data]);
 
+  const menus = useMenus(pot, newTask.open);
   const tasks = useProc("projectTasks", { project: pot }, { enabled: newTask.open && !!pot });
   const depSuggestions = useMemo(
     () => (tasks.data ?? []).filter((t) => t.status !== "cancelled").map((t) => t.id),
@@ -73,6 +77,7 @@ export function NewTaskDialog() {
         labels: labels.length ? labels.join(",") : null,
         dependsOn: deps.length ? deps.join(",") : null,
         priority: Number(priority),
+        menu: menu !== "-" && menus.open.some((m) => m.key === menu) ? menu : null,
       });
       toast.success(`${t.id} is in the pot`, {
         description: t.title,
@@ -102,7 +107,7 @@ export function NewTaskDialog() {
             <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
               <div className="space-y-1.5">
                 <Label htmlFor="nt-pot">Pot</Label>
-                <Select value={pot} onValueChange={setPot}>
+                <Select value={pot} onValueChange={(v) => { setPot(v); setMenu("-"); }}>
                   <SelectTrigger id="nt-pot" className="w-full">
                     <SelectValue placeholder="Choose a pot" />
                   </SelectTrigger>
@@ -131,6 +136,24 @@ export function NewTaskDialog() {
                 </Select>
               </div>
             </div>
+            {menus.open.length > 0 && (
+              <div className="space-y-1.5">
+                <Label htmlFor="nt-menu">Menu</Label>
+                <Select value={menu} onValueChange={setMenu}>
+                  <SelectTrigger id="nt-menu" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="-">No menu</SelectItem>
+                    {menus.open.map((m) => (
+                      <SelectItem key={m.key} value={m.key}>
+                        {m.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="nt-title">Title</Label>
               <Input id="nt-title" autoFocus required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Retry failed webhook deliveries with backoff" />

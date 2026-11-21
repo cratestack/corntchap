@@ -5,8 +5,8 @@ interface Ui {
   setPaletteOpen: (v: boolean) => void;
   menuOpen: boolean;
   setMenuOpen: (v: boolean) => void;
-  newTask: { open: boolean; pot?: string | undefined };
-  openNewTask: (pot?: string) => void;
+  newTask: { open: boolean; pot?: string | undefined; menu?: string | undefined };
+  openNewTask: (pot?: string, menu?: string) => void;
   closeNewTask: () => void;
 }
 
@@ -16,7 +16,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [newTask, setNewTask] = useState<Ui["newTask"]>({ open: false });
-  const openNewTask = useCallback((pot?: string) => setNewTask({ open: true, pot }), []);
+  const openNewTask = useCallback((pot?: string, menu?: string) => setNewTask({ open: true, pot, menu }), []);
   const closeNewTask = useCallback(() => setNewTask((s) => ({ ...s, open: false })), []);
   const value = useMemo(
     () => ({ paletteOpen, setPaletteOpen, menuOpen, setMenuOpen, newTask, openNewTask, closeNewTask }),
