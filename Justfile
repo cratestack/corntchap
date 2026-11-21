@@ -102,3 +102,10 @@ mcp-check project="DEMO":
 # Stop the compose stack and delete its data.
 down: env-init
     {{load}} docker compose down -v
+
+# Compose status / logs for the local stack.
+ps: env-init
+    {{load}} docker compose ps
+
+logs *args: env-init
+    {{load}} docker compose logs {{args}}

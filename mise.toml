@@ -3,6 +3,10 @@
 rust = { version = "1.100", components = "rustfmt,clippy", targets = "x86_64-unknown-linux-musl" }
 just = "latest"
 
+# Plain `docker compose ...` in this repo then reads the random ports written by `just setup`.
+[env]
+COMPOSE_ENV_FILES = ".env.dev"
+
 [tasks.db]
 description = "Start Postgres (docker compose)"
 run = "just db"
