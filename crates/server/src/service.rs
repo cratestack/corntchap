@@ -26,7 +26,7 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
   'lease_epoch', t.lease_epoch, 'lease_expires_at', t.lease_expires_at,
   'lease_live', (t.status = 'claimed' and t.lease_expires_at > now()),
   'ready', (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
-       where d.task_id = t.id and dt.status <> 'done')),
+       where d.task_id = t.id and dt.status not in ('done','cancelled'))),
   'open_items', (select count(*) from items i where i.task_id = t.id and not i.done),
   'total_items', (select count(*) from items i where i.task_id = t.id),
   'result', t.result, 'created_at', t.created_at, 'updated_at', t.updated_at)"#;
@@ -183,7 +183,7 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
             'lease_ttl_s', extract(epoch from pr.lease_ttl)::float8,
             'open', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'open'),
             'ready', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'open'
-                and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status <> 'done')),
+                and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled'))),
             'claimed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'claimed'),
             'blocked', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'blocked'),
             'done', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'done'))
@@ -210,7 +210,7 @@ pub async fn list_tasks(
            and ($2::text is null or t.status = $2)
            and ($3::text is null or $3 = any(t.labels))
            and (not $4 or (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
-                 where d.task_id = t.id and dt.status <> 'done')))
+                 where d.task_id = t.id and dt.status not in ('done','cancelled'))))
          order by t.priority desc, t.number"
     );
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
@@ -357,7 +357,7 @@ pub async fn claim_next(db: &PgPool, p: &Principal, project: &str, labels: &[Str
            where t.project_id = $1
              and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
              and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
-                             where d.task_id = t.id and dt.status <> 'done')
+                             where d.task_id = t.id and dt.status not in ('done','cancelled'))
              and (cardinality($4::text[]) = 0 or t.labels && $4::text[])
            order by t.priority desc, t.created_at
            for update skip locked limit 1)
@@ -397,7 +397,7 @@ pub async fn claim_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
          where t.id = $1
            and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
            and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
-                           where d.task_id = t.id and dt.status <> 'done')
+                           where d.task_id = t.id and dt.status not in ('done','cancelled'))
          returning t.lease_epoch, t.lease_expires_at",
     )
     .bind(t.id)
@@ -408,7 +408,7 @@ pub async fn claim_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
     let Some((epoch, exp)) = row else {
         let (status, deps_open): (String, bool) = sqlx::query_as(
             "select status, exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
-                    where d.task_id = tasks.id and dt.status <> 'done') from tasks where id = $1",
+                    where d.task_id = tasks.id and dt.status not in ('done','cancelled')) from tasks where id = $1",
         )
         .bind(t.id)
         .fetch_one(&mut *tx)
@@ -690,7 +690,7 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
          from tasks t join projects pr on pr.id = t.project_id
          where ($1::uuid is null or pr.id = $1) and {}
            and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
-           and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status <> 'done')
+           and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled'))
          order by t.priority desc, t.created_at limit 20",
         access_sql("$2", "$3")
     );

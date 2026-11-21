@@ -80,7 +80,8 @@ pub fn spawn_leader(state: AppState) {
 
 async fn run_jobs(state: AppState) {
     let s = state.clone();
-    tokio::spawn(async move {
+    // Both loops live inside this future, so aborting it (on losing the lock) stops them too.
+    let reaper = async move {
         let mut tick = tokio::time::interval(Duration::from_secs(15));
         let mut n = 0u64;
         loop {
@@ -95,20 +96,25 @@ async fn run_jobs(state: AppState) {
                 }
             }
         }
-    });
-    Dispatcher::new(state).run().await;
+    };
+    tokio::select! {
+        _ = reaper => {},
+        _ = Dispatcher::new(state).run() => {},
+    }
 }
 
 /// Expired claims go back to `open`, with an event, in one statement.
 pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
     let n = sqlx::query(
-        "with expired as (
-           update tasks set status = 'open', claimed_by = null, lease_expires_at = null, updated_at = now()
-           where status = 'claimed' and lease_expires_at < now()
-           returning id, project_id, claimed_by, lease_epoch)
+        "with old as (
+           select id, claimed_by from tasks where status = 'claimed' and lease_expires_at < now() for update skip locked),
+         expired as (
+           update tasks t set status = 'open', claimed_by = null, lease_expires_at = null, updated_at = now()
+           from old where t.id = old.id
+           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch)
          insert into events (project_id, task_id, kind, actor_id, payload)
          select project_id, id, 'task.lease_expired', null,
-                jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.claimed_by))
+                jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was))
          from expired",
     )
     .execute(&state.db)
@@ -202,7 +208,7 @@ impl Dispatcher {
                and (wt.projects is null or cardinality(wt.projects) = 0 or pr.key = any(wt.projects))
                and exists (select 1 from tasks t where t.project_id = pr.id
                       and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
-                      and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status <> 'done')
+                      and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled'))
                       and (wt.labels is null or cardinality(wt.labels) = 0 or t.labels && wt.labels))
                and (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) < a.max_leases",
         )
@@ -236,7 +242,7 @@ impl Dispatcher {
     }
 
     async fn flush_pending(&mut self) {
-        let pend: Vec<(Uuid, Uuid)> = self.pending.iter().cloned().collect();
+        let pend: Vec<(Uuid, Uuid)> = self.pending.drain().collect(); // consider() re-adds what is still held back
         let mut projects: HashSet<Uuid> = HashSet::new();
         for (_, p) in pend {
             projects.insert(p);
@@ -268,7 +274,10 @@ impl Dispatcher {
                     let res = deliver(&state, &typ, &config, &agent, &key2, cloud).await;
                     let (kind, payload) = match res {
                         Ok(status) => ("wake.delivered", json!({"agent": agent, "project": key2, "type": typ, "status": status})),
-                        Err(e) => ("wake.failed", json!({"agent": agent, "project": key2, "type": typ, "error": e})),
+                        Err(e) => {
+                            tracing::warn!("wake delivery to {agent} failed: {e}");
+                            ("wake.failed", json!({"agent": agent, "project": key2, "type": typ}))
+                        }
                     };
                     if let Ok(mut c) = state.db.acquire().await {
                         let _ = emit(&mut c, Some(project), None, kind, None, payload).await;

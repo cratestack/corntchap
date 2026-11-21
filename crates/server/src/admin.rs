@@ -10,7 +10,7 @@ use crate::{
     state::Principal,
 };
 
-fn norm_name(s: &str) -> Result<String> {
+pub fn norm_name(s: &str) -> Result<String> {
     let n = s.trim().to_lowercase();
     if n.is_empty()
         || n.len() > 64
@@ -133,12 +133,16 @@ pub async fn add_member(db: &PgPool, p: &Principal, team: &str, principal: &str,
     }
     let mut c = db.acquire().await?;
     let tid = owned_team(&mut c, p, team).await?;
-    let target: Option<(Uuid, String)> =
-        sqlx::query_as("select id, kind from principals where name = $1 and kind <> 'relay' and disabled_at is null")
+    let target: Option<(Uuid, String, Option<Uuid>)> =
+        sqlx::query_as("select id, kind, owner_id from principals where name = $1 and kind <> 'relay' and disabled_at is null")
             .bind(principal.to_lowercase())
             .fetch_optional(&mut *c)
             .await?;
-    let Some((pid, kind)) = target else { return Err(Error::NotFound(format!("no user or agent named {principal}"))) };
+    let Some((pid, kind, owner)) = target else { return Err(Error::NotFound(format!("no user or agent named {principal}"))) };
+    // An agent joins a team only with its owner's say-so (otherwise a foreign team could put work on their machine).
+    if kind == "agent" && !(p.is_admin || owner == Some(p.id)) {
+        return Err(Error::Forbidden("only the agent's owner (or an admin) can add it to a team".into()));
+    }
     if role == "owner" && kind != "user" {
         return invalid("only users can own a team");
     }
@@ -336,6 +340,9 @@ pub async fn add_wake_target(
     let (id, kind) = managed(&mut c, p, agent).await?;
     if kind != "agent" {
         return invalid("wake targets belong to agents");
+    }
+    if typ != "relay" && !p.is_admin {
+        return Err(Error::Forbidden("only an admin can add webhook and github-comment wake targets".into()));
     }
     match typ {
         "relay" => {}

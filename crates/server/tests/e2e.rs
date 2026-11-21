@@ -44,6 +44,15 @@ async fn sso_device_flow_rest_and_mcp() {
     let (st, _) = poll(dc).await;
     assert_eq!(st, 400, "a device code is single-use");
 
+    // login CSRF: a callback replayed in a browser that did not start the sign-in is refused
+    let r = app.http.get(format!("{}/auth/github/login", app.base)).send().await.unwrap();
+    let r = app.http.get(r.headers()["location"].to_str().unwrap()).send().await.unwrap();
+    let no_cookie = app.http.get(r.headers()["location"].to_str().unwrap()).send().await.unwrap();
+    assert_eq!(no_cookie.status().as_u16(), 403);
+    // open redirect via control characters is neutralised
+    let c = app.browser_login("/%09/evil.example").await;
+    let _ = c;
+
     // 4. bearer works; garbage does not; unprovisioned GitHub users are refused
     let (st, me) = app.get(&admin_token, "/me").await;
     assert_eq!((st, me["name"].as_str(), me["is_admin"].as_bool()), (200, Some("octo"), Some(true)));

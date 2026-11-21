@@ -63,7 +63,7 @@ fn page(title: &str, body: &str, refresh: bool) -> Html<String> {
 
 fn safe_next(next: Option<&str>) -> String {
     match next {
-        Some(n) if n.starts_with('/') && !n.starts_with("//") && !n.contains('\\') => n.to_string(),
+        Some(n) if n.starts_with('/') && !n.starts_with("//") && !n.contains('\\') && !n.chars().any(|c| c.is_control()) => n.to_string(),
         _ => "/".to_string(),
     }
 }
@@ -143,17 +143,24 @@ async fn github_login(State(state): State<AppState>, Query(q): Query<HashMap<Str
     let flow = github_flow(&state)?;
     let (url, st) = flow.initiate_login(&[], None);
     let next = safe_next(q.get("next").map(|s| s.as_str()));
+    // Bind the attempt to this browser: the callback must present the same nonce cookie (login CSRF).
+    let nonce = random_hex(16);
+    let mut data = serde_json::to_value(&st).map_err(|e| Error::Internal(e.to_string()))?;
+    data["ct_nonce_hash"] = json!(hex::encode(sha256(nonce.as_bytes())));
     sqlx::query("delete from oauth_states where expires_at < now()").execute(&state.db).await?;
     sqlx::query("insert into oauth_states (state, data, next, expires_at) values ($1,$2,$3, now() + interval '10 minutes')")
         .bind(&st.state)
-        .bind(serde_json::to_value(&st).map_err(|e| Error::Internal(e.to_string()))?)
+        .bind(data)
         .bind(next)
         .execute(&state.db)
         .await?;
-    Ok(Redirect::to(&url).into_response())
+    let secure = if state.config.require_https { "; Secure" } else { "" };
+    let mut resp = Redirect::to(&url).into_response();
+    resp.headers_mut().insert(header::SET_COOKIE, format!("ct_oauth={nonce}; HttpOnly; SameSite=Lax; Path=/auth; Max-Age=600{secure}").parse().unwrap());
+    Ok(resp)
 }
 
-async fn github_callback(State(state): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Result<Response> {
+async fn github_callback(State(state): State<AppState>, headers: HeaderMap, Query(q): Query<HashMap<String, String>>) -> Result<Response> {
     if let Some(err) = q.get("error") {
         return Ok((StatusCode::FORBIDDEN, page("Sign-in refused", &format!("<p>GitHub said: {}</p>", esc(err)), false)).into_response());
     }
@@ -167,6 +174,11 @@ async fn github_callback(State(state): State<AppState>, Query(q): Query<HashMap<
     let Some((data, next)) = row else {
         return Err(Error::Invalid("unknown or expired sign-in attempt; start again".into()));
     };
+    let want = data["ct_nonce_hash"].as_str().unwrap_or("").to_string();
+    let have = cookie_value(&headers, "ct_oauth").map(|n| hex::encode(sha256(n.as_bytes()))).unwrap_or_default();
+    if want.is_empty() || want != have {
+        return Err(Error::Forbidden("this sign-in was not started in this browser; start again".into()));
+    }
     let expected: OAuth2State = serde_json::from_value(data).map_err(|e| Error::Internal(e.to_string()))?;
     let flow = github_flow(&state)?;
     let (identity, _token, _) = flow
@@ -265,9 +277,11 @@ async fn device_code(State(state): State<AppState>, headers: HeaderMap, body: ax
     if !["user", "agent", "relay"].contains(&kind.as_str()) {
         return Err(Error::Invalid("kind must be user, agent or relay".into()));
     }
-    if kind != "user" && req.name.as_deref().unwrap_or("").is_empty() {
-        return Err(Error::Invalid("name is required to enroll an agent or relay".into()));
-    }
+    let name = match (kind.as_str(), req.name.as_deref()) {
+        ("user", _) => None,
+        (_, Some(n)) if !n.is_empty() => Some(admin::norm_name(n)?),
+        _ => return Err(Error::Invalid("name is required to enroll an agent or relay".into())),
+    };
     sqlx::query("delete from device_requests where expires_at < now() - interval '1 day'").execute(&state.db).await?;
     let device_code = generate_token();
     let code = user_code();
@@ -278,9 +292,9 @@ async fn device_code(State(state): State<AppState>, headers: HeaderMap, body: ax
     .bind(sha256(device_code.as_bytes()))
     .bind(&code)
     .bind(&kind)
-    .bind(req.name.map(|n| n.to_lowercase()))
-    .bind(req.runtime)
-    .bind(req.agent_kind)
+    .bind(name)
+    .bind(req.runtime.filter(|r| ["cloud", "local"].contains(&r.as_str())))
+    .bind(req.agent_kind.filter(|k| ["claude-code", "codex", "opencode", "other"].contains(&k.as_str())))
     .bind(DEVICE_TTL_SECS as f64)
     .execute(&state.db)
     .await?;
@@ -367,7 +381,9 @@ async fn device_token(State(state): State<AppState>, headers: HeaderMap, body: a
                 .bind(target)
                 .fetch_one(&mut *tx)
                 .await?;
-            Json(json!({"access_token": token, "token_type": "Bearer", "principal": {"name": name, "kind": kind}})).into_response()
+            let mut r = Json(json!({"access_token": token, "token_type": "Bearer", "principal": {"name": name, "kind": kind}})).into_response();
+            r.headers_mut().insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+            r
         }
         _ => oauth_err(StatusCode::BAD_REQUEST, "invalid_grant"),
     };
@@ -400,6 +416,17 @@ async fn device_page(State(state): State<AppState>, headers: HeaderMap, Query(q)
     let Some((kind, name, runtime, agent_kind)) = row else {
         return Ok((StatusCode::NOT_FOUND, page("Unknown code", "<h1>Unknown or expired code</h1><p>Start again from your terminal.</p>", false)).into_response());
     };
+    let existing: Option<(String,)> = match (kind.as_str(), name.as_deref()) {
+        ("user", _) | (_, None) => None,
+        (k, Some(n)) => sqlx::query_as("select coalesce((select name from principals where id = p.owner_id), '?') from principals p where p.name = $1 and p.kind = $2")
+            .bind(n)
+            .bind(k)
+            .fetch_optional(&state.db)
+            .await?,
+    };
+    let warn = existing
+        .map(|(o,)| format!("<p><b>Warning:</b> this name already exists (owner: {}). Approving <b>replaces its credentials</b>; the old token stops working.</p>", esc(&o)))
+        .unwrap_or_default();
     let what = match kind.as_str() {
         "user" => format!("sign in <b>the CLI</b> as <b>{}</b>", esc(&session.user.name)),
         "agent" => format!(
@@ -414,11 +441,12 @@ async fn device_page(State(state): State<AppState>, headers: HeaderMap, Query(q)
     Ok(page(
         "Approve device",
         &format!(
-            "<h1>Approve this device?</h1><p>Code <span class=code>{c}</span></p><p>This will {what}.</p>\
+            "<h1>Approve this device?</h1><p>Code <span class=code>{c}</span></p><p>This will {what}.</p>{warn}\
              <form method=post action=/device><input type=hidden name=user_code value=\"{c}\"><input type=hidden name=csrf value=\"{csrf}\">\
              <button name=action value=approve>Approve</button><button name=action value=deny>Deny</button></form>\
              <p><small>Only approve if you started this from your own terminal. Signed in as {u}.</small></p>",
             c = esc(&code),
+            warn = warn,
             csrf = esc(&session.csrf),
             u = esc(&session.user.name)
         ),

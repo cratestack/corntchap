@@ -109,6 +109,7 @@ impl AppState {
         let (events, _) = broadcast::channel(1024);
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent("corntchap")
             .build()
             .expect("http client");

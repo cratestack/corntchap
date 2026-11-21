@@ -109,7 +109,8 @@ pub async fn report_run(State(state): State<AppState>, auth: authkestra::axum::A
     };
     let row: Option<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
         "select a.id, pr.id from principals a, projects pr
-         where a.name = $1 and a.kind = 'agent' and a.owner_id = $2 and pr.key = $3",
+         where a.name = $1 and a.kind = 'agent' and a.owner_id = $2 and pr.key = $3
+           and exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = a.id)",
     )
     .bind(r.agent.to_lowercase())
     .bind(relay.owner_id)

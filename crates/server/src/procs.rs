@@ -107,7 +107,7 @@ impl ProcedureRegistry for Procedures {
 
     async fn list_tasks(&self, _db: &Db, ctx: &CratestackContext, a: list_tasks::Args, _z: list_tasks::Authorized) -> Res {
         let p = principal(ctx)?;
-        out(service::list_tasks(&self.state.db, &p, &a.project, a.status.as_deref(), a.label.as_deref(), a.readyOnly.unwrap_or(false)).await)
+        out(service::list_tasks(&self.state.db, &p, &a.project.to_uppercase(), a.status.as_deref(), a.label.as_deref(), a.readyOnly.unwrap_or(false)).await)
     }
 
     async fn get_task(&self, _db: &Db, ctx: &CratestackContext, a: get_task::Args, _z: get_task::Authorized) -> Res {

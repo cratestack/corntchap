@@ -106,10 +106,11 @@ impl TestApp {
     /// Sign in through the mock GitHub and return the session cookie header value.
     pub async fn browser_login(&self, next: &str) -> String {
         let r = self.http.get(format!("{}/auth/github/login?next={next}", self.base)).send().await.unwrap();
+        let nonce = r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string();
         let to_gh = r.headers()["location"].to_str().unwrap().to_string();
         let r = self.http.get(&to_gh).send().await.unwrap();
         let back = r.headers()["location"].to_str().unwrap().to_string();
-        let r = self.http.get(&back).send().await.unwrap();
+        let r = self.http.get(&back).header("cookie", &nonce).send().await.unwrap();
         assert_eq!(r.status().as_u16(), 303, "callback should redirect, got {}", r.status());
         let cookie = r.headers()["set-cookie"].to_str().unwrap();
         cookie.split(';').next().unwrap().to_string()
