@@ -166,3 +166,24 @@ gen-client *flags:
     npx --yes @cratestack/cli@0.20.6 generate-typescript \
       --schema crates/server/schema/corntchap.cstack --out console/src/gen \
       --package-name @corntchap/api --base-path /api/v2 --refine "$@"
+
+# ---- Web console (console/: Vite + React + Refine + Tailwind + shadcn/ui; embedded in the server binary) ----
+
+# The generated client (console/src/gen) is never committed: console-build/-check/-dev run `gen-client` first.
+# Install the console's dependencies from the lockfile (pnpm; mise installs node and pnpm).
+console-install:
+    cd console && pnpm install --frozen-lockfile
+
+# Build console/dist and nudge cargo to re-embed it (`just build` / `just serve` pick it up).
+console-build: gen-client console-install
+    cd console && pnpm build
+    touch crates/server/build.rs
+
+# Typecheck + lint the console (CI runs this before cargo).
+console-check: gen-client console-install
+    cd console && pnpm typecheck && pnpm lint
+
+# Vite dev server with hot reload, proxying /api, /auth, /logout, /oauth and /device to `just serve`.
+# Sign in once at $PUBLIC_URL (cookies are shared across ports on localhost), then open http://localhost:5173.
+console-dev: env-init gen-client
+    {{load}} cd console && ([ -d node_modules ] || pnpm install --frozen-lockfile) && CORNTCHAP_URL="$PUBLIC_URL" pnpm dev

@@ -24,6 +24,23 @@ jobs:
       TEST_DATABASE_ADMIN_URL: postgres://corn:corn@127.0.0.1/postgres
     steps:
       - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: console/package.json
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: console/pnpm-lock.yaml
+      # the web console is built first: cargo embeds console/dist into the server binary
+      - name: console (install, typecheck, lint, build)
+        working-directory: console
+        run: |
+          pnpm install --frozen-lockfile
+          npx --yes @cratestack/cli@0.20.6 generate-typescript --schema ../crates/server/schema/corntchap.cstack --out src/gen --package-name @corntchap/api --base-path /api/v2 --refine
+          pnpm typecheck
+          pnpm lint
+          pnpm build
       - uses: dtolnay/rust-toolchain@1.100   # same as rust-toolchain.toml
         with:
           components: rustfmt, clippy

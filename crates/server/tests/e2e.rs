@@ -55,7 +55,7 @@ async fn sso_device_flow_rest_and_mcp() {
         .text()
         .await
         .unwrap();
-    assert!(page.contains("Approve this device?"), "{page}");
+    assert!(page.contains("Approve a device"), "{page}");
     let csrf = page
         .split("name=csrf value=\"")
         .nth(1)
@@ -133,18 +133,19 @@ async fn sso_device_flow_rest_and_mcp() {
     assert_eq!(app.get("ct_garbage", "/me").await.0, 401);
     // A new subject is provisioned just-in-time, as a non-admin user.
     app.sign_in_as("sub-new", "Newbie", false);
-    let c = app.browser_login("/board").await;
-    let board = app
+    let c = app.browser_login("/").await;
+    let who: serde_json::Value = app
         .http
-        .get(format!("{}/board", app.base))
+        .get(format!("{}/auth/session", app.base))
         .header("cookie", &c)
+        .header("x-corntchap-console", "1")
         .send()
         .await
         .unwrap()
-        .text()
+        .json()
         .await
         .unwrap();
-    assert!(board.contains("Signed in as <b>newbie</b>"), "{board}");
+    assert_eq!(who["name"], "newbie", "{who}");
     let (is_admin, src): (bool, String) = sqlx::query_as(
         "select is_admin, admin_source from principals where name = 'newbie' and oidc_sub = 'sub-new'",
     )
@@ -272,17 +273,20 @@ async fn sso_device_flow_rest_and_mcp() {
     );
     let (_, d) = app.get(&admin_token, "/projects/PAY/digest?since=0").await;
     assert!(d["counts"]["task.completed"].as_i64().unwrap() >= 1);
-    let html = app
+    let r = app
         .http
         .get(format!("{}/board/PAY", app.base))
-        .header("authorization", format!("Bearer {admin_token}"))
         .send()
         .await
-        .unwrap()
-        .text()
-        .await
         .unwrap();
-    assert!(html.contains("PAY-2"));
+    assert_eq!(
+        (
+            r.status().as_u16(),
+            r.headers()["location"].to_str().unwrap()
+        ),
+        (303, "/pots/PAY"),
+        "the old board redirects to the console"
+    );
 
     // 9. a human can cancel/unblock only as a user; agents cannot
     assert_eq!(

@@ -11,10 +11,12 @@ use crate::{
     web,
 };
 
-/// cratestack's MCP guard asks this provider who the caller is: same tokens as REST.
+/// cratestack's guards ask this provider who the caller is: same tokens as REST. `cookies` lets the console's
+/// session cookie count (generated `/api/v2` routes); MCP uses bearer tokens only.
 #[derive(Clone)]
 pub struct TokenAuth {
     pub state: AppState,
+    pub cookies: bool,
 }
 
 impl AuthProvider for TokenAuth {
@@ -26,10 +28,16 @@ impl AuthProvider for TokenAuth {
     ) -> impl Future<Output = Result<CratestackContext, Self::Error>> + Send {
         let state = self.state.clone();
         let headers = request.headers.clone();
+        let method =
+            http::Method::from_bytes(request.method.as_bytes()).unwrap_or(http::Method::POST);
+        let cookies = self.cookies;
         async move {
-            let p = auth::authenticate_headers(&state, &headers)
-                .await
-                .map_err(procs::map_err)?;
+            let p = if cookies {
+                auth::authenticate_request(&state, &method, &headers).await
+            } else {
+                auth::authenticate_headers(&state, &headers).await
+            }
+            .map_err(procs::map_err)?;
             Ok(CratestackContext::authenticated(procs::ctx_fields(&p)))
         }
     }
@@ -59,6 +67,7 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
         cratestack::JsonCodec,
         TokenAuth {
             state: state.clone(),
+            cookies: true,
         },
         cratestack::DEFAULT_BODY_LIMIT_BYTES,
     );
@@ -77,6 +86,7 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
         tools,
         TokenAuth {
             state: state.clone(),
+            cookies: false,
         },
         [state.config.public_url.clone()],
         resource,
@@ -112,16 +122,13 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
                 },
             ),
         )
-        .route(
-            "/",
-            get(|| async { axum::response::Redirect::to("/board") }),
-        )
         .nest("/api/v1", crate::rest::routes())
         .merge(web::routes())
         .with_state(state.clone())
         .nest("/api/v2", generated)
         .nest_service("/mcp", mcp_router)
         .merge(mcp.metadata_router())
+        .fallback(crate::console::serve)
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_tls,

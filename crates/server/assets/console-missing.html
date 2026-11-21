@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>console not built · corntchap</title>
+<style>
+  :root{color-scheme:light dark;--bg:#fbf5e9;--fg:#16130f;--mut:#6a5f53;--card:#fffaf0;--bd:#e7dcc6}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1129;--fg:#f3ecdd;--mut:#a9acd0;--card:#161a3d;--bd:#262a55}}
+  body{margin:0;min-height:100dvh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,sans-serif;padding:24px}
+  main{max-width:34rem}
+  h1{font:800 30px/1.1 system-ui,sans-serif;letter-spacing:-.015em;margin:0 0 .5rem}
+  code{font:13px ui-monospace,monospace;background:var(--card);border:1px solid var(--bd);padding:2px 7px;border-radius:6px}
+  p{color:var(--mut)}
+</style>
+</head>
+<body>
+<main>
+  <h1>The console is not built</h1>
+  <p>This server was compiled without the web console. Run <code>just console-build</code> (needs node and pnpm), then rebuild the server, or use <code>just console-dev</code> for the Vite dev server.</p>
+  <p>The API is fine: <code>/api/v2</code>, <code>/api/v1</code> and <code>/mcp</code> are served as usual.</p>
+</main>
+</body>
+</html>
