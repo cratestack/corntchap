@@ -1,4 +1,4 @@
-//! Config snippets printed by `agent setup` / `agent enroll`.
+//! Config snippets printed by `cook setup` / `agent enroll`.
 
 /// The MCP client configuration for an agent of `kind`, with its token filled in.
 pub fn mcp_snippet(kind: &str, server: &str, token: &str) -> String {

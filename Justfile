@@ -62,7 +62,7 @@ db: infra
 up: env-init
     {{load}} docker compose up -d --build
 
-# ---- Quick start: just setup && just init && just serve (then, in another shell: just login && just seed) ----
+# ---- Quick start: just setup && just init && just serve (then, in another shell: just seed) ----
 
 # Trust mise.toml and install the toolchain (skipped when mise is not installed).
 deps:
@@ -82,7 +82,7 @@ init admin="admin": env-init
     echo "$out"
     tok=$(printf '%s\n' "$out" | sed -n 's/^bootstrap token[^:]*: //p')
     if [ -n "$tok" ]; then
-      cargo run -q -p corntchap-cli -- login "$PUBLIC_URL" --token "$tok"
+      cargo run -q -p corntchap-cli -- login "$PUBLIC_URL" --token "$tok" --no-verify
       echo "stored the bootstrap token as your CLI login for $PUBLIC_URL (next: just serve, then just seed)"
     else
       echo "no new bootstrap token was printed (admin already exists?): run \`just login\` to sign in"

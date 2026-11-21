@@ -253,7 +253,7 @@ pub fn agents_table(v: &Value) -> String {
     table(
         &["name", "kind", "runtime", "owner", "busy", "state"],
         rows,
-        "no agents (create one with `agent setup <name> --kind … --runtime …`)",
+        "no agents (create one with `cook setup <name> --kind … --runtime …`)",
     )
 }
 

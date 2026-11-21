@@ -12,7 +12,7 @@ Needs `mise` and Docker, nothing else to configure: compose starts Postgres 18 a
 
 ```bash
 mise trust && mise install                      # one-time: rust, just (`just setup` also does this)
-just setup                                     # Postgres + Keycloak via compose, then the schema
+just setup                                      # Postgres + Keycloak via compose, then the schema
 just init                                      # first admin = Keycloak user `admin`; signs the CLI in with the printed 7-day bootstrap token
 just serve                                     # server on the random port printed by setup
 ```
@@ -22,8 +22,8 @@ In another shell:
 ```bash
 just seed                                      # team, project DEMO, an agent (token printed once), a task
 just install                                   # corntchap-cli and corntchap on your PATH (cargo install --locked; ~/.cargo/bin)
-corntchap-cli tui                              # the live board; or: corntchap-cli task ls DEMO   (just cli … works without installing)
-corntchap-cli doctor                           # server, login, relay credential and config in one check
+corntchap-cli kitchen                          # the live board; or: corntchap-cli task ls DEMO   (just cli … works without installing)
+corntchap-cli marabou                           # server, login, relay credential and config in one check
 ```
 
 `just init` stores the bootstrap token for you (`just login` is only needed to sign in again, e.g. through the browser device flow as admin/admin). `just down` stops the containers and keeps the database; `just reset` also deletes the database and your stored CLI tokens (they die with it), so start over with `just setup && just init`. If a command says the server rejected your stored credential, run `corntchap-cli login <server>`; `corntchap-cli logout` signs out (revokes the token on the server and deletes it locally).
@@ -32,10 +32,12 @@ corntchap-cli doctor                           # server, login, relay credential
 
 ### The CLI
 
-Human output is tidy tables and short confirmations (colour only on a TTY, never with `NO_COLOR`); every listing/show command takes `--json`. The agent-mode task commands (`claim-next`, `claim`, `check`, `heartbeat`, `complete`, `release`, `block`, `comment`, `changes`) keep emitting JSON for agents.
+Corntchap is corn and beans cooked slowly in a pot over a fire, and the CLI borrows the kitchen: `kitchen` is the live board, `cook` manages the agents (the cooks), `fire` is the relay that keeps the fire lit and wakes your local cooks, `marabou` (the marabout) checks the pot, `task scoop` takes the next ready portion and `task serve` completes one by hand. Every old name (`tui`, `agent`, `relay`, `doctor`, `task claim-next`, `task done`) still works as an alias; REST paths, MCP tools and JSON are unchanged.
 
-- `corntchap-cli tui`: live board (ratatui). Left: projects; middle: tasks grouped by status with checklist progress and holder; right: the selected task (body, checklist, dependencies, comments). Refreshes every 2.5 s. Keys: arrows or `j`/`k` move, `Tab` switches pane, `Enter` opens, `a` add task (title, then items one per line; a blank line or Ctrl-S saves), `c` comment, `x`/Space tick the highlighted checklist item (no lease needed), `d` done, `u` unblock, `X` cancel (asks first), `r` refresh, `?` help, `q` quit.
-- `corntchap-cli doctor`: checks the server, your login, the relay credential and `config.toml`.
+Human output is tidy tables and short confirmations (colour only on a TTY, never with `NO_COLOR`); every listing/show command takes `--json`. The agent-mode task commands (`scoop` (alias `claim-next`), `claim`, `check`, `heartbeat`, `complete`, `release`, `block`, `comment`, `changes`) keep emitting JSON for agents.
+
+- `corntchap-cli kitchen`: live board (ratatui). Left: projects; middle: tasks grouped by status with checklist progress and holder; right: the selected task (body, checklist, dependencies, comments). Refreshes every 2.5 s. Keys: arrows or `j`/`k` move, `Tab` switches pane, `Enter` opens, `a` add task (title, then items one per line; a blank line or Ctrl-S saves), `c` comment, `x`/Space tick the highlighted checklist item (no lease needed), `d` done, `u` unblock, `X` cancel (asks first), `r` refresh, `?` help, `q` quit.
+- `corntchap-cli marabou`: checks the server, your login, the relay credential and `config.toml`.
 - `corntchap-cli logout [--relay | --all]`.
 
 Production: set `DATABASE_URL`, `PUBLIC_URL` (https), `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (a confidential client whose redirect URI is `$PUBLIC_URL/auth/oidc/callback`), then run `corntchap migrate`, `corntchap init --admin <login>`, `corntchap serve` (or `just up` for the container stack, `deploy/` for Kubernetes + CNPG). The same CLI commands work against any server: `corntchap-cli login <url>`, `team add`, `project add`, `agent add <name> --kind … --runtime …`, `team join`, `task add`.
@@ -50,16 +52,16 @@ Point an agent at the server (Claude Code `.mcp.json`; keep the token in an env 
 ### Waking agents
 
 ```bash
-corntchap-cli relay enroll relay-laptop          # device flow, stores the relay credential
-corntchap-cli relay init                         # writes a commented ~/.config/corntchap/config.toml (never overwrites; --force)
-corntchap-cli agent setup claude-laptop --kind claude-code --runtime local --team acme
+corntchap-cli fire enroll relay-laptop          # device flow, stores the relay credential
+corntchap-cli fire init                         # writes a commented ~/.config/corntchap/config.toml (never overwrites; --force)
+corntchap-cli cook setup claude-laptop --kind claude-code --runtime local --team acme
 #   creates the agent, joins the team, adds a relay wake target, and prints the MCP config
 #   (Claude Code .mcp.json / Codex config.toml / OpenCode opencode.json) plus the [[target]] block to paste into config.toml
-corntchap-cli relay doctor && corntchap-cli relay install
-corntchap-cli agent wake ls                      # all your agents' wake targets
+corntchap-cli fire doctor && corntchap-cli fire install
+corntchap-cli cook wake ls                      # all your agents' wake targets
 # cloud agents: a webhook (e.g. a Claude routine /fire URL) or a github-comment target
-corntchap-cli agent wake add claude-cloud-1 --type webhook --url https://… --token …
-# an agent registered by device flow instead (token printed once): corntchap-cli agent enroll <name> --kind codex --runtime local
+corntchap-cli cook wake add claude-cloud-1 --type webhook --url https://… --token …
+# an agent registered by device flow instead (token printed once): corntchap-cli cook enroll <name> --kind codex --runtime local
 ```
 
 ```toml

@@ -1,4 +1,4 @@
-//! `corntchap-cli tui`: a live board in the terminal (ratatui + crossterm).
+//! `corntchap-cli kitchen`: a live board in the terminal (ratatui + crossterm).
 //!
 //! `App` is pure state: `update(Msg) -> Vec<Action>` and `draw(frame, &App)` never touch the network,
 //! so both are unit-tested with ratatui's `TestBackend`. `run` is the thin async shell that executes

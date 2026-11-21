@@ -141,7 +141,7 @@ impl Api {
         let token = if relay { c.relay_token } else { c.token };
         if token.is_none() {
             bail!(if relay {
-                "no relay token: run `corntchap-cli relay enroll <name>`"
+                "no relay token: run `corntchap-cli fire enroll <name>`"
             } else {
                 "not logged in: run `corntchap-cli login <server-url>`"
             });
@@ -170,7 +170,7 @@ impl Api {
             let server = &self.server;
             return Err(Unauthorized(if self.relay {
                 format!(
-                    "the server rejected your relay credential for {server} (expired, revoked, or the dev database was reset). Run `corntchap-cli relay enroll <name>`"
+                    "the server rejected your relay credential for {server} (expired, revoked, or the dev database was reset). Run `corntchap-cli fire enroll <name>`"
                 )
             } else {
                 format!(

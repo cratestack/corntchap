@@ -41,7 +41,7 @@ pub fn load_config() -> Result<RelayConfig> {
     let s = std::fs::read_to_string(&p).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow!(
-                "{} does not exist yet. Run `corntchap-cli relay init` to write a commented template, then edit it.",
+                "{} does not exist yet. Run `corntchap-cli fire init` to write a commented template, then edit it.",
                 p.display()
             )
         } else {
@@ -54,9 +54,9 @@ pub fn load_config() -> Result<RelayConfig> {
 /// The commented starter config written by `relay init`.
 pub const TEMPLATE: &str = r##"# corntchap relay configuration.
 # One [[target]] per local agent the relay may wake. `agent` is the agent's name on the server
-# (see `corntchap-cli agent ls`); it must also have a relay wake target:
-#   corntchap-cli agent wake add <agent> --type relay
-# Check everything with: corntchap-cli relay doctor
+# (see `corntchap-cli cook ls`); it must also have a relay wake target:
+#   corntchap-cli cook wake add <agent> --type relay
+# Check everything with: corntchap-cli fire doctor
 
 # Optional: connect to this server instead of the one stored by `corntchap-cli login`.
 # server = "https://corntchap.example.com"
@@ -124,7 +124,7 @@ pub fn init(force: bool) -> Result<()> {
     std::fs::write(&p, TEMPLATE)?;
     crate::ui::ok_line(format!("wrote {}", p.display()));
     println!(
-        "Uncomment and edit the [[target]] entries, then run `corntchap-cli relay doctor`.\nTip: `corntchap-cli agent setup <name> --kind opencode|codex|claude-code` prints the matching block."
+        "Uncomment and edit the [[target]] entries, then run `corntchap-cli fire doctor`.\nTip: `corntchap-cli cook setup <name> --kind opencode|codex|claude-code` prints the matching block."
     );
     Ok(())
 }
@@ -226,7 +226,7 @@ pub async fn run(mut api: Api) -> Result<()> {
     let cfg = load_config()?;
     if cfg.target.is_empty() {
         bail!(
-            "no [[target]] in {}; see `corntchap-cli relay doctor`",
+            "no [[target]] in {}; see `corntchap-cli fire doctor`",
             config_path().display()
         );
     }
@@ -492,10 +492,10 @@ pub async fn doctor(full: bool) -> Result<()> {
     }
     match &creds.relay_token {
         None if full => println!(
-            "--   no relay credential (only needed to wake local agents: `corntchap-cli relay enroll <name>`)"
+            "--   no relay credential (only needed to wake local agents: `corntchap-cli fire enroll <name>`)"
         ),
         None => println!(
-            "FAIL no relay credential: run `corntchap-cli relay enroll <name>` (or set CORNTCHAP_RELAY_TOKEN)"
+            "FAIL no relay credential: run `corntchap-cli fire enroll <name>` (or set CORNTCHAP_RELAY_TOKEN)"
         ),
         Some(_) => {
             let mut api = Api::from_creds(true)?;

@@ -28,6 +28,9 @@ enum Cmd {
         url: String,
         #[arg(long)]
         token: Option<String>,
+        /// With --token: store it without asking the server (used by `just init`, before the server runs).
+        #[arg(long)]
+        no_verify: bool,
     },
     /// Sign out: revoke this token on the server and delete it from credentials.toml (the relay token is kept unless --relay or --all).
     Logout {
@@ -46,9 +49,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Check everything: server reachable, your login, the relay credential and config.toml.
+    /// Consult the marabout: checks the server, your credentials and the fire config.
+    #[command(name = "marabou", alias = "doctor")]
     Doctor,
-    /// Open the live board in the terminal (projects, tasks, checklists; tick, comment, add).
+    /// The live kitchen board in your terminal (projects, tasks, checklists; tick, comment, add).
+    #[command(name = "kitchen", alias = "tui")]
     Tui,
     /// Tasks: the board for humans, plus JSON commands for agents that only have a shell.
     #[command(subcommand)]
@@ -62,10 +67,11 @@ enum Cmd {
     /// Projects.
     #[command(subcommand)]
     Project(ProjectCmd),
-    /// Agents: create, set up, wake targets.
-    #[command(subcommand)]
+    /// The cooks (agents): create, set up, wake targets.
+    #[command(subcommand, name = "cook", alias = "agent")]
     Agent(AgentCmd),
-    /// Run the relay in the foreground (subcommands: init, install, doctor, enroll).
+    /// Keep the fire lit: the relay that wakes your local cooks when new work lands (subcommands: init, install, doctor, enroll).
+    #[command(name = "fire", alias = "relay")]
     Relay {
         #[command(subcommand)]
         cmd: Option<RelayCmd>,
@@ -109,7 +115,8 @@ enum TaskCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Human shortcut: claim, then complete.
+    /// Serve it: human shortcut that claims, then completes.
+    #[command(name = "serve", alias = "done")]
     Done {
         id: String,
         #[arg(long)]
@@ -119,7 +126,8 @@ enum TaskCmd {
     Unblock { id: String },
     /// Cancel a task.
     Cancel { id: String },
-    /// Agent mode: claim the best ready task (JSON).
+    /// Scoop the next ready portion: agent mode, claims the best ready task (JSON).
+    #[command(name = "scoop", alias = "claim-next")]
     ClaimNext {
         #[arg(long)]
         project: String,
@@ -346,7 +354,8 @@ enum RelayCmd {
     },
     /// Write a systemd user unit (Linux) or launchd agent (macOS).
     Install,
-    /// Check the server, the credential and each target.
+    /// Consult the marabout about the fire: the server, the credential and each target.
+    #[command(alias = "marabou")]
     Doctor,
     /// Register this machine as a relay (device flow) and store its credential.
     Enroll { name: String },
@@ -374,7 +383,11 @@ async fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Login { url, token } => login(&url, token).await,
+        Cmd::Login {
+            url,
+            token,
+            no_verify,
+        } => login(&url, token, no_verify).await,
         Cmd::Logout { relay, all, local } => logout(relay, all, local).await,
         Cmd::Doctor => relay::doctor(true).await,
         Cmd::Relay { cmd } => match cmd {
@@ -393,12 +406,22 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn login(url: &str, token: Option<String>) -> Result<()> {
+async fn login(url: &str, token: Option<String>, no_verify: bool) -> Result<()> {
     let url = url.trim_end_matches('/');
     let t = match token {
         Some(t) => t,
         None => device_login(url, "user", None, json!({})).await?.0,
     };
+    if no_verify {
+        Credentials {
+            server: Some(url.to_string()),
+            token: Some(t),
+            relay_token: None,
+        }
+        .save()?;
+        ok_line(format!("stored the token for {url} (not verified)"));
+        return Ok(());
+    }
     let api = Api::new(url, Some(t.clone()));
     let me = api.get("/me").await.map_err(|e| {
         if e.downcast_ref::<api::Unauthorized>().is_some() {
@@ -484,12 +507,12 @@ async fn enroll(name: &str) -> Result<()> {
     let cfg = relay::config_path();
     if cfg.exists() {
         println!(
-            "Next: edit {}, then `corntchap-cli relay doctor`.",
+            "Next: edit {}, then `corntchap-cli fire doctor`.",
             cfg.display()
         );
     } else {
         println!(
-            "Next: `corntchap-cli relay init` writes a commented {}, then `corntchap-cli relay doctor`.",
+            "Next: `corntchap-cli fire init` writes a commented {}, then `corntchap-cli fire doctor`.",
             cfg.display()
         );
     }
@@ -697,13 +720,13 @@ async fn agent_setup(
     print!("{}", setup::mcp_snippet(kind, &api.server, &token));
     if runtime == "local" {
         println!(
-            "\nRelay: paste this into {} (run `corntchap-cli relay init` first if it does not exist),\nthen `corntchap-cli relay doctor`:\n",
+            "\nRelay: paste this into {} (run `corntchap-cli fire init` first if it does not exist),\nthen `corntchap-cli fire doctor`:\n",
             relay::config_path().display()
         );
         println!("{}", relay::target_block(&n, kind));
     } else {
         println!(
-            "\nCloud agent: wake it with a webhook, e.g.\n  corntchap-cli agent wake add {n} --type webhook --url https://… --token …"
+            "\nCloud agent: wake it with a webhook, e.g.\n  corntchap-cli cook wake add {n} --type webhook --url https://… --token …"
         );
     }
     Ok(())
