@@ -684,8 +684,13 @@ function BoardView({
     );
   }
   return (
-    <div className="-mx-5 overflow-x-auto px-5 pb-3 lg:-mx-8 lg:px-8 scrollbar-thin">
-      <div className="grid min-w-[1000px] grid-cols-[repeat(4,minmax(180px,1fr))_minmax(150px,0.75fr)] gap-3.5 xl:min-w-0">
+    <div
+      role="region"
+      aria-label="Board"
+      tabIndex={0}
+      className="scrollbar-thin -mx-5 max-h-[calc(100dvh-16rem)] min-h-64 overflow-auto overscroll-contain px-5 pb-3 focus-visible:outline-none lg:-mx-8 lg:px-8"
+    >
+      <div className="flex w-max min-w-full items-stretch gap-3.5">
         {BOARD_COLS.map((id) => {
           const meta = BUCKETS.find((b) => b.id === id)!;
           const col = groups[id];
@@ -693,16 +698,16 @@ function BoardView({
             <section
               key={id}
               aria-labelledby={`col-${id}`}
-              className={cn("flex max-h-[calc(100dvh-14rem)] min-h-40 flex-col rounded-[14px] bg-column p-2.5", id === "cancelled" && "opacity-80")}
+              className={cn("flex w-[17.5rem] shrink-0 flex-col rounded-[14px] bg-column p-2.5 sm:w-[19rem]", id === "cancelled" && "opacity-80")}
             >
-              <h2 id={`col-${id}`} className="flex items-center gap-2 px-1.5 pt-1 pb-2.5 text-[15px]">
+              <h2 id={`col-${id}`} className="sticky top-0 z-10 -mx-2.5 -mt-2.5 mb-1 flex items-center gap-2 rounded-t-[14px] bg-column px-4 pt-3.5 pb-2.5 text-[15px]">
                 <span className={cn("size-2.5 rounded-full", BUCKET_DOT[id], id === "claimed" && "live-dot")} aria-hidden="true" />
                 {meta.label}
                 <span className="font-mono text-[11.5px] font-normal text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
                   {col.length}
                 </span>
               </h2>
-              <div className="scrollbar-thin flex-1 space-y-2 overflow-y-auto pr-0.5">
+              <div className="space-y-2">
                 {col.length === 0 && <p className="px-2 py-5 text-center text-[12.5px] text-muted-foreground">Nothing here.</p>}
                 {col.map((t) => (
                   <TaskCard key={t.id} task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />
@@ -712,9 +717,6 @@ function BoardView({
           );
         })}
       </div>
-      <p className="mt-3 text-[12px] text-muted-foreground">
-        Cooks move cards by scooping and serving; the board is read-only so a lease is never broken by a stray drag.
-      </p>
     </div>
   );
 }

@@ -1,6 +1,7 @@
-//! The pass: the chefs of a pot talk. Cooks post; a person reads the pass in the console and speaks
-//! through their own cook, which posts in its owner's name (`from_owner`: author = the owner,
-//! relayed_by = the cook). A message with no recipient is on the pot's pass, read by every chef of
+//! The pass: the chefs of a pot talk, people (in the console) and cooks alike. A cook can also post
+//! in its owner's name when they ask in a chat (`from_owner`: author = the owner, relayed_by = the
+//! cook). The pass is working chatter, kept a week (`PASS_RETENTION_DAYS`): durable knowledge goes
+//! to the pantry. A message with no recipient is on the pot's pass, read by every chef of
 //! the pot; with a recipient it is direct, read only by its author, the relaying cook and the
 //! recipient. A direct message to a cook, or an @mention of one on the pass, wakes it (on its last
 //! woken station in that pot) with the message as the prompt.
@@ -57,10 +58,8 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     if body.chars().count() > MAX_BODY {
         return invalid(format!("a message holds {MAX_BODY} characters at most"));
     }
-    if !p.is_agent() {
-        return Err(Error::Forbidden(
-            "people do not write on the pass: tell your cook in your chat with it, and it posts in your name (pass with fromOwner)".into(),
-        ));
+    if a.from_owner && !p.is_agent() {
+        return invalid("fromOwner is for cooks speaking for their owner: you post as yourself");
     }
     let mut tx = db.begin().await?;
     let pr = project_by_key(&mut tx, &p, &a.project.trim().to_uppercase()).await?;

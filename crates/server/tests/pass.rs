@@ -1,4 +1,5 @@
-//! The pass: the chefs of a pot talk. Cooks post; people speak through their own cook (fromOwner).
+//! The pass: the chefs of a pot talk, people and cooks; a cook may also speak for its owner
+//! (fromOwner). Kept a week.
 //! The pot's pass is read by every chef of the pot; a direct message only by its author, the cook
 //! that relayed it and its recipient (admins included), in the tools, the model, the feed and the
 //! live stream alike. A direct message or an @mention wakes the cook it is for.
@@ -119,17 +120,17 @@ async fn the_pass() {
     }
     let (b1, x1) = (other[0].clone(), other[1].clone());
 
-    // --- people do not write on the pass themselves ---
+    // --- people post as themselves; fromOwner is for cooks ---
     let e = refused(
         &app.mcp(
             &alice,
             "pass",
-            json!({"project": "PAY", "message": "hello"}),
+            json!({"project": "PAY", "message": "hello", "fromOwner": true}),
         )
         .await,
-        "a person posts",
+        "a person with fromOwner",
     );
-    assert!(e.contains("tell your cook"), "{e}");
+    assert!(e.contains("post as yourself"), "{e}");
     let e = refused(
         &app.mcp(
             &x1,
@@ -410,4 +411,43 @@ async fn the_pass() {
             .await,
         "empty",
     );
+
+    // --- a person writes directly: on the pass, and to a cook (which is woken) ---
+    let before = wakes(&app).await.len();
+    let mine = ok(
+        &app.mcp(
+            &bob,
+            "pass",
+            json!({"project": "PAY", "message": "c2, ping me when PAY-1 is reviewed", "to": "c2"}),
+        )
+        .await,
+        "bob writes",
+    );
+    assert_eq!(
+        (&mine["from"], &mine["from_kind"], &mine["via"]),
+        (&json!("bob"), &json!("user"), &Value::Null)
+    );
+    let w = wakes(&app).await;
+    assert_eq!(w.len(), before + 1);
+    assert!(
+        w[before]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("bob wrote to you")
+    );
+
+    // --- a week of the pass is kept ---
+    sqlx::query(
+        "update pass_messages set created_at = now() - interval '8 days' where body like 'I take%'",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    corntchap::jobs::retain(&app.state).await.unwrap();
+    let left: Vec<String> = sqlx::query_scalar("select body from pass_messages")
+        .fetch_all(&app.state.db)
+        .await
+        .unwrap();
+    assert!(!left.iter().any(|b| b.starts_with("I take")), "{left:?}");
+    assert_eq!(left.len(), 4);
 }
