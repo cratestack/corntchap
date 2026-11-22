@@ -240,6 +240,7 @@ pub async fn messages_text(
             tasks.push(t.to_string());
         }
     }
+    full.push_str(&conversation(c, agent, agent_name, project).await);
     for t in &tasks {
         full.push_str(&task_context(c, project, t).await);
     }
@@ -271,6 +272,47 @@ pub async fn messages_text(
         meta: json!({"reasons": reasons, "wakes": wakes.iter().map(|w| json!({
             "reason": w["reason"], "text": w["text"], "task": w["task"]})).collect::<Vec<_>>()}),
     }
+}
+
+/// The cook's recent exchange on the pass, oldest first: a cloud run remembers nothing, so a
+/// follow-up ("how far?") needs what came before. Direct messages to or from the cook and pot
+/// messages that are its own or mention it, from the last two days, at most a dozen.
+pub async fn conversation(
+    c: &mut PgConnection,
+    agent: Uuid,
+    agent_name: &str,
+    project: Uuid,
+) -> String {
+    let rows: Vec<(String, Option<String>, String, String)> = sqlx::query_as(
+        "select coalesce(a.name, 'someone'), t.name, m.body, to_char(m.created_at at time zone 'utc', 'MM-DD HH24:MI')
+         from pass_messages m
+         left join principals a on a.id = m.author_id
+         left join principals t on t.id = m.to_principal
+         where m.project_id = $1 and m.created_at > now() - interval '2 days'
+           and (m.author_id = $2 or m.to_principal = $2
+                or (m.to_principal is null and m.body ilike '%@' || $3 || '%'))
+         order by m.seq desc limit 12",
+    )
+    .bind(project)
+    .bind(agent)
+    .bind(agent_name)
+    .fetch_all(&mut *c)
+    .await
+    .unwrap_or_default();
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\nThe conversation so far on the pass (oldest first; earlier runs of you wrote your lines):\n",
+    );
+    for (author, to, body, at) in rows.into_iter().rev() {
+        let to = to.map(|t| format!(" → {t}")).unwrap_or_default();
+        out.push_str(&format!(
+            "- {at} {author}{to}: {}\n",
+            cut(body.trim(), 500).replace('\n', " ")
+        ));
+    }
+    out
 }
 
 /// A task in a few lines: title, status, who holds it, its latest comments.
