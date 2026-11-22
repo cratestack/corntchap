@@ -33,6 +33,16 @@ pub const CONSOLE_HEADER: &str = "x-corntchap-console";
 
 pub const TOKEN_PREFIX: &str = "ct_";
 
+tokio::task_local! {
+    /// The pot of the MCP URL being served (`/mcp/<KEY>`), set around that request. A token bound
+    /// to a pot (OAuth for a pot's MCP URL) is accepted only while serving that very pot.
+    pub static POT_SCOPE: Option<uuid::Uuid>;
+}
+
+fn pot_scope() -> Option<uuid::Uuid> {
+    POT_SCOPE.try_with(|p| *p).ok().flatten()
+}
+
 pub fn sha256(data: &[u8]) -> Vec<u8> {
     Sha256::digest(data).to_vec()
 }
@@ -67,6 +77,7 @@ struct PrincipalRow {
     grants: Vec<String>,
     token_id: uuid::Uuid,
     stale: bool,
+    pot_id: Option<uuid::Uuid>,
 }
 
 pub struct DbTokenValidator {
@@ -81,7 +92,8 @@ impl TokenValidator for DbTokenValidator {
         let hash = sha256(token.as_bytes());
         let row: Option<PrincipalRow> = sqlx::query_as(
             "select p.id, p.kind, p.name, p.owner_id, p.is_admin, p.max_leases, p.runtime, p.agent_kind, p.grants,
-                    t.id as token_id, (t.last_used_at is null or t.last_used_at < now() - interval '1 minute') as stale
+                    t.id as token_id, (t.last_used_at is null or t.last_used_at < now() - interval '1 minute') as stale,
+                    t.pot_id
              from tokens t join principals p on p.id = t.principal_id
              where t.token_hash = $1 and t.revoked_at is null and (t.expires_at is null or t.expires_at > now())
                and p.disabled_at is null",
@@ -91,6 +103,10 @@ impl TokenValidator for DbTokenValidator {
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
         let Some(r) = row else { return Ok(None) };
+        // a pot-bound token works on its pot's MCP URL only: not on /mcp, REST or another pot
+        if r.pot_id.is_some() && r.pot_id != pot_scope() {
+            return Ok(None);
+        }
         if r.stale {
             let _ = sqlx::query("update tokens set last_used_at = now() where id = $1")
                 .bind(r.token_id)

@@ -19,6 +19,15 @@ pub fn mcp_snippet(kind: &str, server: &str, token: &str) -> String {
     }
 }
 
+/// The token-free way: a committed config that is only a pot's MCP URL; the client signs in
+/// with OAuth on first use and the person picks the cook.
+pub fn oauth_hint(server: &str) -> String {
+    format!(
+        "\nNo token to paste: point a repo's MCP config at a pot's URL, {}/mcp/<POT>, commit it, and sign in when your agent asks (OAuth). See README, \"Connecting agents\".\n",
+        server.trim_end_matches('/')
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

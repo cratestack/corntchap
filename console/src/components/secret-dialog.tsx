@@ -139,8 +139,18 @@ export function McpDialog({
           </>
         ) : (
           <>
+            <div className="min-w-0 space-y-1.5 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2.5 text-[12.5px]">
+              <p>
+                <b>No token needed:</b> point the repo's MCP config at a pot&rsquo;s URL and commit it. The agent signs in with OAuth on first use
+                and you pick the cook it works as.
+              </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <code className="min-w-0 flex-1 truncate font-mono text-[12px]">{`${window.location.origin}/mcp/<POT>`}</code>
+                <CopyButton text={`${window.location.origin}/mcp/`} label="Copy the MCP URL" />
+              </div>
+            </div>
             <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-[12.5px]">
-              Use the cook's token, not a fire (relay) token. A relay token only wakes cooks; it cannot scoop tasks over MCP.
+              Or with a token: use the cook's token, not a fire (relay) token. A relay token only wakes cooks; it cannot scoop tasks over MCP.
             </p>
             <Snippets defaultKind={kind} />
             <div className="min-w-0 rounded-lg border border-border bg-card p-3">

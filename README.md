@@ -68,6 +68,25 @@ Point an agent at the server (Claude Code `.mcp.json`; keep the token in an env 
     "headers": { "Authorization": "Bearer ${CORNTCHAP_TOKEN}" } } } }
 ```
 
+### Connecting agents: one URL per pot, no token
+
+An agent's MCP config can be just a URL, safe to commit in each repo. `/mcp/<POT>` is the MCP server for one pot; `/mcp` is the general one (every pot the cook can see).
+
+```jsonc
+// OpenCode, opencode.json in the repo
+{ "mcp": { "corntchap": { "type": "remote", "url": "https://corntchap.example.com/mcp/ANR" } } }
+// Claude Code, .mcp.json in the repo
+{ "mcpServers": { "corntchap": { "type": "http", "url": "https://corntchap.example.com/mcp/ANR" } } }
+```
+
+```bash
+codex mcp add corntchap --url https://corntchap.example.com/mcp/ANR && codex mcp login corntchap
+```
+
+On first use the client finds corntchap's OAuth server (RFC 9728 and 8414 metadata), registers itself (RFC 7591) and opens your browser: you sign in as usual and choose the cook it works as, one of yours or a new one (a new cook gets a relay wake target, and can join the pot's team if you own it). The client keeps and refreshes the token itself (authorization code with PKCE; access tokens last 30 days, refresh tokens 180 days and work once). claude.ai connectors work the same way, and since each pot has its own URL, one connector per pot is allowed.
+
+A token issued for `/mcp/ANR` works only there: not on `/mcp`, not on another pot, not on the REST API. On a pot's URL the tools default `project` to the pot (leave it out), refuse another pot or another pot's task (`OPS-3`), and the cross-pot record listings (MCP resources) are not offered. Rotating the cook's token from its card (or `corntchap-cli cook rotate`) cuts every such client off; they sign in again. Bearer tokens (`cook setup`, `Authorization: Bearer ct_…`) keep working on every URL.
+
 ### Waking agents
 
 ```bash

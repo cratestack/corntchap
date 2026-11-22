@@ -114,10 +114,92 @@ pub async fn front_door<T: McpTools>(
     req: Request,
     next: Next,
 ) -> Response {
+    // `/mcp/<KEY>` (the router strips `/mcp`): one pot's MCP URL
+    let sub = req.uri().path().trim_matches('/').to_string();
+    if !sub.is_empty() {
+        return c.pot_door(sub, req, next).await;
+    }
     if is_legacy(req.headers()) {
         c.handle(req).await
     } else {
         c.modern(req, next).await
+    }
+}
+
+/// The pot whose MCP URL is being served.
+#[derive(Clone, Debug)]
+pub struct Pot {
+    pub id: Uuid,
+    pub key: String,
+}
+
+tokio::task_local! {
+    static CURRENT_POT: Option<Pot>;
+}
+
+fn current_pot() -> Option<Pot> {
+    CURRENT_POT.try_with(|p| p.clone()).ok().flatten()
+}
+
+/// `PAY-12`, `PAY-Q3`, `PAY-F7`: the pot key of a task, question or file reference.
+fn ref_key(s: &str) -> Option<&str> {
+    let (key, rest) = s.split_once('-')?;
+    let rest = rest.strip_prefix(['Q', 'F']).unwrap_or(rest);
+    let key_ok = !key.is_empty()
+        && key.len() <= 16
+        && key.starts_with(|c: char| c.is_ascii_uppercase())
+        && key
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+    (key_ok && !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())).then_some(key)
+}
+
+/// On a pot's URL: `project` defaults to the pot, and naming another pot (or another pot's task,
+/// question or file) is refused.
+pub fn pot_args(schema: &Value, args: &mut Value, key: &str) -> Result<(), String> {
+    let Some(obj) = args.as_object_mut() else {
+        return Ok(());
+    };
+    match obj.get("project").and_then(Value::as_str) {
+        Some(p) if !p.trim().eq_ignore_ascii_case(key) => {
+            return Err(format!(
+                "this MCP URL is for pot {key}: use the URL of pot {} (or /mcp) for another pot",
+                p.trim().to_uppercase()
+            ));
+        }
+        Some(_) => {}
+        None => {
+            if schema["properties"].get("project").is_some() {
+                obj.insert("project".into(), json!(key));
+            }
+        }
+    }
+    for v in obj.values() {
+        let Some(s) = v.as_str() else { continue };
+        for part in s.split(',').map(str::trim) {
+            if let Some(k) = ref_key(part)
+                && k != key
+            {
+                return Err(format!(
+                    "{part} is in pot {k}, and this MCP URL is for pot {key}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A pot's tool list: `project` is optional and says its default.
+fn pot_tool(t: &mut Value, key: &str) {
+    let schema = &mut t["inputSchema"];
+    if schema["properties"].get("project").is_none() {
+        return;
+    }
+    schema["properties"]["project"]["description"] = json!(format!(
+        "Pot key; on this MCP URL it is {key}, so leave it out."
+    ));
+    if let Some(req) = schema["required"].as_array_mut() {
+        req.retain(|r| r != "project");
     }
 }
 
@@ -188,6 +270,85 @@ fn empty(status: StatusCode) -> Response {
 }
 
 impl<T: McpTools> Compat<T> {
+    /// A tool call's params on a pot's URL: arguments defaulted to and checked against the pot.
+    fn pot_call(&self, params: &Value) -> Result<Value, String> {
+        let Some(p) = current_pot() else {
+            return Ok(params.clone());
+        };
+        let mut params = params.clone();
+        let tool = params["name"].as_str().unwrap_or_default().to_string();
+        if params.get("arguments").is_none_or(Value::is_null) {
+            params["arguments"] = json!({});
+        }
+        pot_args(&self.schema_of(&tool), &mut params["arguments"], &p.key)?;
+        Ok(params)
+    }
+
+    fn schema_of(&self, tool: &str) -> Value {
+        self.tools
+            .tools()
+            .iter()
+            .find(|d| d.name == tool)
+            .and_then(|d| serde_json::from_str(d.input_schema).ok())
+            .unwrap_or(Value::Null)
+    }
+
+    /// `/mcp/<KEY>`: the same MCP server, for one pot. The request is authenticated here first (a
+    /// token bound to this pot is accepted only inside this scope), then served as `/mcp`.
+    async fn pot_door(&self, sub: String, req: Request, next: Next) -> Response {
+        let key = sub.to_uppercase();
+        let valid =
+            !key.is_empty() && key.len() <= 16 && key.chars().all(|c| c.is_ascii_alphanumeric());
+        let pot: Option<(Uuid, String)> = if valid {
+            sqlx::query_as("select id, key from projects where key = $1")
+                .bind(&key)
+                .fetch_optional(&self.state.db)
+                .await
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let pot = pot.map(|(id, key)| Pot { id, key });
+        let scope = pot.as_ref().map(|p| p.id);
+        let (mut parts, body) = req.into_parts();
+        let fut = async {
+            if let Err(e) = auth::authenticate_headers(&self.state, &parts.headers).await {
+                return self.auth_failure(e, &parts.headers);
+            }
+            if pot.is_none() {
+                return json_response(
+                    StatusCode::NOT_FOUND,
+                    &json!({"code": "NOT_FOUND", "message": format!("no pot {key}"), "details": null}),
+                );
+            }
+            // served as /mcp from here on
+            let q = parts
+                .uri
+                .query()
+                .map(|q| format!("/?{q}"))
+                .unwrap_or_else(|| "/".into());
+            parts.uri = q.parse().unwrap_or_default();
+            let req = Request::from_parts(parts, body);
+            if is_legacy(req.headers()) {
+                self.handle(req).await
+            } else {
+                self.modern(req, next).await
+            }
+        };
+        // the key is known even for an unknown pot: a 401 still points at this URL's metadata
+        let ctx = Some(Pot {
+            id: scope.unwrap_or(Uuid::nil()),
+            key: pot
+                .as_ref()
+                .map(|p| p.key.clone())
+                .unwrap_or_else(|| key.clone()),
+        });
+        auth::POT_SCOPE
+            .scope(scope, CURRENT_POT.scope(ctx, fut))
+            .await
+    }
+
     /// 2026-07-28 requests: cratestack answers, corntchap adds the connect form and the prompts.
     async fn modern(&self, req: Request, next: Next) -> Response {
         let method = req
@@ -228,6 +389,41 @@ impl<T: McpTools> Compat<T> {
             };
             return json_response(StatusCode::OK, &r);
         }
+        let pot = current_pot();
+        if let Some(p) = &pot {
+            if method == "resources/read" {
+                return json_response(
+                    StatusCode::OK,
+                    &rpc_error(
+                        id,
+                        -32002,
+                        "records are read through the tools on a pot's MCP URL (or on /mcp)",
+                    ),
+                );
+            }
+            let _ = p;
+        }
+        // on a pot's URL, a tool call's arguments are defaulted and checked first
+        let bytes = if method == "tools/call" && pot.is_some() {
+            match self.pot_call(&params) {
+                Err(m) => {
+                    return json_response(
+                        StatusCode::OK,
+                        &rpc_result(
+                            id,
+                            json!({"content": [{"type": "text", "text": m}], "isError": true}),
+                        ),
+                    );
+                }
+                Ok(np) => {
+                    let mut m = msg.clone();
+                    m["params"] = np;
+                    axum::body::Bytes::from(m.to_string())
+                }
+            }
+        } else {
+            bytes
+        };
         let tool = params["name"].as_str().unwrap_or_default().to_string();
         if method == "tools/call" && !UI_TOOLS.contains(&tool.as_str()) {
             return next
@@ -256,7 +452,13 @@ impl<T: McpTools> Compat<T> {
                         if t["name"].as_str().is_some_and(|n| UI_TOOLS.contains(&n)) {
                             t["_meta"] = ui_meta();
                         }
+                        if let Some(p) = &pot {
+                            pot_tool(t, &p.key);
+                        }
                     }
+                }
+                "resources/list" if pot.is_some() => {
+                    result["resources"] = json!([ui_resource_entry()]);
                 }
                 "resources/list" => {
                     if let Some(list) = result["resources"].as_array_mut() {
@@ -363,8 +565,11 @@ impl<T: McpTools> Compat<T> {
         );
         if status == StatusCode::UNAUTHORIZED {
             let meta = format!(
-                "{}/.well-known/oauth-protected-resource/mcp",
-                self.state.config.public_url.trim_end_matches('/')
+                "{}/.well-known/oauth-protected-resource/mcp{}",
+                self.state.config.public_url.trim_end_matches('/'),
+                current_pot()
+                    .map(|p| format!("/{}", p.key))
+                    .unwrap_or_default()
             );
             let challenge = if headers.contains_key(header::AUTHORIZATION) {
                 format!("Bearer error=\"invalid_token\", resource_metadata=\"{meta}\"")
@@ -402,23 +607,61 @@ impl<T: McpTools> Compat<T> {
         Some(match method {
             "initialize" => {
                 self.remember_ui(token, connect::renders_ui(&params["capabilities"]));
-                rpc_result(id, self.initialize(&params))
+                let mut r = self.initialize(&params);
+                if let Some(p) = current_pot() {
+                    r["instructions"] = json!(format!(
+                        "{} This MCP URL is for pot {k}: tools default to it (leave `project` out), and other pots are refused here.",
+                        INSTRUCTIONS,
+                        k = p.key
+                    ));
+                }
+                rpc_result(id, r)
             }
             "ping" => rpc_result(id, json!({})),
-            "tools/list" => rpc_result(id, self.list_tools()),
-            "tools/call" => match self.call_tool(ctx, &params).await {
-                Ok(mut r) => {
-                    let name = params["name"].as_str().unwrap_or_default();
-                    if UI_TOOLS.contains(&name)
-                        && r["isError"] != true
-                        && let Some(renders) = self.known_ui(token)
-                    {
-                        connect::guide_client(&mut r, renders);
+            "tools/list" => {
+                let mut l = self.list_tools();
+                if let Some(p) = current_pot() {
+                    for t in l["tools"].as_array_mut().into_iter().flatten() {
+                        pot_tool(t, &p.key);
                     }
-                    rpc_result(id, r)
                 }
-                Err(m) => rpc_error(id, -32602, m),
+                rpc_result(id, l)
+            }
+            "tools/call" => match self.pot_call(&params) {
+                Err(m) => rpc_result(
+                    id,
+                    json!({"content": [{"type": "text", "text": m}], "isError": true}),
+                ),
+                Ok(params) => match self.call_tool(ctx, &params).await {
+                    Ok(mut r) => {
+                        let name = params["name"].as_str().unwrap_or_default();
+                        if UI_TOOLS.contains(&name)
+                            && r["isError"] != true
+                            && let Some(renders) = self.known_ui(token)
+                        {
+                            connect::guide_client(&mut r, renders);
+                        }
+                        rpc_result(id, r)
+                    }
+                    Err(m) => rpc_error(id, -32602, m),
+                },
             },
+            // a pot's URL lists no cross-pot record collections: its tools are the way in
+            "resources/list" if current_pot().is_some() => {
+                rpc_result(id, json!({"resources": [ui_resource_entry()]}))
+            }
+            "resources/templates/list" if current_pot().is_some() => {
+                rpc_result(id, json!({"resourceTemplates": []}))
+            }
+            "resources/read"
+                if current_pot().is_some() && params["uri"].as_str() != Some(connect::UI_URI) =>
+            {
+                rpc_error(
+                    id,
+                    -32002,
+                    "records are read through the tools on a pot's MCP URL (or on /mcp)",
+                )
+            }
             "resources/list" => rpc_result(id, self.list_resources()),
             "resources/templates/list" => rpc_result(id, self.list_templates()),
             "resources/read" => match self.read_resource(ctx, &params).await {
@@ -444,7 +687,18 @@ impl<T: McpTools> Compat<T> {
             "protocolVersion": version,
             "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false},
                              "prompts": {"listChanged": false}},
-            "serverInfo": {"name": "corntchap", "version": env!("CARGO_PKG_VERSION")},
+            "serverInfo": {
+                "name": "corntchap",
+                "title": "corntchap",
+                "version": env!("CARGO_PKG_VERSION"),
+                "websiteUrl": self.state.config.public_url,
+                // the console's logo (MCP 2025-11-25 `icons`), shown by clients that support it
+                "icons": [{
+                    "src": format!("{}/favicon.svg", self.state.config.public_url),
+                    "mimeType": "image/svg+xml",
+                    "sizes": ["any"],
+                }],
+            },
             "instructions": INSTRUCTIONS,
         })
     }
