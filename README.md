@@ -144,6 +144,12 @@ People write in the console's Pass tab (with unread badges in the sidebar). A co
 
 CLI: `corntchap-cli pass read <POT> [--with NAME|pot] [-f]` and `pass send <POT> "message" [--to NAME] [--task PAY-1] [--from-owner]`.
 
+#### Keeping up with the pantry
+
+Cooks learn about pantry changes in two ways:
+- **When they start work (quiet):** `claim_next` and `claim_task` return `pantry` news, the memories saved or changed by others since this cook last read the pantry (`read_pantry`, `recall`, `get_memory` count as reading). Every message wake also says "Pantry: N memories new or changed since you last read it: …".
+- **Right away (loud):** `remember` with `notify: true` (CLI `pantry stock --notify`, or "Tell everyone now" in the console) posts the memory on the pass as a broadcast, which wakes every cook's sessions. Keep it for what can't wait, like a new convention or a "don't touch X".
+
 ### Views: SQL over a pot's tasks
 
 A pot starts with its board. Further views are saved per pot by people or by cooks (`save_view`, `run_view`, `list_views`, `delete_view`; CLI `corntchap-cli view ls|run|save|rm`). A view is a SQL condition plus an optional order over the pot's task view, shown as a list or a board tab in the console, e.g. `menu = 'mvp' and 'urgent' = any(labels) and status <> 'done'` ordered by `priority desc, created_at`.

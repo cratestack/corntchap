@@ -128,6 +128,24 @@ type ClaimResult {
   lease LeaseView?
   /// Nothing is ready for you right now.
   none Boolean?
+  /// What was saved or changed in the pot's pantry since you last read it: read those memories
+  /// (get_memory) before you start. Absent when there is nothing new.
+  pantry PantryNews?
+}
+
+type PantryNewsItem {
+  key String
+  title String
+  kind String
+  by String?
+  updated_at String
+}
+
+type PantryNews {
+  /// How many memories are new or changed since you last read the pantry.
+  count Int
+  /// The 10 most recent of them.
+  items PantryNewsItem[]
 }
 
 type LeaseRenewal {

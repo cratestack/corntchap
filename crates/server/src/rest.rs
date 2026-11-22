@@ -564,6 +564,8 @@ fn remember_body(project: String, key: Option<String>, b: &Value) -> Result<pant
         task: s(b, "task"),
         append: b["append"].as_bool().unwrap_or(false),
         revision: i(b, "revision"),
+        notify: b["notify"].as_bool().unwrap_or(false),
+        station: s(b, "station"),
     })
 }
 async fn pantry_save(

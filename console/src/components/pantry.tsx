@@ -646,6 +646,7 @@ export function NewMemoryDialog({
   const [kind, setKind] = useState("note");
   const [tags, setTags] = useState<string[]>([]);
   const [key, setKey] = useState("");
+  const [notify, setNotify] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -672,6 +673,8 @@ export function NewMemoryDialog({
         key: key.trim() || null,
         // a new memory must not exist yet: saving over an existing key conflicts instead of overwriting it
         revision: 0,
+        notify: notify || null,
+        station: null,
       });
       toast.success("On the shelf", { description: m.title });
       onSaved(m.key);
@@ -723,6 +726,15 @@ export function NewMemoryDialog({
             />
             <p className="text-[12px] text-muted-foreground">Lowercase letters, digits, dots, dashes and underscores. Stays the same across edits.</p>
           </div>
+          <label className="flex items-start gap-2 text-[13px]">
+            <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} className="mt-0.5 size-4 accent-[var(--primary)]" />
+            <span>
+              Tell everyone now
+              <span className="block text-[12px] text-muted-foreground">
+                Wakes every cook&rsquo;s sessions with it on the pass. Otherwise cooks get it with their next task.
+              </span>
+            </span>
+          </label>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={onClose}>
               Cancel

@@ -547,6 +547,8 @@ impl ProcedureRegistry for Procedures {
             task: a.task,
             append: a.append.unwrap_or(false),
             revision: a.revision,
+            notify: a.notify.unwrap_or(false),
+            station: a.station,
         };
         typed(pantry::remember(&self.state.db, &p, r).await)
     }

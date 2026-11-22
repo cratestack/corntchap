@@ -77,6 +77,9 @@ pub enum PantryCmd {
         /// Fail with a conflict unless the memory is still at this revision.
         #[arg(long)]
         revision: Option<i64>,
+        /// Tell everyone now: wake every cook's sessions with it on the pass (only what can't wait).
+        #[arg(long)]
+        notify: bool,
         /// The body text.
         #[arg(long, conflicts_with = "file")]
         body: Option<String>,
@@ -163,6 +166,7 @@ pub struct Stock<'a> {
     pub task: Option<&'a str>,
     pub append: bool,
     pub revision: Option<i64>,
+    pub notify: bool,
 }
 
 impl Stock<'_> {
@@ -187,6 +191,9 @@ impl Stock<'_> {
         }
         if let Some(r) = self.revision {
             m.insert("revision".into(), json!(r));
+        }
+        if self.notify {
+            m.insert("notify".into(), json!(true));
         }
         Value::Object(m)
     }
@@ -265,6 +272,7 @@ pub async fn run(cmd: PantryCmd, api: &Api) -> Result<()> {
             task,
             append,
             revision,
+            notify,
             body,
             file,
         } => {
@@ -284,6 +292,7 @@ pub async fn run(cmd: PantryCmd, api: &Api) -> Result<()> {
                 task: task.as_deref(),
                 append,
                 revision,
+                notify,
             }
             .to_body();
             let v = api.post(&path(&pot), b).await?;
@@ -369,6 +378,7 @@ mod tests {
             task: None,
             append: false,
             revision: None,
+            notify: false,
         };
         assert_eq!(s.to_body(), json!({"title": "T", "body": "body"}));
         let tags = ["x".to_string()];
@@ -381,11 +391,12 @@ mod tests {
             task: Some("PAY-1"),
             append: true,
             revision: Some(2),
+            notify: true,
         };
         assert_eq!(
             s.to_body(),
             json!({"title":"","body":"more","key":"k","kind":"howto","tags":["x"],
-                   "task":"PAY-1","append":true,"revision":2})
+                   "task":"PAY-1","append":true,"revision":2,"notify":true})
         );
     }
 }

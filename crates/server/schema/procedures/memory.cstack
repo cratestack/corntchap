@@ -35,7 +35,9 @@ procedure memoryDigest(project: String): MarkdownDoc
 /// @param task The task this was learned on, e.g. PAY-42.
 /// @param append Add body to the end of the existing memory instead of replacing it.
 /// @param revision The revision you read; the save fails with a conflict if someone changed it since. 0 means it must not exist yet.
-mutation procedure memoryRemember(project: String, title: String?, body: String, key: String?, kind: String?, tags: String?, task: String?, append: Boolean?, revision: Int?): MemoryView
+/// @param notify Tell everyone now: a broadcast on the pass wakes every session of every cook in the pot. Only for what must be acted on at once (a new convention, a "do not touch X"); everything else reaches cooks as pantry news when they claim their next task.
+/// @param station Your own station (st_...), so a notify also reaches your other sessions.
+mutation procedure memoryRemember(project: String, title: String?, body: String, key: String?, kind: String?, tags: String?, task: String?, append: Boolean?, revision: Int?, notify: Boolean?, station: String?): MemoryView
   @allow(auth() != null)
   @mcp(tool: "remember", description: "Save something the next agent on this project should know into the shared pantry: a convention, a gotcha, a decision and its reason, a how-to (build, test, deploy), a fact about the system. Search with recall first and update the existing memory (same key) rather than adding a duplicate. Not for task progress (comment on the task) and never for secrets.")
 

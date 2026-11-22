@@ -687,6 +687,22 @@ pub async fn wake(
         Some(s) => stations::payload_of(&mut *c, s).await?,
         None => None,
     };
+    let news = crate::pantry::news(&mut *c, agent, project).await?;
+    let text = match news["count"].as_u64().unwrap_or(0) {
+        0 => text.to_string(),
+        n => format!(
+            "{text}\n\n(Pantry: {n} memor{} new or changed since you last read it: {}. Read with get_memory or read_pantry.)",
+            if n == 1 { "y" } else { "ies" },
+            news["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|i| i["key"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let text = text.as_str();
     // A cook can run several sessions: tell this one who it is, so its answer says so.
     let text = match st.as_ref().and_then(|s| s["id"].as_str()) {
         Some(id) => format!(
