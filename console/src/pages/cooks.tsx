@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { ChefHat, ChevronDown, Loader2, Minus, Plug, Plus, Power, RotateCw, Trash2 } from "lucide-react";
+import { ChefHat, ChevronDown, Loader2, Minus, Plug, Plus, Power, RotateCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page";
-import { Avatar, EmptyState, RowSkeleton, StateDot, STATE_LABEL, cookState } from "@/components/bits";
+import { Avatar, EmptyState, LabelChip, RowSkeleton, StateDot, STATE_LABEL, cookState } from "@/components/bits";
 import { StationList } from "@/components/stations";
 import { McpDialog, TokenDialog } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
@@ -173,6 +173,78 @@ function Grants({ a }: { a: AgentRow }) {
   );
 }
 
+/** The teams a cook is in: they decide which pots it sees. Owners of a team (and admins) can move the cook in and out. */
+function CookTeams({ a }: { a: AgentRow }) {
+  const me = useSession();
+  const call = useV1Call();
+  const teams = useV1<TeamRow[]>("/teams");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [pick, setPick] = useState("");
+  const mine = a.teams ?? [];
+  const manageable = (t: string) => me.is_admin || (teams.data ?? []).some((x) => x.name === t && x.role === "owner");
+  const addable = (teams.data ?? []).filter((t) => !mine.includes(t.name) && (me.is_admin || t.role === "owner"));
+
+  async function add(team: string) {
+    setBusy(team);
+    try {
+      await call("POST", `/teams/${team}/members`, { principal: a.name, role: "chef" });
+      toast.success(`${a.name} joined ${team}`);
+    } catch (e) {
+      toast.error("Could not add it to that team", { description: errorMessage(e) });
+    } finally {
+      setBusy(null);
+      setPick("");
+    }
+  }
+  async function remove(team: string) {
+    setBusy(team);
+    try {
+      await call("DELETE", `/teams/${team}/members/${a.name}`);
+      toast.success(`${a.name} left ${team}`);
+    } catch (e) {
+      toast.error("Could not remove it from that team", { description: errorMessage(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {mine.map((t) => (
+        <LabelChip key={t} className="gap-1">
+          {t}
+          {manageable(t) && (
+            <button
+              type="button"
+              aria-label={`Remove ${a.name} from ${t}`}
+              disabled={busy === t}
+              onClick={() => void remove(t)}
+              className="-mr-1 inline-flex size-4 items-center justify-center rounded-full hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+            >
+              {busy === t ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : <X className="size-3" aria-hidden="true" />}
+            </button>
+          )}
+        </LabelChip>
+      ))}
+      {mine.length === 0 && <span className="text-[11.5px] text-muted-foreground">in no team: it sees no pot</span>}
+      {addable.length > 0 && (
+        <Select value={pick} onValueChange={(v) => void add(v)} disabled={!!busy}>
+          <SelectTrigger size="sm" className="h-6 w-auto gap-1 px-2 text-[12px]" aria-label={`Add ${a.name} to a team`}>
+            <SelectValue placeholder="+ Add to team" />
+          </SelectTrigger>
+          <SelectContent>
+            {addable.map((t) => (
+              <SelectItem key={t.name} value={t.name}>
+                {t.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </div>
+  );
+}
+
 /** Tasks held right now out of the cook's limit, which its owner (or an admin) can step up or down. */
 function LeaseLimit({ a }: { a: AgentRow }) {
   const invalidate = useInvalidateAll();
@@ -300,6 +372,10 @@ function CookCard({
         <dt className="pt-1 text-muted-foreground">May also</dt>
         <dd>
           <Grants a={a} />
+        </dd>
+        <dt className="pt-1 text-muted-foreground">Teams</dt>
+        <dd className="min-w-0">
+          <CookTeams a={a} />
         </dd>
       </dl>
 

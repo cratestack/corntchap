@@ -341,6 +341,7 @@ export function PotsAdminPage() {
 // ------------------------------------------------------------------ Teams (admin)
 
 export function TeamsAdminPage() {
+  const me = useSession();
   const teams = useV1<TeamRow[]>("/teams");
   const call = useV1Call();
   const [creating, setCreating] = useState(false);
@@ -364,25 +365,31 @@ export function TeamsAdminPage() {
 
   return (
     <PageShell
-      eyebrow="Admin"
+      eyebrow={me.is_admin ? "Admin" : "Kitchen"}
       title="Teams"
       sub="Teams decide who sees which pots. Their chefs can be people or cooks."
       actions={
-        <Button onClick={() => setCreating(true)}>
-          <Plus /> New team
-        </Button>
+        me.is_admin ? (
+          <Button onClick={() => setCreating(true)}>
+            <Plus /> New team
+          </Button>
+        ) : undefined
       }
     >
       {teams.isLoading ? (
         <RowSkeleton rows={3} />
       ) : (teams.data ?? []).length === 0 ? (
-        <EmptyState title="No teams yet" action={<Button onClick={() => setCreating(true)}>Make the first team</Button>}>
-          A team owns pots and has chefs. Start with the people who cook together.
-        </EmptyState>
+        me.is_admin ? (
+          <EmptyState title="No teams yet" action={<Button onClick={() => setCreating(true)}>Make the first team</Button>}>
+            A team owns pots and has chefs. Start with the people who cook together.
+          </EmptyState>
+        ) : (
+          <EmptyState title="No teams">You are in no team yet. An admin creates teams and adds you.</EmptyState>
+        )
       ) : (
         <div className="space-y-4">
           {teams.data!.map((t) => (
-            <TeamCard key={t.name} team={t} onAdd={() => setAdding(t.name)} />
+            <TeamCard key={t.name} team={t} canManage={me.is_admin || t.role === "owner"} onAdd={() => setAdding(t.name)} />
           ))}
         </div>
       )}
@@ -397,7 +404,7 @@ export function TeamsAdminPage() {
   );
 }
 
-function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
+function TeamCard({ team, canManage, onAdd }: { team: TeamRow; canManage: boolean; onAdd: () => void }) {
   const members = useTeamChefs(team.name);
   const call = useV1Call();
   return (
@@ -407,9 +414,11 @@ function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
         <span className="font-mono text-[11.5px] text-muted-foreground">
           {team.members} {team.members === 1 ? "chef" : "chefs"} · pots {team.projects.length ? team.projects.join(", ") : "none"}
         </span>
-        <Button size="sm" variant="outline" className="ml-auto" onClick={onAdd}>
-          <UserPlus /> Add chef
-        </Button>
+        {canManage && (
+          <Button size="sm" variant="outline" className="ml-auto" onClick={onAdd}>
+            <UserPlus /> Add chef
+          </Button>
+        )}
       </div>
       <ul className="divide-y divide-border">
         {members.isLoading && <li className="px-4 py-3 text-muted-foreground">Loading…</li>}
@@ -419,6 +428,7 @@ function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
             <PersonName name={m.name} displayName={m.display_name} />
             <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{m.kind}</span>
             <span className="font-mono text-[11px] text-muted-foreground">{m.role === "member" ? "chef" : m.role}</span>
+            {canManage && (
             <Button
               size="icon-xs"
               variant="ghost"
@@ -435,6 +445,7 @@ function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
             >
               <Trash2 />
             </Button>
+            )}
           </li>
         ))}
       </ul>
@@ -452,8 +463,11 @@ interface Candidate {
 
 function AddMember({ team, onClose }: { team: string | null; onClose: () => void }) {
   const call = useV1Call();
+  const me = useSession();
   const open = !!team;
-  const users = useV1<UserRow[]>("/users", { enabled: open });
+  // /users is admin-only: an owner who is no admin picks from their cooks or types a handle
+  const users = useV1<UserRow[]>("/users", { enabled: open && me.is_admin });
+  const [handle, setHandle] = useState("");
   const cooks = useAgents();
   const members = useTeamChefs(team, { enabled: open });
   const [who, setWho] = useState<Candidate | null>(null);
@@ -471,31 +485,33 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
       .map((c) => ({ principal: c.name, label: c.name, kind: "cook" as const }));
     return { people, cookList };
   }, [users.data, cooks.data, members.data]);
-  const loading = users.isLoading || cooks.isLoading || members.isLoading;
+  const loading = (me.is_admin && users.isLoading) || cooks.isLoading || members.isLoading;
 
   useEffect(() => {
     if (!open) {
       setWho(null);
       setRole("member");
       setPick(false);
+      setHandle("");
     }
   }, [open]);
+  const principal = who?.principal ?? (me.is_admin ? "" : handle.trim().replace(/^@/, ""));
 
   return (
     <FormDialog
       open={open}
       onOpenChange={(o) => !o && onClose()}
       title={`Add to ${team}`}
-      description="Pick a person or a cook that is not on this team yet."
+      description={me.is_admin ? "Pick a person or a cook that is not on this team yet." : "Pick one of your cooks, or type a person's handle."}
       busy={busy}
       submitLabel="Add"
-      disabled={!who}
+      disabled={!principal}
       onSubmit={async () => {
-        if (!who) return;
+        if (!principal) return;
         setBusy(true);
         try {
-          await call("POST", `/teams/${team}/members`, { principal: who.principal, role });
-          toast.success(`${who.label} joined ${team}`);
+          await call("POST", `/teams/${team}/members`, { principal, role });
+          toast.success(`${principal} joined ${team}`);
           onClose();
         } catch (e) {
           toast.error("Could not add them", { description: errorMessage(e) });
@@ -523,7 +539,7 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
                   <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{who.kind === "cook" ? "cook" : "person"}</span>
                 </span>
               ) : (
-                <span className="text-muted-foreground">{loading ? "Loading…" : "Search people and cooks"}</span>
+                <span className="text-muted-foreground">{loading ? "Loading…" : (me.is_admin ? "Search people and cooks" : "Search your cooks")}</span>
               )}
               <ChevronsUpDown className="size-4 shrink-0 opacity-50" aria-hidden="true" />
             </Button>
@@ -576,6 +592,20 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
           </PopoverContent>
         </Popover>
       </div>
+      {!me.is_admin && (
+        <div className="space-y-1.5">
+          <Label htmlFor="mem-handle">Or a person's handle</Label>
+          <Input
+            id="mem-handle"
+            value={handle}
+            disabled={!!who}
+            onChange={(e) => setHandle(e.target.value)}
+            placeholder="ada"
+            autoComplete="off"
+            className="font-mono"
+          />
+        </div>
+      )}
       <div className="space-y-1.5">
         <Label htmlFor="mem-role">Role</Label>
         <Select value={role} onValueChange={setRole}>

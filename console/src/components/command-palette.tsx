@@ -124,13 +124,13 @@ export function CommandPalette() {
           <CommandItem value="fires relays" onSelect={run(() => navigate("/fires"))}>
             <Flame /> Fires
           </CommandItem>
+          <CommandItem value="teams chefs" onSelect={run(() => navigate("/teams"))}>
+            <Users /> Teams
+          </CommandItem>
           {me.is_admin && (
             <>
               <CommandItem value="admin pots projects" onSelect={run(() => navigate("/admin/pots"))}>
                 <FolderKanban /> Pots (admin)
-              </CommandItem>
-              <CommandItem value="admin teams" onSelect={run(() => navigate("/admin/teams"))}>
-                <Users /> Teams (admin)
               </CommandItem>
               <CommandItem value="admin users" onSelect={run(() => navigate("/admin/users"))}>
                 <UserRound /> Users (admin)

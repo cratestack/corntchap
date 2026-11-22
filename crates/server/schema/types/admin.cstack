@@ -73,6 +73,8 @@ type PrincipalView {
   last_seen_at String?
   /// Leases held right now.
   busy Int
+  /// Teams it is in (its pots come from them).
+  teams String[]
 }
 
 /// A new cook or fire, or a rotated token. The token is shown once: treat it as a secret.

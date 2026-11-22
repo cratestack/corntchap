@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Outlet, Route, Routes } from "react-router";
+import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router";
 import { Refine, type NotificationProvider } from "@refinedev/core";
 import routerProvider from "@refinedev/react-router";
 import { toast } from "sonner";
@@ -59,7 +59,7 @@ function Providers() {
       resources={[
         { name: "projects", list: "/admin/pots" },
         { name: "principals", list: "/cooks" },
-        { name: "teams", list: "/admin/teams" },
+        { name: "teams", list: "/teams" },
       ]}
       options={{ disableTelemetry: true, syncWithLocation: false, warnWhenUnsavedChanges: false, reactQuery: { clientConfig: { defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } } } }}
     >
@@ -75,9 +75,10 @@ function Providers() {
               <Route path="cooks" element={<CooksPage />} />
               <Route path="connect/:code" element={<ConnectPage />} />
               <Route path="fires" element={<FiresPage />} />
+              <Route path="teams" element={<TeamsAdminPage />} />
+              <Route path="admin/teams" element={<Navigate to="/teams" replace />} />
               <Route element={<AdminOnly><Outlet /></AdminOnly>}>
                 <Route path="admin/pots" element={<PotsAdminPage />} />
-                <Route path="admin/teams" element={<TeamsAdminPage />} />
                 <Route path="admin/users" element={<UsersAdminPage />} />
               </Route>
               <Route path="*" element={<NotFound />} />
