@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::{Error, Result},
-    menus, pantry, questions,
+    files, menus, pantry, questions,
     service::{self, NewTask, TaskEdit},
     state::{AppState, Principal},
     stations, stream,
@@ -58,6 +58,14 @@ pub fn routes() -> Router<AppState> {
         .route("/tasks/{id}/toss", post(task_cancel))
         .route("/tasks/{id}/restore", post(task_restore))
         .route("/changes", get(changes))
+        .route(
+            "/projects/{key}/files",
+            get(files_list)
+                .post(files_upload)
+                .layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route("/projects/{key}/uploads", post(files_create_upload))
+        .route("/files/{id}", get(files_get).delete(files_delete))
         .route("/stations", get(stations_list).post(stations_add))
         .route("/stations/{id}", delete(stations_remove))
         .route(
@@ -277,6 +285,81 @@ async fn grants_set(
     Json(b): Json<Value>,
 ) -> J {
     ok(admin::set_grants(&st.db, &p, &name, &arr(&b, "grants")).await?)
+}
+
+// ---- files ----
+fn new_file(
+    project: Option<String>,
+    q: &HashMap<String, String>,
+    b: Option<&Value>,
+) -> files::NewFile {
+    let get = |k: &str| b.and_then(|b| s(b, k)).or_else(|| q.get(k).cloned());
+    files::NewFile {
+        project,
+        name: get("name").unwrap_or_default(),
+        content_type: get("content_type"),
+        size: b
+            .and_then(|b| i(b, "size"))
+            .or_else(|| q.get("size").and_then(|v| v.parse().ok())),
+        task: get("task"),
+        question: get("question"),
+    }
+}
+async fn files_list(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    ok(files::list(
+        &st.db,
+        &st,
+        &p.worker()?,
+        &k,
+        q.get("task").map(|x| x.as_str()),
+        q.get("question").map(|x| x.as_str()),
+    )
+    .await?)
+}
+/// `{name, size, content_type?, task?, question?}`: an upload slot (presigned PUT + commands).
+async fn files_create_upload(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    let n = new_file(Some(k), &HashMap::new(), Some(&b));
+    ok(files::create_upload(&st.db, &st, &p.worker()?, n).await?)
+}
+/// The console's upload: raw body (Content-Type, Content-Length), `?name=&task=&question=`.
+async fn files_upload(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Body,
+) -> J {
+    let length: u64 = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| Error::Invalid("Content-Length is required".into()))?;
+    let mut n = new_file(Some(k), &q, None);
+    if n.content_type.is_none() {
+        n.content_type = headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+    }
+    let stream = reqwest::Body::wrap_stream(body.into_data_stream());
+    ok(files::upload_stream(&st.db, &st, &p.worker()?, n, length, stream).await?)
+}
+async fn files_get(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
+    ok(files::get(&st.db, &st, &p.worker()?, &id).await?)
+}
+async fn files_delete(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
+    ok(files::delete(&st.db, &st, &p.worker()?, &id).await?)
 }
 
 // ---- stations (registered agent sessions) ----

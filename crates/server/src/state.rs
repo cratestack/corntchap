@@ -15,6 +15,8 @@ pub struct Config {
     pub require_https: bool,
     pub oidc: Option<OidcConfig>,
     pub run_background: bool,
+    /// S3-compatible file storage (RustFS in dev); files are off without it.
+    pub storage: Option<crate::files::StorageConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +47,7 @@ impl Config {
             require_https,
             oidc: None,
             run_background: true,
+            storage: None,
         }
     }
 }
@@ -108,6 +111,7 @@ pub struct Inner {
     pub guard: Arc<Guard<Principal>>,
     /// OIDC provider, discovered lazily so the server can start before the IdP is up.
     pub oidc: tokio::sync::OnceCell<authkestra::oidc::OidcProvider>,
+    pub storage: Option<Arc<crate::files::Storage>>,
 }
 
 #[derive(Clone)]
@@ -136,6 +140,16 @@ impl AppState {
             .build()
             .expect("http client");
         let guard = crate::auth::build_guard(db.clone(), &config.public_url);
+        let storage = config
+            .storage
+            .clone()
+            .and_then(|c| match crate::files::Storage::new(c) {
+                Ok(s) => Some(Arc::new(s)),
+                Err(e) => {
+                    tracing::error!("file storage disabled: {e}");
+                    None
+                }
+            });
         AppState(Arc::new(Inner {
             db,
             config,
@@ -143,6 +157,7 @@ impl AppState {
             events,
             guard,
             oidc: tokio::sync::OnceCell::new(),
+            storage,
         }))
     }
 }

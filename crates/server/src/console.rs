@@ -35,8 +35,25 @@ pub fn is_reserved(path: &str) -> bool {
         .any(|p| path == *p || path.strip_prefix(p).is_some_and(|r| r.starts_with('/')))
 }
 
-/// No inline scripts; styles may be inline (Radix and the toaster set a few).
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+/// No inline scripts; styles may be inline (Radix and the toaster set a few). `{img}` takes the
+/// object storage origin: file links redirect there, so image previews load from it.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:{img}; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+
+static CSP_HEADER: std::sync::OnceLock<HeaderValue> = std::sync::OnceLock::new();
+
+/// Let the console load images from the object storage's public origin (call once at startup).
+pub fn allow_images_from(origin: &str) {
+    let v = CSP.replace("{img}", &format!(" {origin}"));
+    if let Ok(h) = HeaderValue::from_str(&v) {
+        let _ = CSP_HEADER.set(h);
+    }
+}
+
+fn csp() -> HeaderValue {
+    CSP_HEADER
+        .get_or_init(|| HeaderValue::from_str(&CSP.replace("{img}", "")).unwrap())
+        .clone()
+}
 
 #[cfg(feature = "console")]
 fn asset(path: &str) -> Option<(Vec<u8>, String)> {
@@ -101,10 +118,7 @@ fn file(bytes: Vec<u8>, mime: &str, cache: &str, shell: bool) -> Response {
         HeaderValue::from_static("nosniff"),
     );
     if shell {
-        h.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(CSP),
-        );
+        h.insert(header::CONTENT_SECURITY_POLICY, csp());
         h.insert(
             header::REFERRER_POLICY,
             HeaderValue::from_static("same-origin"),

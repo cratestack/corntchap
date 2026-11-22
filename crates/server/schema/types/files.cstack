@@ -1,0 +1,62 @@
+part of "../corntchap.cstack"
+
+// Files in S3-compatible storage, per pot.
+
+/// A file in a pot.
+type FileView {
+  /// File id, e.g. PAY-F12.
+  id String
+  project String
+  name String
+  content_type String
+  /// Bytes stored (once ready).
+  size Int?
+  /// Bytes announced when the upload slot was made.
+  size_expected Int?
+  /// uploading, ready or failed.
+  status String
+  /// The permanent link, behind corntchap's login: share it anywhere (comments, results, questions).
+  url String
+  /// The task it is attached to, e.g. PAY-42.
+  task String?
+  /// The question it is attached to, e.g. PAY-Q3.
+  question String?
+  created_by String?
+  created_at String
+  ready_at String?
+  /// Why the upload failed.
+  error String?
+}
+
+/// A file as it hangs off a task or a question.
+type FileRef {
+  id String
+  name String
+  content_type String
+  size Int?
+  status String
+}
+
+/// An upload slot: send the bytes to upload_url, then share file.url. Nobody needs to confirm: the server sees the upload land.
+type UploadSlot {
+  file FileView
+  /// Presigned PUT, valid for expires_in_s seconds (the upload must start before then).
+  upload_url String
+  method String
+  /// Send exactly this Content-Type header.
+  content_type String
+  expires_in_s Int
+  /// curl command that uploads in the foreground (replace the local path).
+  command String
+  /// The same command, detached (nohup … &), logging to /tmp: keep working while it uploads.
+  background_command String
+  note String
+}
+
+/// A file with a short-lived download URL when it is ready.
+type FileDownload {
+  file FileView
+  /// Presigned GET (only when status is ready).
+  download_url String?
+  expires_in_s Int?
+}

@@ -41,6 +41,8 @@ pub fn routes() -> Router<AppState> {
         .route("/auth/oidc/login", get(oidc_login))
         .route("/auth/signin", get(signin_page))
         .route("/auth/session", get(session_info))
+        .route("/files/{fref}", get(file_link))
+        .route("/files/{fref}/{*name}", get(file_link_named))
         .route("/static/fonts/{file}", get(font_file))
         .route("/auth/oidc/callback", get(oidc_callback))
         .route("/logout", get(logout_page).post(logout))
@@ -145,6 +147,68 @@ pub async fn session_from_headers(
                 .cloned(),
         }),
     )
+}
+
+/// `/files/PAY-F12/name`: the permanent file link. Bearer token or the console's session cookie;
+/// a signed-out browser goes through sign-in and comes back. Redirects to a short-lived
+/// presigned download once the pot's visibility is checked.
+async fn file_link(
+    State(state): State<AppState>,
+    Path(fref): Path<String>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Result<Response> {
+    serve_file(&state, &fref, &headers, &uri).await
+}
+
+async fn file_link_named(
+    State(state): State<AppState>,
+    Path((fref, _name)): Path<(String, String)>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Result<Response> {
+    serve_file(&state, &fref, &headers, &uri).await
+}
+
+async fn serve_file(
+    state: &AppState,
+    fref: &str,
+    headers: &HeaderMap,
+    uri: &axum::http::Uri,
+) -> Result<Response> {
+    let who = match crate::auth::authenticate_headers(state, headers).await {
+        Ok(p) => Some(p),
+        Err(Error::Unauthorized) => session_from_headers(state, headers).await?.map(|s| s.user),
+        Err(e) => return Err(e),
+    };
+    let Some(p) = who else {
+        let html = headers
+            .get(http::header::ACCEPT)
+            .and_then(|a| a.to_str().ok())
+            .is_some_and(|a| a.contains("text/html"));
+        return if html {
+            Ok(login_redirect(uri.path()))
+        } else {
+            Err(Error::Unauthorized)
+        };
+    };
+    let p = p.worker()?;
+    match crate::files::download_redirect(&state.db, state, &p, fref).await? {
+        Ok(url) => Ok((
+            StatusCode::FOUND,
+            [
+                (http::header::LOCATION, url),
+                (http::header::CACHE_CONTROL, "private, no-store".to_string()),
+            ],
+        )
+            .into_response()),
+        Err((code, msg)) => Ok((
+            StatusCode::from_u16(code).unwrap_or(StatusCode::CONFLICT),
+            [(http::header::RETRY_AFTER, "5".to_string())],
+            msg,
+        )
+            .into_response()),
+    }
 }
 
 fn login_redirect(next: &str) -> Response {

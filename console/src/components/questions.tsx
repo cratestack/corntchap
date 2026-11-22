@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { useProc, useProcCall, useQuestions } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
-import { useOpenTask } from "@/lib/nav";
+import { projectOfTask, useOpenTask } from "@/lib/nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, EmptyState, IdChip, RowSkeleton, SectionLabel } from "./bits";
 import { Markdown } from "./markdown";
+import { Attachments } from "./files";
 
 /** "waiting for an answer to PAY-Q3" (a task's result while it is parked on a question) -> "PAY-Q3". */
 export function parkedQuestionRef(t: { status: string; result?: string | null }): string | null {
@@ -327,6 +328,8 @@ function QuestionCard({ q, highlight }: { q: QuestionView; highlight: boolean })
 
       <Markdown className="text-[14.5px]">{q.body}</Markdown>
 
+      <Attachments compact target={{ pot: projectOfTask(q.id), question: q.id }} files={q.files} />
+
       <Thread q={q} />
 
       <AnswerControls q={q} idPrefix={`q-${q.id}`} />
@@ -362,6 +365,7 @@ function ClosedCard({ q, highlight }: { q: QuestionView; highlight: boolean }) {
         <span className="ml-auto font-mono text-[11px] text-muted-foreground">{fmtAgo(q.answered_at ?? q.updated_at, now)}</span>
       </div>
       <Markdown className="text-[13.5px] text-muted-foreground">{q.body}</Markdown>
+      {q.files.length > 0 && <Attachments compact target={{ pot: projectOfTask(q.id), question: q.id }} files={q.files} />}
       <div
         className={cn(
           "rounded-lg border px-3 py-2",

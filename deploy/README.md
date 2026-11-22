@@ -25,6 +25,20 @@ Prerequisites:
    `v0.1.0`, but the published image tags drop the `v` (`0.1.0`, `0.1`), so use `newTag: 0.1.0`, not `v0.1.0`.
    The image is multi-arch (amd64 and arm64).
 
+## Files (optional)
+
+Uploads (screenshots, logs, build artifacts, up to 1 GiB each) live in any S3-compatible store; RustFS is used in
+development. Set `S3_ENDPOINT` (how the server reaches it), `S3_PUBLIC_ENDPOINT` (how browsers and agents reach it: the
+presigned upload and download URLs point there; defaults to `S3_ENDPOINT`), `S3_BUCKET`, `S3_ACCESS_KEY`,
+`S3_SECRET_KEY` (secret `corntchap-s3`), and optionally `S3_REGION` (default `us-east-1`), `S3_PATH_STYLE`
+(default on; `0` for virtual-hosted buckets), `S3_CREATE_BUCKET=1` (create it on start), `FILES_MAX_BYTES` (default
+1 GiB) and `FILES_INLINE_MAX_BYTES` (base64 uploads over MCP, default 5 MiB). Without `S3_ENDPOINT` the file tools
+answer that uploads are not configured.
+
+Every file has a permanent link, `$PUBLIC_URL/files/PAY-F12/name`, that only works behind corntchap's login (bearer token
+or console session); it redirects to a short-lived presigned URL. The bucket itself stays private. The console shows
+image previews from `S3_PUBLIC_ENDPOINT`'s origin, which is added to its Content-Security-Policy.
+
 ## Keycloak (OIDC) client
 
 Humans sign in through any OpenID provider; Keycloak is the reference. In your realm create a confidential client:

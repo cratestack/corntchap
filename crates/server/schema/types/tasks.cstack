@@ -109,6 +109,8 @@ type TaskDetail {
   comments TaskCommentView[]
   dependencies TaskLinkView[]
   subtasks TaskLinkView[]
+  /// Files attached to the task (get_file for a download URL; links: /files/<id>/<name>).
+  files FileRef[]
 }
 
 type LeaseView {

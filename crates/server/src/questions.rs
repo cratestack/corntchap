@@ -31,7 +31,10 @@ const QUESTION_JSON: &str = r#"jsonb_build_object(
   'relayed_by', (select name from principals where id = q.relayed_by),
   'answered_at', q.answered_at, 'created_at', q.created_at, 'updated_at', q.updated_at,
   'notes', coalesce((select jsonb_agg(jsonb_build_object('author', (select name from principals where id = n.author_id),
-      'body', n.body, 'at', n.created_at) order by n.created_at) from question_notes n where n.question_id = q.id), '[]'::jsonb))"#;
+      'body', n.body, 'at', n.created_at) order by n.created_at) from question_notes n where n.question_id = q.id), '[]'::jsonb),
+  'files', coalesce((select jsonb_agg(jsonb_build_object('id', pr.key || '-F' || f.number, 'name', f.name,
+      'content_type', f.content_type, 'size', f.size, 'status', f.status) order by f.number)
+      from files f where f.question_id = q.id and f.status <> 'deleted'), '[]'::jsonb))"#;
 
 /// `PAY-Q3` -> ("PAY", 3)
 pub fn parse_ref(s: &str) -> Result<(String, i64)> {

@@ -1,3 +1,4 @@
+import { UploadTray } from "./files";
 import { useEffect, useMemo } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import {
@@ -342,6 +343,7 @@ export function AppShell() {
         </main>
       </div>
       <CommandPalette />
+      <UploadTray />
       <NewTaskDialog />
     </div>
   );
