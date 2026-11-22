@@ -1,0 +1,99 @@
+name: cli build
+# The corntchap-cli release matrix, in one place: release.yml calls it on `v*` tags (its artifacts become the
+# GitHub release), cli-build-pr.yml calls it on pull requests that could break it (build only, nothing is
+# published). It builds no images: the image jobs live in release.yml only, because every `sha-*` image they
+# push is deployed by argocd-image-updater.
+on:
+  workflow_call:
+    inputs:
+      retention-days:
+        description: How long the built archives are kept as workflow artifacts.
+        type: number
+        default: 7
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-musl,  name: linux-x86_64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, name: linux-aarch64 }
+          - { os: macos-15,         target: aarch64-apple-darwin,       name: darwin-arm64 }
+          - { os: macos-15-intel,   target: x86_64-apple-darwin,        name: darwin-x86_64 }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,     name: windows-x86_64 }
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@d5e4d57b030548f435d0befec15ff413a2c60eff # 1.100 (branch, not a tag)
+        with:
+          targets: ${{ matrix.target }}
+      # rust-toolchain.toml pins the toolchain cargo uses in this directory and lists only x86_64 musl as an
+      # extra target; add this job's target to *that* toolchain (aarch64 musl failed with "can't find crate
+      # for `core`" without it).
+      - name: target for the pinned toolchain
+        shell: bash
+        run: rustup target add "${{ matrix.target }}" && rustup show active-toolchain
+      - name: musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: ${{ matrix.target }}
+      - name: build
+        run: cargo build --release -p corntchap-cli --target ${{ matrix.target }}
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
+      - name: package
+        if: runner.os != 'Windows'
+        run: |
+          out=corntchap-cli-${{ matrix.name }}
+          cp target/${{ matrix.target }}/release/corntchap-cli "$out"
+          chmod +x "$out"
+          tar czf "$out.tar.gz" "$out"
+          shasum -a 256 "$out.tar.gz" > "$out.tar.gz.sha256"
+      # Windows: a zip holding corntchap-cli.exe, plus a `<hex>  <file>` checksum line like the tarballs (Scoop reads it)
+      - name: package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $out = "corntchap-cli-${{ matrix.name }}.zip"
+          Copy-Item "target/${{ matrix.target }}/release/corntchap-cli.exe" corntchap-cli.exe
+          Compress-Archive -Path corntchap-cli.exe -DestinationPath $out
+          $hash = (Get-FileHash -Algorithm SHA256 $out).Hash.ToLower()
+          [System.IO.File]::WriteAllText("$PWD/$out.sha256", "$hash  $out`n")
+      # The contract cratestack/homebrew-tap and cratestack/scoop-bucket rely on: one checksum line
+      # `<64 lowercase hex>  <archive>` that matches the archive, and an archive holding exactly the binary.
+      - name: check the archive contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          py=$(command -v python3 || command -v python)
+          if [ "$RUNNER_OS" = Windows ]; then
+            archive=corntchap-cli-${{ matrix.name }}.zip
+            entries=$("$py" -c 'import sys, zipfile; print("\n".join(zipfile.ZipFile(sys.argv[1]).namelist()))' "$archive")
+            want=corntchap-cli.exe
+          else
+            archive=corntchap-cli-${{ matrix.name }}.tar.gz
+            entries=$(tar tzf "$archive")
+            want=corntchap-cli-${{ matrix.name }}
+          fi
+          [ "$entries" = "$want" ] || { echo "archive holds '$entries', want exactly '$want'" >&2; exit 1; }
+          actual=$("$py" -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$archive")
+          # exactly one line, `<hash>  <archive>` with LF, as `shasum -a 256` writes it
+          # (`printf x` keeps the trailing newline, which `$(...)` would otherwise strip on one side only)
+          expected=$(printf '%s  %s\n' "$actual" "$archive"; printf x); expected=${expected%x}
+          got=$(cat "$archive.sha256"; printf x); got=${got%x}
+          [ "$got" = "$expected" ] || { printf 'bad %s.sha256: %q (want %q)\n' "$archive" "$got" "$expected" >&2; exit 1; }
+          echo "ok $archive: $want, $actual"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cli-${{ matrix.name }}
+          path: |
+            corntchap-cli-${{ matrix.name }}.tar.gz*
+            corntchap-cli-${{ matrix.name }}.zip*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
