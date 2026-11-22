@@ -689,7 +689,7 @@ async fn exec_command(
     timeout: Option<&str>,
     prompt: &str,
 ) -> Result<i32> {
-    let mut c = Command::new(expand(&cmd[0]));
+    let mut c = Command::new(program(&expand(&cmd[0])));
     c.args(cmd[1..].iter().map(|a| expand(a)));
     if let Some(cwd) = cwd {
         let dir = expand(cwd);
@@ -873,16 +873,70 @@ pub async fn doctor(full: bool) -> Result<()> {
 }
 
 pub fn which(cmd: &str) -> bool {
-    if cmd.contains('/') {
-        return std::path::Path::new(cmd).exists();
-    }
-    std::env::var("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(cmd).exists()))
-        .unwrap_or(false)
+    resolve_in(cmd, std::env::var_os("PATH").as_deref(), &pathext(), &|p| {
+        p.exists()
+    })
+    .is_some()
 }
+
+/// The extensions a bare command name may carry: `PATHEXT` on Windows (npm shims are `.cmd`), none elsewhere.
+fn pathext() -> Vec<String> {
+    if !cfg!(windows) {
+        return vec![];
+    }
+    std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .filter(|e| !e.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Find `cmd` the way a shell would: as given, then with each of `exts`, in each `PATH` directory
+/// (or just as a path when it has a separator). `exists` is injected so this can be tested anywhere.
+fn resolve_in(
+    cmd: &str,
+    path: Option<&std::ffi::OsStr>,
+    exts: &[String],
+    exists: &dyn Fn(&std::path::Path) -> bool,
+) -> Option<PathBuf> {
+    let with_exts = |base: PathBuf| -> Option<PathBuf> {
+        if exists(&base) {
+            return Some(base);
+        }
+        exts.iter().find_map(|e| {
+            let mut s = base.clone().into_os_string();
+            s.push(e);
+            let p = PathBuf::from(s);
+            exists(&p).then_some(p)
+        })
+    };
+    if cmd.contains('/') || (cfg!(windows) && cmd.contains('\\')) {
+        return with_exts(PathBuf::from(cmd));
+    }
+    std::env::split_paths(path?).find_map(|d| with_exts(d.join(cmd)))
+}
+
+/// The program to hand to `Command::new`: on Windows the full path found through `PATHEXT` (so `claude`
+/// finds `claude.cmd`); everywhere else the name unchanged.
+pub fn program(cmd: &str) -> PathBuf {
+    if !cfg!(windows) {
+        return PathBuf::from(cmd);
+    }
+    resolve_in(cmd, std::env::var_os("PATH").as_deref(), &pathext(), &|p| {
+        p.exists()
+    })
+    .unwrap_or_else(|| PathBuf::from(cmd))
+}
+
+const NO_SERVICE_ON_WINDOWS: &str =
+    "not supported on Windows; run `corntchap-cli fire` in a terminal or as a scheduled task";
 
 /// systemd user unit (Linux) or launchd agent (macOS) so the relay starts at login.
 pub fn install() -> Result<()> {
+    if cfg!(windows) {
+        bail!(NO_SERVICE_ON_WINDOWS);
+    }
     let exe = std::env::current_exe()?;
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
     if cfg!(target_os = "macos") {
@@ -1082,6 +1136,9 @@ fn do_step(s: &Step) -> Result<()> {
 /// removes the relay's own config, state file and credential.
 pub fn uninstall(purge: bool, yes: bool) -> Result<()> {
     use std::io::{IsTerminal, Write};
+    if cfg!(windows) {
+        bail!(NO_SERVICE_ON_WINDOWS);
+    }
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
     let uid = std::process::Command::new("id")
         .arg("-u")
@@ -1120,6 +1177,9 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    // The launchd/systemd plans only run on macOS/Linux (`fire install`/`uninstall` refuse on Windows),
+    // and their expected paths use `/`.
+    #[cfg(unix)]
     #[test]
     fn linux_plan_stops_disables_removes_and_reloads() {
         let plan = uninstall_plan(
@@ -1141,6 +1201,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn mac_plan_boots_out_with_unload_fallback() {
         let plan = uninstall_plan(
@@ -1416,5 +1477,69 @@ mod tests {
         s2["id"] = json!("st_two");
         let b = wake(json!({"agent": "c", "project": "P", "station": s2}));
         assert_ne!(wake_key(&a), wake_key(&b));
+    }
+
+    #[test]
+    fn resolve_honours_the_extension_list() {
+        let path = std::env::join_paths(["/a", "/b"]).unwrap();
+        // `Path::join` uses `\\` on Windows: compare with `/` so the same cases run on every OS.
+        let slash = |p: &Path| p.to_string_lossy().replace('\\', "/");
+        let has = move |files: &'static [&'static str]| {
+            move |p: &Path| files.contains(&slash(p).as_str())
+        };
+        let found = |r: Option<PathBuf>| r.map(|p| slash(&p));
+        let exts = vec![".EXE".to_string(), ".CMD".to_string()];
+        // an npm shim is found through the extension list, the first directory and extension win
+        assert_eq!(
+            found(resolve_in(
+                "claude",
+                Some(&path),
+                &exts,
+                &has(&["/b/claude.CMD", "/b/claude.EXE"])
+            )),
+            Some("/b/claude.EXE".to_string())
+        );
+        assert_eq!(
+            found(resolve_in(
+                "claude",
+                Some(&path),
+                &exts,
+                &has(&["/b/claude.CMD"])
+            )),
+            Some("/b/claude.CMD".to_string())
+        );
+        // the bare name still wins where it exists, and with no extensions (Unix) nothing is appended
+        assert_eq!(
+            found(resolve_in(
+                "claude",
+                Some(&path),
+                &exts,
+                &has(&["/a/claude", "/a/claude.EXE"])
+            )),
+            Some("/a/claude".to_string())
+        );
+        assert_eq!(
+            found(resolve_in(
+                "claude",
+                Some(&path),
+                &[],
+                &has(&["/a/claude.CMD"])
+            )),
+            None
+        );
+        assert_eq!(
+            found(resolve_in("claude", None, &exts, &has(&["/a/claude"]))),
+            None
+        );
+        // a path with a separator is not searched for
+        assert_eq!(
+            found(resolve_in(
+                "/x/tool",
+                Some(&path),
+                &exts,
+                &has(&["/x/tool.CMD", "/a/tool"])
+            )),
+            Some("/x/tool.CMD".to_string())
+        );
     }
 }

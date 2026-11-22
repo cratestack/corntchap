@@ -314,18 +314,95 @@ pub async fn device_login(
     }
 }
 
+/// Whether a URL the server handed us is safe to pass to the OS opener: `https://`, or `http://` to
+/// this machine. Anything else (`file:`, UNC paths, `javascript:`, other schemes) is only printed.
+fn safe_to_open(url: &str) -> bool {
+    if url
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return false;
+    }
+    let (https, rest) = if let Some(r) = url.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
+    } else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    if https {
+        return true;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().map(|h| format!("[{h}]")),
+        None => authority.split(':').next().map(String::from),
+    };
+    matches!(host.as_deref(), Some("localhost" | "127.0.0.1" | "[::1]"))
+}
+
 fn open_browser(url: &str) {
     if url.is_empty() || std::env::var("CORNTCHAP_NO_BROWSER").is_ok() {
         return;
     }
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
+    if !safe_to_open(url) {
+        eprintln!(
+            "(not opening that address automatically: only https:// or a local http:// is opened)"
+        );
+        return;
+    }
+    let mut cmd = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        // not `cmd /C start`: cmd would reinterpret `&` in the URL
+        let mut c = std::process::Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler");
+        c
     } else {
-        "xdg-open"
+        std::process::Command::new("xdg-open")
     };
-    let _ = std::process::Command::new(cmd)
+    let _ = cmd
         .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::safe_to_open;
+
+    #[test]
+    fn opens_https_and_local_http_only() {
+        for ok in [
+            "https://corn.example.com/device?code=AB-CD",
+            "https://corn.example.com:8443/x?a=1&b=2",
+            "http://localhost:3000/device",
+            "http://127.0.0.1/device",
+            "http://[::1]:8080/device",
+        ] {
+            assert!(safe_to_open(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "http://example.com/device",
+            "http://localhost.evil.com/",
+            "http://localhost@evil.com/",
+            "https://user@evil.com/",
+            "file:///C:/Windows/System32/calc.exe",
+            "\\\\attacker\\share\\x.exe",
+            "//attacker/share",
+            "javascript:alert(1)",
+            "ftp://example.com/",
+            "https://",
+            "https://ex ample.com/",
+            "https://example.com/\nnext",
+            "HTTPS-ish://x",
+        ] {
+            assert!(!safe_to_open(bad), "{bad:?}");
+        }
+    }
 }
