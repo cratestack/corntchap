@@ -1177,6 +1177,9 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    // The launchd/systemd plans only run on macOS/Linux (`fire install`/`uninstall` refuse on Windows),
+    // and their expected paths use `/`.
+    #[cfg(unix)]
     #[test]
     fn linux_plan_stops_disables_removes_and_reloads() {
         let plan = uninstall_plan(
@@ -1198,6 +1201,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn mac_plan_boots_out_with_unload_fallback() {
         let plan = uninstall_plan(
@@ -1478,50 +1482,64 @@ mod tests {
     #[test]
     fn resolve_honours_the_extension_list() {
         let path = std::env::join_paths(["/a", "/b"]).unwrap();
-        let has =
-            |files: &'static [&'static str]| move |p: &Path| files.contains(&p.to_str().unwrap());
+        // `Path::join` uses `\\` on Windows: compare with `/` so the same cases run on every OS.
+        let slash = |p: &Path| p.to_string_lossy().replace('\\', "/");
+        let has = move |files: &'static [&'static str]| {
+            move |p: &Path| files.contains(&slash(p).as_str())
+        };
+        let found = |r: Option<PathBuf>| r.map(|p| slash(&p));
         let exts = vec![".EXE".to_string(), ".CMD".to_string()];
         // an npm shim is found through the extension list, the first directory and extension win
         assert_eq!(
-            resolve_in(
+            found(resolve_in(
                 "claude",
                 Some(&path),
                 &exts,
                 &has(&["/b/claude.CMD", "/b/claude.EXE"])
-            ),
-            Some(PathBuf::from("/b/claude.EXE"))
+            )),
+            Some("/b/claude.EXE".to_string())
         );
         assert_eq!(
-            resolve_in("claude", Some(&path), &exts, &has(&["/b/claude.CMD"])),
-            Some(PathBuf::from("/b/claude.CMD"))
+            found(resolve_in(
+                "claude",
+                Some(&path),
+                &exts,
+                &has(&["/b/claude.CMD"])
+            )),
+            Some("/b/claude.CMD".to_string())
         );
         // the bare name still wins where it exists, and with no extensions (Unix) nothing is appended
         assert_eq!(
-            resolve_in(
+            found(resolve_in(
                 "claude",
                 Some(&path),
                 &exts,
                 &has(&["/a/claude", "/a/claude.EXE"])
-            ),
-            Some(PathBuf::from("/a/claude"))
+            )),
+            Some("/a/claude".to_string())
         );
         assert_eq!(
-            resolve_in("claude", Some(&path), &[], &has(&["/a/claude.CMD"])),
+            found(resolve_in(
+                "claude",
+                Some(&path),
+                &[],
+                &has(&["/a/claude.CMD"])
+            )),
             None
         );
         assert_eq!(
-            resolve_in("claude", None, &exts, &has(&["/a/claude"])),
+            found(resolve_in("claude", None, &exts, &has(&["/a/claude"]))),
             None
         );
         // a path with a separator is not searched for
         assert_eq!(
-            resolve_in(
+            found(resolve_in(
                 "/x/tool",
                 Some(&path),
                 &exts,
                 &has(&["/x/tool.CMD", "/a/tool"])
-            ),
-            Some(PathBuf::from("/x/tool.CMD"))
+            )),
+            Some("/x/tool.CMD".to_string())
         );
     }
 }
