@@ -815,7 +815,9 @@ pub async fn doctor(full: bool) -> Result<()> {
                         ""
                     },
                     ep.sessions.len(),
-                    t.directory.as_deref().unwrap_or("any directory")
+                    t.directory.as_deref().unwrap_or(
+                        "no directory (wakes go to stations; this is only the fallback for wakes that name none)"
+                    )
                 ),
                 Err(e) => println!("FAIL {}: {e:#}", t.agent),
             },

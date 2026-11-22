@@ -45,9 +45,11 @@ next agent should know (a convention, a gotcha, a decision and why, how to build
 with remember, updating the existing memory (same key) rather than adding a duplicate. Task progress \
 goes in comments, never secrets in the pantry. \
 When a wake prompt names your station (st_...), pass it as `station` to claim_next, claim_task and ask, \
-so leases and answers come back to this very session. When you need a human decision, ask it into the \
-pot's question pool with ask (wait=true on the task you hold parks it for you; the answer wakes you \
-with a fresh lease). When you are chatting with your owner, check list_questions and offer to go \
+so leases and answers come back to this very session. Several sessions can share your cook name: \
+touch only the leases whose station is yours (whoami lists current_leases with their station), and treat \
+max_leases as another session holding the slot, not as a lease of yours to clean up. When you need a human decision, ask it into the \
+pot's question pool with ask (wait=true on the task you hold parks it for you and the answer wakes you \
+with a fresh lease; do not ask and then block, a blocked task waits for a person). When you are chatting with your owner, check list_questions and offer to go \
 through them: pick_question, ask them, then answer_question with their words.";
 
 pub struct Compat<T> {

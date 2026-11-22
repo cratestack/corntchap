@@ -197,7 +197,20 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
             .ok_or_else(|| Error::NotFound(format!("nobody named {name} in {}'s team", pr.key)))?,
         ),
     };
-    let station = stations::for_claim(&mut tx, p, a.station.as_deref(), pr.id).await?;
+    let mut station = stations::for_claim(&mut tx, p, a.station.as_deref(), pr.id).await?;
+    if station.is_none()
+        && let Some(t) = &task
+    {
+        // Asked without `station` about a task this cook holds: the session that holds it asked.
+        station = sqlx::query_scalar(
+            "select station_id from tasks where id = $1 and claimed_by = $2 and status = 'claimed'",
+        )
+        .bind(t.id)
+        .bind(p.id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten();
+    }
     let mut wait = a.wait;
     if wait {
         let Some(t) = &task else {
@@ -579,6 +592,7 @@ pub async fn answer(
                 &q.key,
                 asker,
                 q.station_id,
+                q.task_id,
                 &prompt,
                 "answer",
             )
@@ -635,6 +649,7 @@ pub async fn note(db: &PgPool, p: &Principal, r: &str, body: &str) -> Result<Val
                 &q.key,
                 asker,
                 q.station_id,
+                q.task_id,
                 &prompt,
                 "note",
             )
@@ -653,6 +668,7 @@ pub async fn wake(
     key: &str,
     agent: Uuid,
     station: Option<Uuid>,
+    task: Option<Uuid>,
     text: &str,
     reason: &str,
 ) -> Result<()> {
@@ -660,6 +676,10 @@ pub async fn wake(
         .bind(agent)
         .fetch_one(&mut *c)
         .await?;
+    let station = match station {
+        Some(s) => Some(s),
+        None => infer_station(&mut *c, project, agent, task).await?,
+    };
     let st = match station {
         Some(s) => stations::payload_of(&mut *c, s).await?,
         None => None,
@@ -674,6 +694,39 @@ pub async fn wake(
     )
     .await?;
     Ok(())
+}
+
+/// The station to wake when the question names none (the cook asked without `station`): the
+/// station that holds or is parked on the question's task, else the cook's station in this pot
+/// that was woken last (the session it is most likely talking in), else none.
+async fn infer_station(
+    c: &mut PgConnection,
+    project: Uuid,
+    agent: Uuid,
+    task: Option<Uuid>,
+) -> Result<Option<Uuid>> {
+    if let Some(t) = task {
+        let on_task: Option<Uuid> = sqlx::query_scalar(
+            "select t.station_id from tasks t join stations s on s.id = t.station_id
+             where t.id = $1 and s.agent_id = $2",
+        )
+        .bind(t)
+        .bind(agent)
+        .fetch_optional(&mut *c)
+        .await?
+        .flatten();
+        if on_task.is_some() {
+            return Ok(on_task);
+        }
+    }
+    Ok(sqlx::query_scalar(
+        "select id from stations where agent_id = $1 and project_id = $2
+         order by last_woken_at desc nulls last, created_at desc limit 1",
+    )
+    .bind(agent)
+    .bind(project)
+    .fetch_optional(&mut *c)
+    .await?)
 }
 
 #[cfg(test)]
