@@ -309,3 +309,84 @@ async fn unanswered_comments_reach_the_main_station() {
         .unwrap();
     assert_eq!(n, 2);
 }
+
+/// Issue #34: a comment on a task parked on a question (blocked, reserved for its cook) wakes the
+/// station it is parked with, once.
+#[tokio::test]
+async fn a_comment_on_a_parked_task_wakes_its_station() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let root = tok.unwrap();
+    app.post(&root, "/users", json!({"login": "alice"})).await;
+    app.post(&root, "/teams", json!({"name": "acme"})).await;
+    app.post(&root, "/teams/acme/members", json!({"principal": "alice"}))
+        .await;
+    let alice = admin::operator_token(&app.state.db, "alice", None)
+        .await
+        .unwrap();
+    app.post(
+        &root,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "Payments"}),
+    )
+    .await;
+    let (_, v) = app
+        .post(
+            &alice,
+            "/agents",
+            json!({"name": "c1", "kind": "opencode", "runtime": "local"}),
+        )
+        .await;
+    let c1 = v["token"].as_str().unwrap().to_string();
+    app.post(&root, "/teams/acme/members", json!({"principal": "c1"}))
+        .await;
+    let (_, s) = app
+        .post(
+            &alice,
+            "/stations",
+            json!({"cook": "c1", "project": "PAY", "runtime": "opencode", "session": "ses_p"}),
+        )
+        .await;
+    app.post(&alice, "/projects/PAY/tasks", json!({"title": "refunds"}))
+        .await;
+    ok(
+        &app.mcp(
+            &c1,
+            "claim_task",
+            json!({"id": "PAY-1", "station": s["id"]}),
+        )
+        .await,
+        "claim",
+    );
+    ok(
+        &app.mcp(&c1, "ask", json!({"task": "PAY-1", "question": "Round down or up?", "wait": true, "station": s["id"]})).await,
+        "ask",
+    );
+    let status: String = sqlx::query_scalar("select status from tasks where number = 1")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "blocked");
+
+    let c = cursor(&app).await;
+    ok(
+        &app.mcp(
+            &alice,
+            "comment",
+            json!({"id": "PAY-1", "body": "Down, like the ledger."}),
+        )
+        .await,
+        "comment",
+    );
+    let w = wakes_after(&app, c).await;
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert_eq!(
+        (&w[0]["agent"], &w[0]["reason"], &w[0]["station"]["id"]),
+        (&json!("c1"), &json!("comment"), &s["id"])
+    );
+    let text = w[0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("parked with you") && text.contains("Down, like the ledger."),
+        "{text}"
+    );
+}
