@@ -30,7 +30,9 @@ const MSG_JSON: &str = r#"jsonb_build_object(
   'to', (select name from principals where id = m.to_principal),
   'body', m.body,
   'task', (select pr.key || '-' || t.number from tasks t where t.id = m.task_id),
-  'at', m.created_at, 'woken', '[]'::jsonb)"#;
+  'at', m.created_at, 'woken', '[]'::jsonb,
+  'station', (select s.ref from stations s where s.id = m.station_id),
+  'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = m.station_id))"#;
 
 /// Messages of pot `$1` that principal `$2` may read.
 const VISIBLE: &str = "m.project_id = $1 and (m.to_principal is null or m.author_id = $2 or m.relayed_by = $2 or m.to_principal = $2)";
@@ -113,9 +115,11 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             Some(t.id)
         }
     };
+    // the session sending it, if it said: shown with the message, and a broadcast skips it
+    let own_station = crate::stations::for_claim(&mut tx, &p, a.station.as_deref(), pr.id).await?;
     let (id, seq): (Uuid, i64) = sqlx::query_as(
-        "insert into pass_messages (project_id, author_id, to_principal, body, task_id, relayed_by)
-         values ($1,$2,$3,$4,$5,$6) returning id, seq",
+        "insert into pass_messages (project_id, author_id, to_principal, body, task_id, relayed_by, station_id)
+         values ($1,$2,$3,$4,$5,$6,$7) returning id, seq",
     )
     .bind(pr.id)
     .bind(author)
@@ -123,6 +127,7 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     .bind(body)
     .bind(task)
     .bind(relayed_by)
+    .bind(own_station)
     .fetch_one(&mut *tx)
     .await?;
     // Your own message is read (by its author and by the cook that relayed it).
@@ -155,8 +160,6 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     if broadcast && to.is_some() {
         return invalid("a broadcast goes to everyone: leave `to` out");
     }
-    // the session sending it, if it said: a broadcast skips it and reaches its siblings
-    let own_station = crate::stations::for_claim(&mut tx, &p, a.station.as_deref(), pr.id).await?;
     let mut reached: Vec<String> = vec![];
     if broadcast {
         let rows: Vec<(Uuid, String, Option<Uuid>, Option<String>)> = sqlx::query_as(

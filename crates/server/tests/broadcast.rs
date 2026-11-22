@@ -173,3 +173,126 @@ async fn broadcast_reaches_every_session() {
     );
     assert!(wakes_after(&app, c).await.is_empty());
 }
+
+#[tokio::test]
+async fn sessions_sign_what_they_write() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let root = tok.unwrap();
+    app.post(&root, "/teams", json!({"name": "acme"})).await;
+    app.post(
+        &root,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "Payments"}),
+    )
+    .await;
+    let (_, v) = app
+        .post(
+            &root,
+            "/agents",
+            json!({"name": "doug", "kind": "opencode", "runtime": "local"}),
+        )
+        .await;
+    let doug = v["token"].as_str().unwrap().to_string();
+    app.post(&root, "/teams/acme/members", json!({"principal": "doug"}))
+        .await;
+    app.post(&root, "/teams/acme/members", json!({"principal": "octo"}))
+        .await;
+    let mut st = vec![];
+    for (s, label) in [("ses_a", "quiet-planet"), ("ses_b", "hidden-nebula")] {
+        let (_, v) = app
+            .post(
+                &root,
+                "/stations",
+                json!({"cook": "doug", "project": "PAY", "runtime": "opencode", "session": s, "label": label}),
+            )
+            .await;
+        st.push(v["id"].as_str().unwrap().to_string());
+    }
+    app.post(&root, "/projects/PAY/tasks", json!({"title": "t"}))
+        .await;
+
+    // a broadcast from a person: every wake tells its session who it is
+    let c = cursor(&app).await;
+    ok(
+        &app.mcp(
+            &root,
+            "pass",
+            json!({"project": "PAY", "message": "ping", "broadcast": true}),
+        )
+        .await,
+        "ping",
+    );
+    let texts: Vec<String> = sqlx::query_scalar(
+        "select payload->>'text' from events where kind = 'wake' and seq > $1 order by seq",
+    )
+    .bind(c)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(texts.len(), 2);
+    for (t, id) in texts.iter().zip(&st) {
+        assert!(t.contains(&format!("You are station {id}")), "{t}");
+    }
+
+    // each session answers with its station: the answers say which session wrote them
+    for id in &st {
+        ok(
+            &app.mcp(
+                &doug,
+                "pass",
+                json!({"project": "PAY", "message": "pong", "station": id}),
+            )
+            .await,
+            "pong",
+        );
+    }
+    let page = ok(
+        &app.mcp(&root, "read_pass", json!({"project": "PAY", "chef": "pot"}))
+            .await,
+        "read",
+    );
+    let signed: Vec<(String, String)> = page["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["body"] == "pong")
+        .map(|m| {
+            (
+                m["station"].as_str().unwrap().to_string(),
+                m["station_label"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        signed,
+        [
+            (st[0].clone(), "quiet-planet".to_string()),
+            (st[1].clone(), "hidden-nebula".to_string())
+        ]
+    );
+    // comments too
+    ok(
+        &app.mcp(
+            &doug,
+            "comment",
+            json!({"id": "PAY-1", "body": "on it", "station": st[1]}),
+        )
+        .await,
+        "comment",
+    );
+    let t = ok(
+        &app.mcp(&root, "get_task", json!({"id": "PAY-1"})).await,
+        "task",
+    );
+    assert_eq!(t["comments"][0]["station_label"], "hidden-nebula");
+    // a station that is not yours is refused
+    let r = app
+        .mcp(
+            &root,
+            "comment",
+            json!({"id": "PAY-1", "body": "x", "station": st[0]}),
+        )
+        .await;
+    assert_eq!(r["isError"], true, "{r}");
+}

@@ -22,6 +22,10 @@ type PassMessageView {
   at String
   /// Who posting it woke: cooks, or cook/station for a broadcast (only in the answer to pass).
   woken String[]
+  /// The session (station) that wrote it, when the cook said which: a cook can run several.
+  station String?
+  /// That session's label (its folder or title), e.g. "quiet-planet: payments".
+  station_label String?
 }
 
 /// Unread messages in a direct conversation.

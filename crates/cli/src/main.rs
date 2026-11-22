@@ -251,6 +251,9 @@ enum TaskCmd {
         body: String,
         #[arg(long)]
         epoch: Option<i64>,
+        /// Your station (st_...), so people see which of your sessions wrote it.
+        #[arg(long)]
+        station: Option<String>,
     },
     /// Events after a cursor (JSON).
     Changes {
@@ -1163,10 +1166,15 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
                 json!({"epoch": epoch, "reason": reason}),
             )
             .await?),
-        TaskCmd::Comment { id, body, epoch } => out(&api
+        TaskCmd::Comment {
+            id,
+            body,
+            epoch,
+            station,
+        } => out(&api
             .post(
                 &format!("/tasks/{id}/comment"),
-                json!({"body": body, "epoch": epoch}),
+                json!({"body": body, "epoch": epoch, "station": station}),
             )
             .await?),
         TaskCmd::Changes { cursor, project } => {

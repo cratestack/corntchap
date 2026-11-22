@@ -217,6 +217,11 @@ function Thread({
                     {m.from === me ? "you" : (m.from ?? "the kitchen")}
                   </span>
                   {m.from_kind === "agent" && <span className="label-caps">cook</span>}
+                  {m.station_label && (
+                    <span className="max-w-[14rem] truncate font-mono text-[11px] text-muted-foreground" title={`Session ${m.station}: ${m.station_label}`}>
+                      · {m.station_label}
+                    </span>
+                  )}
                   {m.via && (
                     <span className="max-w-full truncate text-[12px] text-muted-foreground" title={`${m.via} posted it for ${m.from ?? "its owner"}`}>
                       via {m.via}

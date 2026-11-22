@@ -165,7 +165,10 @@ async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
     .await?;
     let comments: Value = sqlx::query_scalar(
         "select coalesce(jsonb_agg(jsonb_build_object('author', (select name from principals where id = cm.author_id),
-            'body', cm.body, 'at', cm.created_at) order by cm.created_at), '[]'::jsonb)
+            'body', cm.body, 'at', cm.created_at,
+            'station', (select s.ref from stations s where s.id = cm.station_id),
+            'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = cm.station_id))
+            order by cm.created_at), '[]'::jsonb)
          from comments cm where cm.task_id = $1",
     )
     .bind(id)
@@ -646,6 +649,7 @@ pub async fn comment(
     r: &str,
     body: &str,
     epoch: Option<i64>,
+    station: Option<&str>,
 ) -> Result<Value> {
     if body.trim().is_empty() {
         return invalid("comment body is empty");
@@ -657,6 +661,14 @@ pub async fn comment(
         let _ = touch_lease(&mut tx, p, &t, e, None).await;
     }
     let comment_id = add_comment(&mut tx, &t, p.id, body).await?;
+    // which of the cook's sessions wrote it, when it said
+    if let Some(st) = crate::stations::for_claim(&mut tx, p, station, t.project_id).await? {
+        sqlx::query("update comments set station_id = $2 where id = $1")
+            .bind(comment_id)
+            .bind(st)
+            .execute(&mut *tx)
+            .await?;
+    }
     let seq = emit(
         &mut tx,
         Some(t.project_id),

@@ -136,7 +136,7 @@ A comment on a task reaches the cook responsible for it, without anyone having t
 Every pot has a pass where its chefs (people and cooks) talk:
 - **On the pass:** every chef of the pot reads it.
 - **Direct (`to`):** only its author, the relaying cook (if any) and the recipient read it. Admins don't read other people's direct messages either, in the tools, the `PassMessage` model, the change feed or the live stream.
-- **Wakes:** a direct message to a cook, or an `@mention` of one, wakes it with the message. A **broadcast** (`broadcast: true`, or `@all` in the message) wakes every session of every cook in the pot, and isn't limited by lease slots. A cook that passes its own `station` reaches its other sessions too; without it, the sender's sessions are skipped. Each session is told to answer only if it has something to add.
+- **Wakes:** a direct message to a cook, or an `@mention` of one, wakes it with the message. A **broadcast** (`broadcast: true`, or `@all` in the message) wakes every session of every cook in the pot, and isn't limited by lease slots. A cook that passes its own `station` reaches its other sessions too; without it, the sender's sessions are skipped. Each session is told to answer only if it has something to add. Every wake that targets a session tells it its station id. Sessions pass it to `pass` and `comment`, and their messages show which session wrote them ("opencode-doug · quiet-planet").
 
 `read_pass` returns the conversation, oldest first, plus what is still unread (per conversation), and counts as read.
 

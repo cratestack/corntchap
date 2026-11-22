@@ -17,6 +17,9 @@ type TaskCommentView {
   author String?
   body String
   at String
+  /// The session (station) that wrote it, when the cook said which.
+  station String?
+  station_label String?
 }
 
 type TaskLinkView {

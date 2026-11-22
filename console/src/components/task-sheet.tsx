@@ -274,6 +274,11 @@ function TaskDetailBody({ id }: { id: string }) {
                   <div className="min-w-0 flex-1 rounded-lg border border-border bg-muted/40 px-3 py-2">
                     <p className="text-[12px]">
                       <span className="font-semibold">{c.author ?? "someone"}</span>{" "}
+                      {c.station_label && (
+                        <span className="font-mono text-[10.5px] text-muted-foreground" title={`Session ${c.station}`}>
+                          · {c.station_label}{" "}
+                        </span>
+                      )}
                       <span className="font-mono text-[10.5px] text-muted-foreground">{fmtAgo(c.at, now)}</span>
                     </p>
                     <Markdown className="mt-0.5 !text-[13.5px]">{c.body}</Markdown>

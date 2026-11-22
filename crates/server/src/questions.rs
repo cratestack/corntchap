@@ -687,6 +687,13 @@ pub async fn wake(
         Some(s) => stations::payload_of(&mut *c, s).await?,
         None => None,
     };
+    // A cook can run several sessions: tell this one who it is, so its answer says so.
+    let text = match st.as_ref().and_then(|s| s["id"].as_str()) {
+        Some(id) => format!(
+            "{text}\n\n(You are station {id}: pass `station: \"{id}\"` to pass, comment, ask and claim_next, so people see which session answers.)"
+        ),
+        None => text.to_string(),
+    };
     emit(
         c,
         Some(project),

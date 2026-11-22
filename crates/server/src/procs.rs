@@ -361,7 +361,17 @@ impl ProcedureRegistry for Procedures {
         _z: comment::Authorized,
     ) -> Result<comment::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::comment(&self.state.db, &p, &a.id, &a.body, a.epoch).await)
+        typed(
+            service::comment(
+                &self.state.db,
+                &p,
+                &a.id,
+                &a.body,
+                a.epoch,
+                a.station.as_deref(),
+            )
+            .await,
+        )
     }
 
     async fn complete(
