@@ -204,8 +204,10 @@ export interface AgentRow {
 }
 
 export interface UserRow {
+  /** The handle: what others @mention and admins type. */
   name: string;
-  login: string | null;
+  /** How the person is shown (from the identity provider); never used for lookup. */
+  display_name: string | null;
   is_admin: boolean;
   linked: boolean;
   disabled: boolean;
@@ -220,6 +222,7 @@ export interface TeamRow {
 
 export interface MemberRow {
   name: string;
+  display_name?: string | null;
   kind: string;
   role: string;
 }

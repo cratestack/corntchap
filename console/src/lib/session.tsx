@@ -6,7 +6,9 @@ import { LogoMark } from "@/components/brand";
 
 export interface SessionUser {
   id: string;
+  /** The handle (@mention). */
   name: string;
+  display_name: string | null;
   kind: string;
   is_admin: boolean;
   /** CSRF token for the server-rendered POST /logout. */
