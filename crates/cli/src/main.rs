@@ -13,7 +13,7 @@ mod view;
 
 use anyhow::{Result, anyhow, bail};
 use api::{Api, Credentials, device_login};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{Value, json};
 use ui::{ok_line, s, warn_line};
 
@@ -103,6 +103,11 @@ enum Cmd {
     Relay {
         #[command(subcommand)]
         cmd: Option<RelayCmd>,
+    },
+    /// Print shell completions: `corntchap-cli completions zsh > "${fpath[1]}/_corntchap-cli"` (Homebrew installs them for you).
+    Completions {
+        /// bash, zsh, fish, powershell or elvish
+        shell: clap_complete::Shell,
     },
 }
 
@@ -511,6 +516,10 @@ async fn main() -> Result<()> {
         .init();
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::Completions { shell } => {
+            completions(shell, &mut std::io::stdout());
+            Ok(())
+        }
         Cmd::Login {
             url,
             token,
@@ -534,6 +543,11 @@ async fn main() -> Result<()> {
         }) => agent_enroll(&name, &kind, &runtime).await,
         other => run(other, Api::from_creds(false)?).await,
     }
+}
+
+/// Completions for `shell`, generated from the same clap definitions as `--help` (needs no login or server).
+fn completions(shell: clap_complete::Shell, out: &mut dyn std::io::Write) {
+    clap_complete::generate(shell, &mut Cli::command(), "corntchap-cli", out);
 }
 
 async fn login(url: &str, token: Option<String>, no_verify: bool) -> Result<()> {
@@ -826,7 +840,11 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         Cmd::View(c) => view::run(c, &api).await?,
         Cmd::Agent(a) => agent(a, &api).await?,
         Cmd::Station(c) => station::run(c, &api).await?,
-        Cmd::Login { .. } | Cmd::Logout { .. } | Cmd::Doctor | Cmd::Relay { .. } => unreachable!(),
+        Cmd::Login { .. }
+        | Cmd::Logout { .. }
+        | Cmd::Doctor
+        | Cmd::Relay { .. }
+        | Cmd::Completions { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -1309,4 +1327,60 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn script(shell: clap_complete::Shell) -> String {
+        let mut out = Vec::new();
+        completions(shell, &mut out);
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn zsh_completions_cover_the_commands_and_their_aliases() {
+        let z = script(clap_complete::Shell::Zsh);
+        assert!(
+            z.starts_with("#compdef corntchap-cli"),
+            "{}",
+            &z[..80.min(z.len())]
+        );
+        for word in [
+            "kitchen",
+            "task",
+            "station",
+            "fire",
+            "marabou",
+            "me",
+            "completions",
+            "rename",
+        ] {
+            assert!(
+                z.contains(&format!("'{word}:")) || z.contains(&format!("({word})")),
+                "zsh completion lacks `{word}`"
+            );
+        }
+    }
+
+    #[test]
+    fn every_shell_homebrew_and_scoop_install_generates_a_script() {
+        use clap_complete::Shell::*;
+        for (shell, marker) in [
+            (Bash, "complete -F"),
+            (Fish, "complete -c corntchap-cli"),
+            (PowerShell, "Register-ArgumentCompleter"),
+        ] {
+            assert!(
+                script(shell).contains(marker),
+                "{shell:?} completion lacks `{marker}`"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cli_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
 }

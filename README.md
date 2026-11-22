@@ -13,7 +13,7 @@ The CLI (`corntchap-cli`) comes from the GitHub releases; the server runs from t
 ```bash
 brew install cratestack/tap/corntchap-cli                                  # macOS and Linux (Homebrew)
 curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | sh   # macOS and Linux, no package manager
-curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | VERSION=v0.1.0 sh   # pin a version
+curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | VERSION=v0.2.0 sh   # pin a version
 ```
 
 ```powershell
@@ -22,6 +22,18 @@ scoop install corntchap-cli
 ```
 
 On Windows `fire install` / `fire uninstall` (a login service) are not available: run `corntchap-cli fire` in a terminal or as a scheduled task.
+
+### Shell completions
+
+Homebrew installs bash, zsh and fish completions with the CLI (zsh: make sure `$(brew --prefix)/share/zsh/site-functions` is in your `fpath` before `compinit`, which Homebrew's shell setup does). Otherwise generate them: `corntchap-cli completions <bash|zsh|fish|powershell|elvish>` prints the script, built from the same definitions as `--help`, so it always matches the binary.
+
+```zsh
+corntchap-cli completions zsh > "${fpath[1]}/_corntchap-cli"   # then restart zsh (or: autoload -Uz compinit && compinit)
+```
+
+```powershell
+corntchap-cli completions powershell | Out-String | Invoke-Expression   # add to $PROFILE to keep it
+```
 
 ## Quick start
 
