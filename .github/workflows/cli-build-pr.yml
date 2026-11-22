@@ -1,0 +1,25 @@
+name: cli release build
+# Run the release's CLI matrix (all five targets and the archive contract) on pull requests that could break
+# it, so a failure shows up here and not on the next `v*` tag (v0.1.0 failed there: a retired macOS runner
+# and an aarch64 target missing from the pinned toolchain). Builds only: nothing is published and no image
+# is pushed. Path-filtered, so it is deliberately not a required check on `main`.
+on:
+  pull_request:
+    paths:
+      - crates/cli/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/cli-build.yml
+      - .github/workflows/cli-build-pr.yml
+      - .github/workflows/release.yml
+permissions:
+  contents: read
+concurrency:
+  group: cli-build-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  cli:
+    uses: ./.github/workflows/cli-build.yml
+    with:
+      retention-days: 1

@@ -104,63 +104,12 @@ jobs:
   cli:
     needs: version
     if: startsWith(github.ref, 'refs/tags/v')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest,    target: x86_64-unknown-linux-musl,  name: linux-x86_64 }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, name: linux-aarch64 }
-          - { os: macos-15,         target: aarch64-apple-darwin,       name: darwin-arm64 }
-          - { os: macos-15-intel,   target: x86_64-apple-darwin,        name: darwin-x86_64 }
-          - { os: windows-latest,   target: x86_64-pc-windows-msvc,     name: windows-x86_64 }
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - uses: dtolnay/rust-toolchain@d5e4d57b030548f435d0befec15ff413a2c60eff # 1.100 (branch, not a tag)
-        with:
-          targets: ${{ matrix.target }}
-      # rust-toolchain.toml pins the toolchain cargo uses in this directory and lists only x86_64 musl as an
-      # extra target; add this job's target to *that* toolchain (aarch64 musl failed with "can't find crate
-      # for `core`" without it).
-      - name: target for the pinned toolchain
-        shell: bash
-        run: rustup target add "${{ matrix.target }}" && rustup show active-toolchain
-      - name: musl toolchain
-        if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        with:
-          key: ${{ matrix.target }}
-      - name: build
-        run: cargo build --release -p corntchap-cli --target ${{ matrix.target }}
-        env:
-          CC_x86_64_unknown_linux_musl: musl-gcc
-          CC_aarch64_unknown_linux_musl: musl-gcc
-      - name: package
-        if: runner.os != 'Windows'
-        run: |
-          out=corntchap-cli-${{ matrix.name }}
-          cp target/${{ matrix.target }}/release/corntchap-cli "$out"
-          chmod +x "$out"
-          tar czf "$out.tar.gz" "$out"
-          shasum -a 256 "$out.tar.gz" > "$out.tar.gz.sha256"
-      # Windows: a zip holding corntchap-cli.exe, plus a `<hex>  <file>` checksum line like the tarballs (Scoop reads it)
-      - name: package (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $out = "corntchap-cli-${{ matrix.name }}.zip"
-          Copy-Item "target/${{ matrix.target }}/release/corntchap-cli.exe" corntchap-cli.exe
-          Compress-Archive -Path corntchap-cli.exe -DestinationPath $out
-          $hash = (Get-FileHash -Algorithm SHA256 $out).Hash.ToLower()
-          [System.IO.File]::WriteAllText("$PWD/$out.sha256", "$hash  $out`n")
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cli-${{ matrix.name }}
-          path: |
-            corntchap-cli-${{ matrix.name }}.tar.gz*
-            corntchap-cli-${{ matrix.name }}.zip*
-          if-no-files-found: error
+    # the matrix lives in cli-build.yml so pull requests can build exactly the same thing (cli-build-pr.yml)
+    uses: ./.github/workflows/cli-build.yml
+    permissions:
+      contents: read
+    with:
+      retention-days: 7
 
   github-release:
     needs: cli
