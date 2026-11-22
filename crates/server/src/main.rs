@@ -1,3 +1,5 @@
+use std::{future::IntoFuture, time::Duration};
+
 use clap::{Parser, Subcommand};
 use corntchap::{
     admin, app,
@@ -141,16 +143,63 @@ async fn main() -> anyhow::Result<()> {
             let router = app::build(state)?;
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!("listening on {bind}");
-            axum::serve(listener, router)
-                .with_graceful_shutdown(shutdown_signal())
-                .await?;
+            let served = axum::serve(listener, router).with_graceful_shutdown(shutdown_signal());
+            if !drain_within(SHUTDOWN_GRACE, served).await? {
+                tracing::warn!(
+                    "graceful shutdown did not finish within {SHUTDOWN_GRACE:?}: abandoning the \
+                     connections still open (the SSE endpoints are endless by design)"
+                );
+            }
         }
     }
     Ok(())
 }
 
-/// Resolves on SIGINT or (on unix) SIGTERM, so Kubernetes can stop the pod cleanly.
+/// How long a graceful shutdown waits for open connections before abandoning them.
+///
+/// `/relay/stream` and `/events/stream` are endless SSE streams by design, and axum's
+/// graceful shutdown waits for every open connection to finish. Without a bound a
+/// connected relay holds `serve(..).await` forever: the process never exits, and because
+/// tokio keeps its signal handler installed after the first one fires, every later Ctrl-C
+/// is swallowed too.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+
+/// Await a server until it stops, for at most `grace`. Returns whether it stopped by itself.
+///
+/// `axum::serve(..).with_graceful_shutdown(..)` implements `IntoFuture`, not `Future`, so the
+/// bound is `IntoFuture` and the conversion happens here.
+async fn drain_within<F>(grace: Duration, served: F) -> std::io::Result<bool>
+where
+    F: std::future::IntoFuture<Output = std::io::Result<()>>,
+{
+    match tokio::time::timeout(grace, served.into_future()).await {
+        Ok(finished) => finished.map(|()| true),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Resolves on the first SIGINT or (on unix) SIGTERM, so Kubernetes can stop the pod
+/// cleanly.
+///
+/// A second signal force-exits: once the first is handled, a wedged shutdown would
+/// otherwise ignore every later Ctrl-C, leaving SIGKILL as the only way out.
 async fn shutdown_signal() {
+    let (fired, wait) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        next_signal().await;
+        let _ = fired.send(());
+        loop {
+            next_signal().await;
+            tracing::warn!("second signal: forcing exit");
+            std::process::exit(130);
+        }
+    });
+    let _ = wait.await;
+    tracing::info!("shutting down");
+}
+
+/// Resolves on the next SIGINT or SIGTERM.
+async fn next_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -169,5 +218,41 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = term => {},
     }
-    tracing::info!("shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bound is what stops a wedged shutdown: without it `serve(..).await` waits forever
+    /// on a connected SSE client, which is the bug this guards.
+    #[tokio::test]
+    async fn drain_abandons_a_server_that_never_stops() {
+        let endless = std::future::pending::<std::io::Result<()>>();
+        let finished = drain_within(Duration::from_millis(20), endless)
+            .await
+            .expect("abandoning is not an error");
+        assert!(
+            !finished,
+            "an endless server must be abandoned, not waited on"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_reports_a_server_that_stopped_in_time() {
+        let done = async { Ok::<(), std::io::Error>(()) };
+        let finished = drain_within(Duration::from_secs(5), done)
+            .await
+            .expect("a clean stop is not an error");
+        assert!(finished, "a server that closed its connections finished");
+    }
+
+    #[tokio::test]
+    async fn drain_propagates_a_serve_error() {
+        let failing = async { Err::<(), std::io::Error>(std::io::Error::other("bind")) };
+        let err = drain_within(Duration::from_secs(5), failing)
+            .await
+            .expect_err("io errors surface");
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    }
 }
