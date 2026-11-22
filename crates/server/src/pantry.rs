@@ -130,16 +130,27 @@ async fn mark_read(c: &mut PgConnection, principal: Uuid, project: Uuid) -> Resu
 /// What was saved or changed in a pot's pantry, by someone else, since this chef last read it:
 /// `{count, items: [{key, title, kind, by, updated_at}]}` (the 10 most recent).
 pub async fn news(c: &mut PgConnection, principal: Uuid, project: Uuid) -> Result<Value> {
+    // saved or changed memories, and memories removed since (unless saved again under that key)
     let rows: Vec<Value> = sqlx::query_scalar(
-        "select jsonb_build_object('key', m.key, 'title', m.title, 'kind', m.kind,
-                  'by', (select name from principals where id = coalesce(m.updated_by, m.created_by)),
-                  'updated_at', m.updated_at)
-         from memories m
-         where m.project_id = $2
-           and coalesce(m.updated_by, m.created_by) is distinct from $1
-           and m.updated_at > coalesce((select last_read_at from pantry_reads
-                                        where principal_id = $1 and project_id = $2), '-infinity')
-         order by m.updated_at desc",
+        "with since as (select coalesce((select last_read_at from pantry_reads
+                                           where principal_id = $1 and project_id = $2), '-infinity') as t)
+         select item from (
+           select jsonb_build_object('key', m.key, 'title', m.title, 'kind', m.kind,
+                    'by', (select name from principals where id = coalesce(m.updated_by, m.created_by)),
+                    'updated_at', m.updated_at, 'deleted', false) as item, m.updated_at as at
+           from memories m, since
+           where m.project_id = $2
+             and coalesce(m.updated_by, m.created_by) is distinct from $1
+             and m.updated_at > since.t
+           union all
+           select jsonb_build_object('key', e.payload->>'key', 'title', e.payload->>'title', 'kind', 'removed',
+                    'by', (select name from principals where id = e.actor_id),
+                    'updated_at', e.at, 'deleted', true), e.at
+           from events e, since
+           where e.project_id = $2 and e.kind = 'memory.forgotten'
+             and e.actor_id is distinct from $1 and e.at > since.t
+             and not exists (select 1 from memories m where m.project_id = $2 and m.key = e.payload->>'key')
+         ) x order by at desc",
     )
     .bind(principal)
     .bind(project)
@@ -428,7 +439,14 @@ pub async fn recall(db: &PgPool, p: &Principal, r: Recall) -> Result<Value> {
 
 /// Forget a memory. People and admins can forget any memory of a project they can see; an agent
 /// only the ones it created (ask a human for the rest, or overwrite with `remember`).
-pub async fn forget(db: &PgPool, p: &Principal, project: &str, key: &str) -> Result<Value> {
+pub async fn forget(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    key: &str,
+    notify: bool,
+    station: Option<String>,
+) -> Result<Value> {
     let key = key_of(key)?;
     let mut tx = db.begin().await?;
     let pr = project_by_key(&mut tx, p, &project.to_uppercase()).await?;
@@ -461,6 +479,24 @@ pub async fn forget(db: &PgPool, p: &Principal, project: &str, key: &str) -> Res
     )
     .await?;
     tx.commit().await?;
+    if notify {
+        crate::pass::post(
+            db,
+            p,
+            crate::pass::Post {
+                project: pr.key.clone(),
+                body: format!(
+                    "Pantry, removed: **{title}** (`{key}`). It no longer applies: do not rely on it."
+                ),
+                to: None,
+                task: None,
+                from_owner: false,
+                broadcast: true,
+                station,
+            },
+        )
+        .await?;
+    }
     Ok(json!({"ok": true}))
 }
 

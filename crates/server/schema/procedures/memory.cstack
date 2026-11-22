@@ -44,6 +44,8 @@ mutation procedure memoryRemember(project: String, title: String?, body: String,
 /// Delete a memory.
 /// @param project Project key, e.g. PAY.
 /// @param key The memory's key.
-mutation procedure memoryForget(project: String, key: String): OkResult
+/// @param notify Tell everyone now: a broadcast on the pass wakes every session of every cook in the pot. Otherwise cooks see the removal as pantry news with their next claim.
+/// @param station Your own station (st_...), so a notify also reaches your other sessions.
+mutation procedure memoryForget(project: String, key: String, notify: Boolean?, station: String?): OkResult
   @allow(auth() != null)
   @mcp(tool: "forget", description: "Delete a pantry memory that is wrong or obsolete. Agents can only forget memories they saved themselves; otherwise correct it with remember.")

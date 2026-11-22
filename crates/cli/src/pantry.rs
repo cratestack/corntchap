@@ -95,6 +95,9 @@ pub enum PantryCmd {
         /// Do not ask.
         #[arg(short = 'y', long)]
         yes: bool,
+        /// Tell everyone now: wake every cook's sessions with the removal on the pass.
+        #[arg(long)]
+        notify: bool,
     },
     /// Print the pantry as one markdown digest.
     #[command(name = "digest", alias = "read")]
@@ -304,7 +307,12 @@ pub async fn run(cmd: PantryCmd, api: &Api) -> Result<()> {
             ));
             Ok(())
         }
-        PantryCmd::Toss { pot, key, yes } => {
+        PantryCmd::Toss {
+            pot,
+            key,
+            yes,
+            notify,
+        } => {
             if !yes
                 && std::io::stdin().is_terminal()
                 && !confirm(&format!(
@@ -315,7 +323,12 @@ pub async fn run(cmd: PantryCmd, api: &Api) -> Result<()> {
                 println!("kept");
                 return Ok(());
             }
-            api.delete(&format!("{}/{key}", path(&pot))).await?;
+            let url = format!(
+                "{}/{key}{}",
+                path(&pot),
+                if notify { "?notify=1" } else { "" }
+            );
+            api.delete(&url).await?;
             ok_line(format!("tossed {key} from {}", pot.to_uppercase()));
             Ok(())
         }

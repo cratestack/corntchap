@@ -354,6 +354,7 @@ function MemoryBody({ potKey, memoryKey, onClose }: { potKey: string; memoryKey:
   const [base, setBase] = useState<MemoryView | null>(null);
   const editing = base !== null;
   const [confirm, setConfirm] = useState(false);
+  const [notifyForget, setNotifyForget] = useState(false);
   const [busy, setBusy] = useState(false);
   const m = q.data;
 
@@ -391,7 +392,7 @@ function MemoryBody({ potKey, memoryKey, onClose }: { potKey: string; memoryKey:
   async function forget() {
     setBusy(true);
     try {
-      await call("memoryForget", { project: potKey, key: memoryKey });
+      await call("memoryForget", { project: potKey, key: memoryKey, notify: notifyForget || null, station: null });
       toast.success("Forgotten", { description: m!.title });
       setConfirm(false);
       onClose();
@@ -499,9 +500,16 @@ function MemoryBody({ potKey, memoryKey, onClose }: { potKey: string; memoryKey:
             <AlertDialogTitle>Forget this memory?</AlertDialogTitle>
             <AlertDialogDescription>
               “{m.title}” leaves the pantry for every cook and person on {potKey}. Its earlier revisions go with it. If it is only out of
-              date, edit it instead.
+              date, edit it instead. Cooks see the removal with their next task.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <label className="flex items-start gap-2 text-[13px]">
+            <input type="checkbox" checked={notifyForget} onChange={(e) => setNotifyForget(e.target.checked)} className="mt-0.5 size-4 accent-[var(--primary)]" />
+            <span>
+              Tell everyone now
+              <span className="block text-[12px] text-muted-foreground">Wakes every cook&rsquo;s sessions with the removal on the pass.</span>
+            </span>
+          </label>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep it</AlertDialogCancel>
             <AlertDialogAction

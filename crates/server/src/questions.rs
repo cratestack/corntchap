@@ -691,13 +691,20 @@ pub async fn wake(
     let text = match news["count"].as_u64().unwrap_or(0) {
         0 => text.to_string(),
         n => format!(
-            "{text}\n\n(Pantry: {n} memor{} new or changed since you last read it: {}. Read with get_memory or read_pantry.)",
-            if n == 1 { "y" } else { "ies" },
+            "{text}\n\n(Pantry: {n} change{} since you last read it: {}. Read with get_memory or read_pantry; removed ones no longer apply.)",
+            if n == 1 { "" } else { "s" },
             news["items"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|i| i["key"].as_str())
+                .filter_map(|i| {
+                    let k = i["key"].as_str()?;
+                    Some(if i["deleted"] == true {
+                        format!("{k} (removed)")
+                    } else {
+                        k.to_string()
+                    })
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         ),

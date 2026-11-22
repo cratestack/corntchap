@@ -139,4 +139,70 @@ async fn pantry_news_and_notify() {
         text.contains("Pantry:") && text.contains("do-not-touch-the-ledger-schema"),
         "{text}"
     );
+
+    // removals are news too: quietly with the next claim, or to everyone at once with notify
+    ok(
+        &app.mcp(&c1, "read_pantry", json!({"project": "PAY"})).await,
+        "c1 reads",
+    );
+    ok(
+        &app.mcp(
+            &alice,
+            "forget",
+            json!({"project": "PAY", "key": "never-deploy-on-fridays"}),
+        )
+        .await,
+        "forget quietly",
+    );
+    app.post(&alice, "/projects/PAY/tasks", json!({"title": "four"}))
+        .await;
+    let claim = ok(
+        &app.mcp(&c1, "claim_task", json!({"id": "PAY-4"})).await,
+        "claim after removal",
+    );
+    assert_eq!(claim["pantry"]["count"], 1, "{claim}");
+    assert_eq!(
+        (
+            &claim["pantry"]["items"][0]["key"],
+            &claim["pantry"]["items"][0]["deleted"]
+        ),
+        (&json!("never-deploy-on-fridays"), &json!(true))
+    );
+    let before: i64 = sqlx::query_scalar("select coalesce(max(seq), 0) from events")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    ok(
+        &app.mcp(
+            &alice,
+            "forget",
+            json!({"project": "PAY", "key": "do-not-touch-the-ledger-schema", "notify": true}),
+        )
+        .await,
+        "forget loudly",
+    );
+    let woken: Vec<String> = sqlx::query_scalar(
+        "select payload->>'agent' from events where kind = 'wake' and seq > $1 order by payload->>'agent'",
+    )
+    .bind(before)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(woken, ["c1", "c2"], "a notified removal reaches every cook");
+    let page = ok(
+        &app.mcp(
+            &c1,
+            "read_pass",
+            json!({"project": "PAY", "chef": "pot", "limit": 1}),
+        )
+        .await,
+        "pass",
+    );
+    assert!(
+        page["messages"][0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("Pantry, removed: **Do not touch the ledger schema**"),
+        "{page}"
+    );
 }
