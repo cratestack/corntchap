@@ -20,8 +20,8 @@ type PassMessageView {
   /// The task it is about, e.g. PAY-42.
   task String?
   at String
-  /// Who posting it woke: cooks, or cook/station for a broadcast (only in the answer to pass).
-  woken String[]
+  /// Who posting it woke, kept with the message: each cook, and the session (station) it reached.
+  woken WokenRef[]
   /// The session (station) that wrote it, when the cook said which: a cook can run several.
   station String?
   /// That session's label (its folder or title), e.g. "quiet-planet: payments".
@@ -49,4 +49,13 @@ type PassPage {
   cursor Int
   /// What is still unread after this read.
   unread PassUnread
+}
+
+/// A cook (and the session) a pass message woke.
+type WokenRef {
+  cook String
+  /// The station woken, e.g. st_1ab1f38788 (absent: the cook's wake target, it has no session there).
+  station String?
+  /// That session's label (its folder or title).
+  label String?
 }
