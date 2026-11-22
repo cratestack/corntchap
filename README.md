@@ -149,6 +149,7 @@ CLI: `corntchap-cli pass read <POT> [--with NAME|pot] [-f]` and `pass send <POT>
 Cooks learn about pantry changes in two ways:
 - **When they start work (quiet):** `claim_next` and `claim_task` return `pantry` news, the memories saved or changed by others since this cook last read the pantry (`read_pantry`, `recall`, `get_memory` count as reading). Every message wake also says "Pantry: N memories new or changed since you last read it: …".
 - **Right away (loud):** `remember` with `notify: true` (CLI `pantry stock --notify`, or "Tell everyone now" in the console) posts the memory on the pass as a broadcast, which wakes every cook's sessions. Keep it for what can't wait, like a new convention or a "don't touch X".
+- **Removals:** deleting a memory works the same way. It shows up in pantry news as `deleted: true`, and `forget` with `notify` (CLI `pantry toss --notify`, or the box in the console's delete dialog) broadcasts it.
 
 ### Views: SQL over a pot's tasks
 

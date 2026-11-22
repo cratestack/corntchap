@@ -591,12 +591,23 @@ async fn pantry_get(
 ) -> J {
     ok(pantry::get(&st.db, &p.worker()?, &k, &mk).await?)
 }
+/// `?notify=1` tells everyone now (a broadcast on the pass).
 async fn pantry_forget(
     State(st): State<AppState>,
     Authn(p): Auth,
     Path((k, mk)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> J {
-    ok(pantry::forget(&st.db, &p.worker()?, &k, &mk).await?)
+    let notify = q.get("notify").is_some_and(|v| v == "1" || v == "true");
+    ok(pantry::forget(
+        &st.db,
+        &p.worker()?,
+        &k,
+        &mk,
+        notify,
+        q.get("station").cloned(),
+    )
+    .await?)
 }
 
 async fn task_get(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {

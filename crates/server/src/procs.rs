@@ -561,7 +561,17 @@ impl ProcedureRegistry for Procedures {
         _z: memory_forget::Authorized,
     ) -> Result<memory_forget::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(pantry::forget(&self.state.db, &p, &a.project, &a.key).await)
+        typed(
+            pantry::forget(
+                &self.state.db,
+                &p,
+                &a.project,
+                &a.key,
+                a.notify.unwrap_or(false),
+                a.station,
+            )
+            .await,
+        )
     }
 
     async fn menu_list(

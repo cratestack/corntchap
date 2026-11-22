@@ -136,9 +136,12 @@ type ClaimResult {
 type PantryNewsItem {
   key String
   title String
+  /// The memory's kind, or "removed" for a memory deleted since.
   kind String
   by String?
   updated_at String
+  /// The memory was removed: stop relying on it.
+  deleted Boolean
 }
 
 type PantryNews {
