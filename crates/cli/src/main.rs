@@ -1,5 +1,6 @@
 mod api;
 mod file;
+mod hook;
 mod menu;
 mod opencode;
 mod pantry;
@@ -98,6 +99,24 @@ enum Cmd {
     /// Stations: the agent sessions (OpenCode, Claude Code, Codex) the fire wakes. `station scan` registers a repo's sessions.
     #[command(subcommand, name = "station", alias = "stations")]
     Station(station::StationCmd),
+    /// Agent hooks: checkpoint the work tree after each edit or command and report agent activity. `hook install claude-code` sets it up.
+    #[command(subcommand)]
+    Hook(hook::HookCmd),
+    /// List an agent session's checkpoints (refs/corntchap/checkpoints/<session>) and how to restore one.
+    Checkpoints {
+        /// The runtime's session id; without it, the sessions that have checkpoints in this repo.
+        #[arg(long)]
+        session: Option<String>,
+        /// How many to list.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Restore the files of this checkpoint into the work tree (refuses when it has uncommitted changes).
+        #[arg(long, value_name = "SHA")]
+        restore: Option<String>,
+        /// With --restore: overwrite uncommitted changes.
+        #[arg(long, requires = "restore")]
+        force: bool,
+    },
     /// Keep the fire lit: the relay that wakes your local cooks when new work lands (subcommands: init, install, uninstall, doctor, enroll).
     #[command(name = "fire", alias = "relay")]
     Relay {
@@ -520,6 +539,13 @@ async fn main() -> Result<()> {
             completions(shell, &mut std::io::stdout());
             Ok(())
         }
+        Cmd::Hook(h) => hook::run(h).await,
+        Cmd::Checkpoints {
+            session,
+            limit,
+            restore,
+            force,
+        } => hook::checkpoints(session, limit, restore, force),
         Cmd::Login {
             url,
             token,
@@ -843,6 +869,8 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         Cmd::Login { .. }
         | Cmd::Logout { .. }
         | Cmd::Doctor
+        | Cmd::Hook(_)
+        | Cmd::Checkpoints { .. }
         | Cmd::Relay { .. }
         | Cmd::Completions { .. } => unreachable!(),
     }

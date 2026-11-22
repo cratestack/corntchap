@@ -1,0 +1,32 @@
+part of "../corntchap.cstack"
+
+// Agent activity: what hooks report after each edit or command (src/activity.rs).
+
+/// What recording an activity did.
+type ActivityResult {
+  /// false when no registered station matches the session (nothing is stored).
+  recorded Boolean
+  /// Why nothing was stored, e.g. a hint to run `corntchap-cli station scan`.
+  message String?
+  /// The station it was recorded for.
+  station String?
+}
+
+/// One thing an agent session did: a tool that changed files or ran a command.
+type ActivityView {
+  seq Int
+  at String
+  /// Station id, e.g. st_1a2b3c4d5e.
+  station String
+  cook String
+  tool String
+  /// Paths only, never contents.
+  files String[]
+  /// Short SHA-ish id of the git checkpoint taken after the tool, when there was one.
+  checkpoint String?
+  summary String?
+  /// The task the station held when it happened, e.g. PAY-12.
+  task String?
+  /// How many tool calls were merged into this entry (bursts are coalesced).
+  count Int
+}

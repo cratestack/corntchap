@@ -1,8 +1,8 @@
 import { useState } from "react";
-import type { StationView } from "@corntchap/api";
-import { AppWindow, Hourglass, Loader2, Play, SquareTerminal, Star, Trash2 } from "lucide-react";
+import type { ActivityView, StationView } from "@corntchap/api";
+import { Activity, AppWindow, ChevronDown, Hourglass, Loader2, Play, SquareTerminal, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { useProcCall } from "@/lib/data";
+import { useProc, useProcCall } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useOpenTask } from "@/lib/nav";
@@ -45,6 +45,55 @@ function TaskButton({ id, children }: { id: string; children?: React.ReactNode }
       {children}
       <IdChip id={id} className="text-[11px]" />
     </button>
+  );
+}
+
+const activityLine = (a: ActivityView) => {
+  const what = a.files.length > 0 ? `${a.files[0]}${a.files.length > 1 ? ` +${a.files.length - 1}` : ""}` : (a.summary ?? "");
+  return `${a.tool}${what ? ` ${what}` : ""}`;
+};
+
+/** What the station's agent last did (from its hooks): a one-line summary, expandable to the recent list with checkpoints. */
+function StationActivity({ station, now }: { station: StationView; now: number }) {
+  const [open, setOpen] = useState(false);
+  const { data } = useProc("activityList", { project: station.project, station: station.id, limit: 15 }, { refetchMs: 15000 });
+  const list = data ?? [];
+  const last = list[0];
+  if (!last) return null;
+  return (
+    <div className="mt-1.5 text-[11.5px]">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 rounded-md text-left text-muted-foreground hover:text-foreground focus-visible:text-foreground"
+      >
+        <Activity className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate font-mono" title={last.summary ?? activityLine(last)}>
+          {activityLine(last)}
+        </span>
+        <span className="shrink-0 font-mono text-[10.5px]">{fmtAgo(last.at, now)}</span>
+        <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-180")} aria-hidden="true" />
+      </button>
+      {open && (
+        <ul className="mt-1 space-y-1 border-l border-border pl-2.5">
+          {list.map((a) => (
+            <li key={a.seq} className="flex items-baseline gap-2">
+              <span className="min-w-0 flex-1 truncate font-mono" title={a.files.length > 0 ? a.files.join("\n") : (a.summary ?? "")}>
+                {activityLine(a)}
+                {a.count > 1 && <span className="text-muted-foreground"> x{a.count}</span>}
+              </span>
+              {a.checkpoint && (
+                <code className="shrink-0 rounded bg-muted px-1 font-mono text-[10.5px]" title={`Checkpoint ${a.checkpoint}: restore a file with git restore --source ${a.checkpoint} -- <path>`}>
+                  {a.checkpoint.slice(0, 7)}
+                </code>
+              )}
+              <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{fmtAgo(a.at, now)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -185,6 +234,7 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
                       ))}
                     </div>
                   )}
+                  <StationActivity station={s} now={now} />
                   <p className="mt-1.5 font-mono text-[10.5px] text-muted-foreground">
                     {s.last_woken_at ? `woken ${fmtAgo(s.last_woken_at, now)}` : "never woken yet"}
                   </p>

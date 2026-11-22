@@ -5,7 +5,7 @@ use cratestack::{CratestackContext, CratestackError, Value};
 use uuid::Uuid;
 
 use crate::{
-    admin, connect,
+    activity, admin, connect,
     error::Error,
     files, menus, pantry, pass, questions,
     schema::cratestack_schema::{self, procedures::*},
@@ -964,6 +964,52 @@ impl ProcedureRegistry for Procedures {
         let p = principal(ctx)?;
         let db = &self.state.db;
         typed(stations::remove(db, &p, &a.id).await)
+    }
+
+    async fn activity_record(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: activity_record::Args,
+        _z: activity_record::Authorized,
+    ) -> Result<activity_record::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            activity::record(
+                &self.state.db,
+                &p,
+                activity::Record {
+                    runtime: a.runtime,
+                    session: a.session,
+                    tool: a.tool,
+                    files: a.files,
+                    checkpoint: a.checkpoint,
+                    summary: a.summary,
+                },
+            )
+            .await,
+        )
+    }
+
+    async fn activity_list(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: activity_list::Args,
+        _z: activity_list::Authorized,
+    ) -> Result<activity_list::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            activity::list(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.station.as_deref(),
+                a.task.as_deref(),
+                a.limit,
+            )
+            .await,
+        )
     }
 
     async fn question_ask(
