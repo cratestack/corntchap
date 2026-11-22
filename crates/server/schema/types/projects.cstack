@@ -17,6 +17,8 @@ type ProjectSummary {
   tossed Int
   /// Questions waiting for an answer in the pot's pool.
   open_questions Int
+  /// Messages you have not read on the pot's pass and in your direct conversations there.
+  unread_pass Int
 }
 
 type TeamRole {

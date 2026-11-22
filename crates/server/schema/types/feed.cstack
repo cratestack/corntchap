@@ -26,6 +26,8 @@ type ChangePayload {
   relayed_by String?
   /// question.asked: who it is addressed to.
   to String?
+  /// pass.posted: the cook that posted it in its owner's name.
+  via String?
   /// file.* events: the file id, e.g. PAY-F12.
   file String?
   /// file.ready: the file's permanent link.

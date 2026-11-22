@@ -232,6 +232,17 @@ impl Api {
     pub fn raw(&self, m: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         self.req(m, path)
     }
+    /// Call a generated procedure (`/api/v2/$procs/<name>`) with its JSON arguments.
+    pub async fn procedure(&self, name: &str, args: Value) -> Result<Value> {
+        let mut r = self
+            .http
+            .post(format!("{}/api/v2/$procs/{name}", self.server))
+            .json(&args);
+        if let Some(t) = &self.token {
+            r = r.bearer_auth(t);
+        }
+        self.send(r).await
+    }
 }
 
 /// RFC 8628 device flow: prints the code, waits for a human to approve it, returns the access token.

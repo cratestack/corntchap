@@ -1,0 +1,387 @@
+//! The pass: the chefs of a pot talk. Cooks post; a person reads the pass in the console and speaks
+//! through their own cook, which posts in its owner's name (`from_owner`: author = the owner,
+//! relayed_by = the cook). A message with no recipient is on the pot's pass, read by every chef of
+//! the pot; with a recipient it is direct, read only by its author, the relaying cook and the
+//! recipient. A direct message to a cook, or an @mention of one on the pass, wakes it (on its last
+//! woken station in that pot) with the message as the prompt.
+
+use std::collections::BTreeSet;
+
+use serde_json::{Value, json};
+use sqlx::{PgConnection, PgPool};
+use uuid::Uuid;
+
+use crate::{
+    error::{Error, Result, invalid},
+    questions::{short, wake},
+    service::{emit_to, project_by_key, task_by_ref},
+    state::Principal,
+};
+
+const MAX_BODY: usize = 8000;
+
+/// One message as callers see it.
+const MSG_JSON: &str = r#"jsonb_build_object(
+  'id', m.id, 'seq', m.seq, 'project', pr.key,
+  'from', (select name from principals where id = m.author_id),
+  'from_kind', (select kind from principals where id = m.author_id),
+  'via', (select name from principals where id = m.relayed_by),
+  'to', (select name from principals where id = m.to_principal),
+  'body', m.body,
+  'task', (select pr.key || '-' || t.number from tasks t where t.id = m.task_id),
+  'at', m.created_at)"#;
+
+/// Messages of pot `$1` that principal `$2` may read.
+const VISIBLE: &str = "m.project_id = $1 and (m.to_principal is null or m.author_id = $2 or m.relayed_by = $2 or m.to_principal = $2)";
+
+/// The conversation a visible message belongs to, for principal `$2`: 'pot', or the other chef.
+const CONVERSATION: &str = "case when m.to_principal is null then 'pot'
+     when m.author_id = $2 or m.relayed_by = $2 then m.to_principal::text
+     else m.author_id::text end";
+
+pub struct Post {
+    pub project: String,
+    pub body: String,
+    pub to: Option<String>,
+    pub task: Option<String>,
+    /// Post in the cook's owner's name (the owner asked for it in a chat with their cook).
+    pub from_owner: bool,
+}
+
+pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
+    let p = p.clone().worker()?;
+    let body = a.body.trim();
+    if body.is_empty() {
+        return invalid("the message is empty");
+    }
+    if body.chars().count() > MAX_BODY {
+        return invalid(format!("a message holds {MAX_BODY} characters at most"));
+    }
+    if !p.is_agent() {
+        return Err(Error::Forbidden(
+            "people do not write on the pass: tell your cook in your chat with it, and it posts in your name (pass with fromOwner)".into(),
+        ));
+    }
+    let mut tx = db.begin().await?;
+    let pr = project_by_key(&mut tx, &p, &a.project.trim().to_uppercase()).await?;
+    // Who it is from: this cook, or its owner with this cook relaying.
+    let (author, author_name, relayed_by) = if a.from_owner {
+        let owner = p
+            .owner_id
+            .ok_or_else(|| Error::Invalid("you have no owner to speak for".into()))?;
+        let name: String = sqlx::query_scalar("select name from principals where id = $1")
+            .bind(owner)
+            .fetch_one(&mut *tx)
+            .await?;
+        if chef(&mut tx, pr.team_id, &name).await?.is_none() {
+            return invalid(format!(
+                "your owner {name} is not a chef of {}: they cannot speak on its pass",
+                pr.key
+            ));
+        }
+        (owner, name.clone(), Some(p.id))
+    } else {
+        (p.id, p.name.clone(), None)
+    };
+    let signature = match relayed_by {
+        Some(_) => format!("{author_name} (via {})", p.name),
+        None => author_name.clone(),
+    };
+    let to = match a.to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(name) => {
+            let name = name.trim_start_matches('@').to_lowercase();
+            let id = chef(&mut tx, pr.team_id, &name)
+                .await?
+                .ok_or_else(|| Error::NotFound(format!("no chef named {name} in {}", pr.key)))?;
+            if id == p.id || id == author {
+                return invalid("that is you: leave `to` out to post on the pot's pass");
+            }
+            Some((id, name))
+        }
+    };
+    let task = match a.task.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(r) => {
+            let t = task_by_ref(&mut tx, &p, r).await?;
+            if t.project_id != pr.id {
+                return invalid(format!("{r} is not in {}", pr.key));
+            }
+            Some(t.id)
+        }
+    };
+    let (id, seq): (Uuid, i64) = sqlx::query_as(
+        "insert into pass_messages (project_id, author_id, to_principal, body, task_id, relayed_by)
+         values ($1,$2,$3,$4,$5,$6) returning id, seq",
+    )
+    .bind(pr.id)
+    .bind(author)
+    .bind(to.as_ref().map(|t| t.0))
+    .bind(body)
+    .bind(task)
+    .bind(relayed_by)
+    .fetch_one(&mut *tx)
+    .await?;
+    // Your own message is read (by its author and by the cook that relayed it).
+    let conv = conversation(to.as_ref().map(|t| t.0));
+    mark_read(&mut tx, p.id, pr.id, &conv, seq).await?;
+    if author != p.id {
+        mark_read(&mut tx, author, pr.id, &conv, seq).await?;
+    }
+    // A direct message's event is for its author, the relaying cook and the recipient only.
+    let audience = to.as_ref().map(|t| {
+        let mut a = vec![author, t.0];
+        a.extend(relayed_by);
+        a
+    });
+    emit_to(
+        &mut tx,
+        Some(pr.id),
+        task,
+        "pass.posted",
+        Some(author),
+        json!({"message": id, "to": to.as_ref().map(|t| &t.1),
+               "via": relayed_by.map(|_| p.name.clone()), "title": short(body)}),
+        audience.as_deref(),
+    )
+    .await?;
+
+    // Wake the cooks it is for: the recipient of a direct message, or the cooks @mentioned.
+    let mut woken: BTreeSet<Uuid> = BTreeSet::new();
+    let targets: Vec<(Uuid, bool)> = match &to {
+        Some((id, _)) => vec![(*id, true)],
+        None => {
+            let mut v = vec![];
+            for name in mentions(body) {
+                if let Some(id) = chef(&mut tx, pr.team_id, &name).await?
+                    && id != p.id
+                    && id != author
+                {
+                    v.push((id, false));
+                }
+            }
+            v
+        }
+    };
+    for (id, direct) in targets {
+        let is_agent: bool =
+            sqlx::query_scalar("select kind = 'agent' from principals where id = $1")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if !is_agent || !woken.insert(id) {
+            continue;
+        }
+        let prompt = if direct {
+            format!(
+                "{signature} wrote to you on {}'s pass (only you can read it):\n\n{body}\n\nAnswer with the `pass` tool (project {}, to {author_name}); read_pass shows the conversation.",
+                pr.key, pr.key
+            )
+        } else {
+            format!(
+                "{signature} mentioned you on {}'s pass:\n\n{body}\n\nAnswer with the `pass` tool (project {}); read_pass shows what else was said.",
+                pr.key, pr.key
+            )
+        };
+        wake(&mut tx, pr.id, &pr.key, id, None, task, &prompt, "pass").await?;
+    }
+    let out = one(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(out)
+}
+
+/// Read a pot's pass. `chef`: none for everything you can read (the pass and your direct
+/// messages), `pot` for the pass only, or a chef's name for your conversation with them. Newest
+/// `limit` messages, or those after `after` (a seq), oldest first. What you read counts as read.
+pub async fn read(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    with: Option<&str>,
+    after: Option<i64>,
+    limit: Option<i64>,
+) -> Result<Value> {
+    let p = p.clone().worker()?;
+    let mut tx = db.begin().await?;
+    let pr = project_by_key(&mut tx, &p, &project.trim().to_uppercase()).await?;
+    let limit = limit.unwrap_or(30).clamp(1, 200);
+    let (mode, peer): (&str, Option<Uuid>) = match with.map(str::trim).filter(|s| !s.is_empty()) {
+        None => ("all", None),
+        Some(w) if w.eq_ignore_ascii_case("pot") || w == "#" => ("pot", None),
+        Some(name) => {
+            let name = name.trim_start_matches('@').to_lowercase();
+            let id = chef(&mut tx, pr.team_id, &name)
+                .await?
+                .ok_or_else(|| Error::NotFound(format!("no chef named {name} in {}", pr.key)))?;
+            ("peer", Some(id))
+        }
+    };
+    let sql = format!(
+        "select m.seq, {MSG_JSON} from pass_messages m join projects pr on pr.id = m.project_id
+         where {VISIBLE} and {} and ($3::bigint is null or m.seq > $3)
+         order by case when $3::bigint is null then -m.seq else m.seq end limit $4",
+        scope("$5", "$6")
+    );
+    let mut rows: Vec<(i64, Value)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(p.id)
+        .bind(after)
+        .bind(limit)
+        .bind(peer)
+        .bind(mode)
+        .fetch_all(&mut *tx)
+        .await?;
+    if after.is_none() {
+        rows.reverse();
+    }
+    // Everything up to the newest message returned is read, per conversation.
+    if let Some(max) = rows.iter().map(|r| r.0).max() {
+        let sql = format!(
+            "insert into pass_reads (principal_id, project_id, conversation, last_seq)
+             select $2, $1, {CONVERSATION}, max(m.seq)
+             from pass_messages m where {VISIBLE} and {} and m.seq <= $3
+             group by 3
+             on conflict (principal_id, project_id, conversation)
+             do update set last_seq = greatest(pass_reads.last_seq, excluded.last_seq)",
+            scope("$4", "$5")
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(pr.id)
+            .bind(p.id)
+            .bind(max)
+            .bind(peer)
+            .bind(mode)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let unread = unread(&mut tx, p.id, pr.id).await?;
+    tx.commit().await?;
+    let cursor = rows.iter().map(|r| r.0).max().or(after).unwrap_or(0);
+    Ok(json!({
+        "messages": rows.into_iter().map(|r| r.1).collect::<Vec<_>>(),
+        "cursor": cursor,
+        "unread": unread,
+    }))
+}
+
+/// What a principal has not read in a pot: on the pass, and per direct conversation. Every direct
+/// conversation is listed, the most recent first, with 0 when it is all read.
+async fn unread(c: &mut PgConnection, me: Uuid, project: Uuid) -> Result<Value> {
+    let sql = format!(
+        "with conv as (
+           select {CONVERSATION} as conversation, m.seq, m.author_id, m.relayed_by
+           from pass_messages m
+           where m.project_id = $1 and (m.to_principal is null or m.author_id = $2 or m.relayed_by = $2 or m.to_principal = $2))
+         select c.conversation,
+                (select name from principals where id::text = c.conversation),
+                count(*) filter (where c.seq > coalesce(r.last_seq, 0)
+                                   and c.author_id is distinct from $2 and c.relayed_by is distinct from $2)
+         from conv c left join pass_reads r
+           on r.principal_id = $2 and r.project_id = $1 and r.conversation = c.conversation
+         group by c.conversation order by max(c.seq) desc"
+    );
+    let rows: Vec<(String, Option<String>, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(project)
+        .bind(me)
+        .fetch_all(&mut *c)
+        .await?;
+    let pot = rows.iter().find(|r| r.0 == "pot").map(|r| r.2).unwrap_or(0);
+    let direct: Vec<Value> = rows
+        .iter()
+        .filter(|r| r.0 != "pot")
+        .map(|r| json!({"chef": r.1, "count": r.2}))
+        .collect();
+    Ok(json!({"pot": pot, "direct": direct}))
+}
+
+async fn mark_read(
+    c: &mut PgConnection,
+    me: Uuid,
+    project: Uuid,
+    conversation: &str,
+    seq: i64,
+) -> Result<()> {
+    sqlx::query(
+        "insert into pass_reads (principal_id, project_id, conversation, last_seq) values ($1,$2,$3,$4)
+         on conflict (principal_id, project_id, conversation)
+         do update set last_seq = greatest(pass_reads.last_seq, excluded.last_seq)",
+    )
+    .bind(me)
+    .bind(project)
+    .bind(conversation)
+    .bind(seq)
+    .execute(c)
+    .await?;
+    Ok(())
+}
+
+/// Which messages a read covers: `all` you may read, the `pot`'s pass, or your conversation with
+/// the `peer`. `peer` and `mode` are the placeholders bound to the peer id and the mode.
+fn scope(peer: &str, mode: &str) -> String {
+    format!(
+        "({mode}::text = 'all' or ({mode} = 'pot' and m.to_principal is null)
+          or ({mode} = 'peer' and (((m.author_id = $2 or m.relayed_by = $2) and m.to_principal = {peer}::uuid)
+                                or (m.author_id = {peer}::uuid and m.to_principal = $2))))"
+    )
+}
+
+fn conversation(peer: Option<Uuid>) -> String {
+    peer.map(|p| p.to_string()).unwrap_or_else(|| "pot".into())
+}
+
+async fn one(c: &mut PgConnection, id: Uuid) -> Result<Value> {
+    let sql = format!(
+        "select {MSG_JSON} from pass_messages m join projects pr on pr.id = m.project_id where m.id = $1"
+    );
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_one(c)
+        .await?)
+}
+
+/// A chef (person or cook, never a fire) of the team, by name.
+async fn chef(c: &mut PgConnection, team: Uuid, name: &str) -> Result<Option<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "select pr.id from principals pr join team_members tm on tm.principal_id = pr.id
+         where tm.team_id = $1 and pr.name = $2 and pr.kind <> 'relay' and pr.disabled_at is null",
+    )
+    .bind(team)
+    .bind(name)
+    .fetch_optional(c)
+    .await?)
+}
+
+/// `@name` mentions in a message (lowercased, deduplicated).
+fn mentions(body: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let chars: Vec<char> = body.chars().collect();
+    for (i, ch) in chars.iter().enumerate() {
+        let starts = *ch == '@' && (i == 0 || !chars[i - 1].is_alphanumeric());
+        if !starts {
+            continue;
+        }
+        let name: String = chars[i + 1..]
+            .iter()
+            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+            .collect();
+        let name = name.trim_end_matches('.').to_lowercase();
+        if !name.is_empty() {
+            out.insert(name);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mentions;
+
+    #[test]
+    fn finds_mentions() {
+        let m = mentions("@doug can you look? cc @Alice. not mail@example.com");
+        assert_eq!(
+            m.into_iter().collect::<Vec<_>>(),
+            vec!["alice".to_string(), "doug".to_string()]
+        );
+    }
+}

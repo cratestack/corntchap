@@ -115,14 +115,28 @@ pub async fn emit(
     actor: Option<Uuid>,
     payload: Value,
 ) -> Result<i64> {
+    emit_to(c, project, task, kind, actor, payload, None).await
+}
+
+/// An event only `audience` sees in the feed and the live stream (`None`: everyone in the pot).
+pub async fn emit_to(
+    c: &mut PgConnection,
+    project: Option<Uuid>,
+    task: Option<Uuid>,
+    kind: &str,
+    actor: Option<Uuid>,
+    payload: Value,
+    audience: Option<&[Uuid]>,
+) -> Result<i64> {
     let seq: i64 = sqlx::query_scalar(
-        "insert into events (project_id, task_id, kind, actor_id, payload) values ($1,$2,$3,$4,$5) returning seq",
+        "insert into events (project_id, task_id, kind, actor_id, payload, audience) values ($1,$2,$3,$4,$5,$6) returning seq",
     )
     .bind(project)
     .bind(task)
     .bind(kind)
     .bind(actor)
     .bind(payload)
+    .bind(audience)
     .fetch_one(c)
     .await?;
     Ok(seq)
@@ -206,7 +220,12 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
             'blocked', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'blocked'),
             'done', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'done'),
             'tossed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'cancelled'),
-            'open_questions', (select count(*) from questions q where q.project_id = pr.id and q.status = 'open'))
+            'open_questions', (select count(*) from questions q where q.project_id = pr.id and q.status = 'open'),
+            'unread_pass', (select count(*) from pass_messages m
+                where m.project_id = pr.id and m.author_id is distinct from $2 and m.relayed_by is distinct from $2
+                  and (m.to_principal is null or m.to_principal = $2)
+                  and m.seq > coalesce((select r.last_seq from pass_reads r where r.principal_id = $2 and r.project_id = pr.id
+                      and r.conversation = case when m.to_principal is null then 'pot' else m.author_id::text end), 0)))
          from projects pr where {} order by pr.key",
         access_sql("$1", "$2")
     );
@@ -887,7 +906,8 @@ pub async fn changes_since(
             'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
             'actor', (select name from principals where id = e.actor_id), 'at', e.at, 'payload', e.payload)
          from events e join projects pr on pr.id = e.project_id
-         where e.seq > $1 and ($2::uuid is null or e.project_id = $2) and e.kind not like 'wake%' and {}
+         where e.seq > $1 and ($2::uuid is null or e.project_id = $2) and e.kind not like 'wake%'
+           and (e.audience is null or $5 = any(e.audience)) and {}
          order by e.seq limit $3",
         access_sql("$4", "$5")
     );
@@ -1061,7 +1081,7 @@ pub async fn digest(db: &PgPool, p: &Principal, key: &str, since: i64) -> Result
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, key).await?;
     let counts: Vec<(String, i64)> = sqlx::query_as(
-        "select kind, count(*) from events where project_id = $1 and seq > $2 and kind not like 'wake%' group by kind order by kind",
+        "select kind, count(*) from events where project_id = $1 and seq > $2 and kind not like 'wake%' and audience is null group by kind order by kind",
     )
     .bind(pr.id)
     .bind(since)

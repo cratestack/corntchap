@@ -33,6 +33,7 @@ import { TaskSheet } from "@/components/task-sheet";
 import { NewMemoryDialog, PantryView } from "@/components/pantry";
 import { MenuDialog, MenuStrip, MenusView, useMenus } from "@/components/menus";
 import { FilesView } from "@/components/files";
+import { PassView } from "@/components/pass";
 import { AskQuestionDialog, QuestionsView } from "@/components/questions";
 
 const VIEWS: { id: BaseView; label: string }[] = [
@@ -42,6 +43,7 @@ const VIEWS: { id: BaseView; label: string }[] = [
   { id: "pantry", label: "Pantry" },
   { id: "menus", label: "Menus" },
   { id: "questions", label: "Questions" },
+  { id: "pass", label: "Pass" },
   { id: "files", label: "Files" },
 ];
 
@@ -96,7 +98,7 @@ export function PotRedirect() {
 export function KitchenPage() {
   const { key = "", view = "list" } = useParams();
   const potKey = key.toUpperCase();
-  const base: BaseView = view === "board" || view === "activity" || view === "pantry" || view === "menus" || view === "questions" || view === "files" ? view : "list";
+  const base: BaseView = view === "board" || view === "activity" || view === "pantry" || view === "menus" || view === "questions" || view === "pass" || view === "files" ? view : "list";
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const openTask = useOpenTask();
@@ -229,6 +231,7 @@ export function KitchenPage() {
         {base === "activity" && <ActivityView events={potEvents} />}
         {base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
         {base === "files" && <FilesView potKey={potKey} />}
+        {base === "pass" && <PassView potKey={potKey} />}
         {base === "questions" && <QuestionsView potKey={potKey} onAsk={() => setAsking(true)} />}
         {base === "menus" && (
           <MenusView
@@ -337,6 +340,12 @@ function PotHeader({
               )}
             >
               {v.label}
+              {v.id === "pass" && project.unread_pass > 0 && (
+                <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
+                  <span aria-hidden="true">{project.unread_pass}</span>
+                  <span className="sr-only"> unread {project.unread_pass === 1 ? "message" : "messages"}</span>
+                </span>
+              )}
               {v.id === "questions" && openQuestions > 0 && (
                 <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
                   <span aria-hidden="true">{openQuestions}</span>
@@ -719,6 +728,7 @@ const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[
   { id: "pantry", label: "Pantry", match: (k) => k.startsWith("memory.") },
   { id: "menus", label: "Menus", match: (k) => k.startsWith("menu.") },
   { id: "questions", label: "Questions", match: (k) => k.startsWith("question.") },
+  { id: "pass", label: "Pass", match: (k) => k === "pass.posted" },
   { id: "files", label: "Files", match: (k) => k.startsWith("file.") },
   { id: "edits", label: "New and edited", match: (k) => k === "task.created" || k === "task.updated" },
 ];
