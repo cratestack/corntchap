@@ -35,7 +35,7 @@ fn generated_handles_are_valid_and_never_reserved() {
         );
     }
     // reserved words are refused as handles, in any case
-    for r in RESERVED_HANDLES {
+    for r in RESERVED_HANDLES.iter().chain(&["all", "everyone"]) {
         assert!(admin::norm_handle(r).is_err(), "{r}");
         assert!(admin::norm_handle(&r.to_uppercase()).is_err(), "{r}");
     }
@@ -258,6 +258,10 @@ async fn only_an_enabled_person_can_rename() {
     let cook = ag["token"].as_str().unwrap().to_string();
     let (st, v) = rename(&app, &cook, json!("cooked")).await;
     assert_eq!(st, 403, "{v}");
+    assert!(
+        v["message"].as_str().unwrap().contains("only a person"),
+        "{v}"
+    );
     let (_, fire) = app.post(&t, "/relays", json!({"name": "f1"})).await;
     if let Some(ft) = fire["token"].as_str() {
         assert_eq!(rename(&app, ft, json!("fired")).await.0, 403);
