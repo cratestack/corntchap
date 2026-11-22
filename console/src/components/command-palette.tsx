@@ -78,11 +78,11 @@ export function CommandPalette() {
           <>
             <CommandSeparator />
             <CommandGroup heading={`Switch menu in ${pot}`}>
-              <CommandItem value="switch menu all menus" onSelect={run(() => navigate(`/pots/${pot}/list`))}>
+              <CommandItem value="switch menu all menus" onSelect={run(() => navigate(`/pots/${pot}/board`))}>
                 <Soup /> All menus
               </CommandItem>
               {menus.open.map((m) => (
-                <CommandItem key={m.key} value={`switch menu ${m.key} ${m.name}`} onSelect={run(() => navigate(`/pots/${pot}/list?menu=${encodeURIComponent(m.key)}`))}>
+                <CommandItem key={m.key} value={`switch menu ${m.key} ${m.name}`} onSelect={run(() => navigate(`/pots/${pot}/board?menu=${encodeURIComponent(m.key)}`))}>
                   <Soup /> {m.name}
                   <span className="ml-auto font-mono text-[11px] text-muted-foreground">
                     {m.done}/{m.total}

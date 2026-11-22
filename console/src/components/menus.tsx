@@ -253,7 +253,7 @@ function MenuCard({
         <div className="min-w-0">
           <h3 className="flex flex-wrap items-center gap-x-2 text-[17px]">
             <Link
-              to={`/pots/${potKey}/list?menu=${encodeURIComponent(menu.key)}`}
+              to={`/pots/${potKey}/board?menu=${encodeURIComponent(menu.key)}`}
               className="rounded underline-offset-4 hover:underline focus-visible:underline"
             >
               {menu.name}

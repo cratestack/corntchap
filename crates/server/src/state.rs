@@ -17,6 +17,8 @@ pub struct Config {
     pub run_background: bool,
     /// S3-compatible file storage (RustFS in dev); files are off without it.
     pub storage: Option<crate::files::StorageConfig>,
+    /// Days the pass (chat) is kept; durable knowledge belongs in the pantry.
+    pub pass_retention_days: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +50,7 @@ impl Config {
             oidc: None,
             run_background: true,
             storage: None,
+            pass_retention_days: 7,
         }
     }
 }

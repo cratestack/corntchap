@@ -1,5 +1,11 @@
-// "+ View" stub: a saved view is a base view (list/board/activity/pantry) plus its filter chips, kept per pot in localStorage.
-export type BaseView = "list" | "board" | "activity" | "pantry" | "menus" | "questions" | "pass" | "files";
+/** The built-in tabs (a pot's task view is the Board; saved SQL views live on the server). */
+export type BaseView = "board" | "activity" | "pantry" | "menus" | "questions" | "pass" | "files";
+
+const BASES: BaseView[] = ["board", "activity", "pantry", "menus", "questions", "pass", "files"];
+
+export function isBaseView(v: string | undefined): v is BaseView {
+  return !!v && (BASES as string[]).includes(v);
+}
 
 export interface Filters {
   status?: string;
@@ -10,47 +16,32 @@ export interface Filters {
   q?: string;
 }
 
-export interface SavedView {
-  id: string;
-  name: string;
-  base: BaseView;
-  filters: Filters;
-}
+const lastKey = (pot: string) => `corntchap.lastview.${pot}`;
 
-const key = (pot: string) => `corntchap.views.${pot}`;
-
-export function loadViews(pot: string): SavedView[] {
+/** The path segment under `/pots/:key/` to open: a built-in tab (`board`) or a saved view (`v/<key>`). */
+export function lastView(pot: string): string {
   try {
-    const raw = localStorage.getItem(key(pot));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as SavedView[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveViews(pot: string, views: SavedView[]) {
-  try {
-    localStorage.setItem(key(pot), JSON.stringify(views));
-  } catch {
-    /* storage unavailable: the stub just does not persist */
-  }
-}
-
-export function lastView(pot: string): BaseView {
-  try {
-    const v = localStorage.getItem(`corntchap.lastview.${pot}`);
-    if (v === "list" || v === "board" || v === "activity" || v === "pantry" || v === "menus" || v === "questions" || v === "pass" || v === "files") return v;
+    const v = localStorage.getItem(lastKey(pot));
+    if (v && isBaseView(v)) return v;
+    if (v && /^v\/[^/]+$/.test(v)) return v;
   } catch {
     /* ignore */
   }
-  return "list";
+  return "board";
 }
 
-export function rememberView(pot: string, v: BaseView) {
+export function rememberView(pot: string, v: BaseView | `v/${string}`) {
   try {
-    localStorage.setItem(`corntchap.lastview.${pot}`, v);
+    localStorage.setItem(lastKey(pot), v);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Forget a saved view that no longer exists. */
+export function forgetView(pot: string, viewKey: string) {
+  try {
+    if (localStorage.getItem(lastKey(pot)) === `v/${viewKey}`) localStorage.removeItem(lastKey(pot));
   } catch {
     /* ignore */
   }

@@ -140,7 +140,7 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
     Ok(n)
 }
 
-/// Keep 90 days of events, rolling older ones into per-day counts.
+/// Keep 90 days of events, rolling older ones into per-day counts, and a week of the pass.
 pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
     sqlx::query(
         "with old as (delete from events where at < now() - interval '90 days' and project_id is not null returning project_id, kind, at::date as day),
@@ -148,6 +148,13 @@ pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
          insert into event_daily_counts (day, project_id, kind, count) select day, project_id, kind, n from agg
          on conflict (day, project_id, kind) do update set count = event_daily_counts.count + excluded.count",
     )
+    .execute(&state.db)
+    .await?;
+    // The pass is working chatter: kept a week by default (PASS_RETENTION_DAYS).
+    sqlx::query(
+        "delete from pass_messages where created_at < now() - make_interval(days => $1::int)",
+    )
+    .bind(state.config.pass_retention_days as i32)
     .execute(&state.db)
     .await?;
     Ok(())
@@ -219,19 +226,21 @@ impl Dispatcher {
     }
 
     async fn on_event(&mut self, seq: i64) {
-        let row: Result<Option<(String, Option<Uuid>)>, _> =
-            sqlx::query_as("select kind, project_id from events where seq = $1")
+        let row: Result<Option<(String, Option<Uuid>, Option<Uuid>)>, _> =
+            sqlx::query_as("select kind, project_id, actor_id from events where seq = $1")
                 .bind(seq)
                 .fetch_optional(&self.state.db)
                 .await;
-        if let Ok(Some((kind, Some(project)))) = row
+        if let Ok(Some((kind, Some(project), actor))) = row
             && TRIGGERS.contains(&kind.as_str())
         {
-            self.consider(project).await;
+            // The cook whose own action this was is in the middle of a turn and goes back to
+            // claim_next by itself: waking it too would queue a duplicate, stale prompt.
+            self.consider_except(project, actor).await;
         }
     }
 
-    async fn candidates(&self, project: Uuid) -> Vec<Candidate> {
+    async fn candidates(&self, project: Uuid, except: Option<Uuid>) -> Vec<Candidate> {
         sqlx::query_as(
             "select wt.id as target_id, a.id as agent_id, a.name as agent, a.runtime, wt.type as typ, wt.config,
                     (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) as busy
@@ -239,6 +248,7 @@ impl Dispatcher {
              join principals a on a.id = wt.agent_id and a.disabled_at is null
              join projects pr on pr.id = $1
              where exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = a.id)
+               and ($2::uuid is null or a.id <> $2)
                and (wt.projects is null or cardinality(wt.projects) = 0 or pr.key = any(wt.projects))
                and exists (select 1 from tasks t where t.project_id = pr.id
                       and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
@@ -247,13 +257,18 @@ impl Dispatcher {
                and (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) < a.max_leases",
         )
         .bind(project)
+        .bind(except)
         .fetch_all(&self.state.db)
         .await
         .unwrap_or_default()
     }
 
     async fn consider(&mut self, project: Uuid) {
-        let cands = self.candidates(project).await;
+        self.consider_except(project, None).await;
+    }
+
+    async fn consider_except(&mut self, project: Uuid, except: Option<Uuid>) {
+        let cands = self.candidates(project, except).await;
         let mut by_agent: HashMap<Uuid, Vec<Candidate>> = HashMap::new();
         for c in cands {
             by_agent.entry(c.agent_id).or_default().push(c);

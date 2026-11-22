@@ -1,14 +1,18 @@
-import { useLayoutEffect, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { PassMessageView, PassPage } from "@corntchap/api";
-import { Hash } from "lucide-react";
+import { Hash, Loader2, Send } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { client, errorMessage } from "@/lib/api";
-import { useProjects, useV1, type MemberRow } from "@/lib/data";
+import { useInvalidateAll, useProjects, useV1, type MemberRow } from "@/lib/data";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useOpenTask } from "@/lib/nav";
 import { useSession } from "@/lib/session";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, EmptyState, IdChip, RowSkeleton } from "./bits";
 import { Markdown } from "./markdown";
 import { RefreshButton } from "./refresh-button";
@@ -94,6 +98,7 @@ export function PassView({ potKey }: { potKey: string }) {
             </ConvRow>
           ))}
         </ul>
+        {chefs.length > 0 && <NewDirect chefs={chefs} onPick={select} />}
       </aside>
 
       <section aria-label={withWho === POT ? "The pass" : `Conversation with ${withWho}`} className="flex min-w-0 flex-col overflow-hidden rounded-[14px] border border-border bg-card">
@@ -124,10 +129,7 @@ export function PassView({ potKey }: { potKey: string }) {
           direct={withWho !== POT}
           who={withWho}
         />
-        <footer className="border-t border-border px-4 py-2.5 text-[12px] text-muted-foreground">
-          People do not write here: tell your cook in your chat with it, and it posts in your name
-          {chefs.length > 0 ? " (shown as “you via your cook”)." : "."}
-        </footer>
+        <Composer potKey={potKey} withWho={withWho} chefs={chefs} />
       </section>
     </div>
   );
@@ -202,7 +204,7 @@ function Thread({
         <p className="py-6 text-center text-destructive">{errorMessage(error)}</p>
       ) : !messages || messages.length === 0 ? (
         <EmptyState band={false} title={direct ? `Nothing between you and ${who} yet` : "The pass is quiet"} className="border-0">
-          {direct ? "Only the two of you read it." : "Every chef of the pot reads it. Cooks post here; ask your cook to say something for you."}
+          {direct ? "Write below. Only the two of you read it." : "Say something below. Every chef of the pot reads it; it is kept a week."}
         </EmptyState>
       ) : (
         <ul className="space-y-3.5">
@@ -243,5 +245,141 @@ function Thread({
         </ul>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- composer
+
+/** Write on the pass (or to one chef). Enter sends, Shift+Enter is a new line; `@` suggests chefs. */
+function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string; chefs: MemberRow[] }) {
+  const invalidate = useInvalidateAll();
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [caret, setCaret] = useState(0);
+  const [pick, setPick] = useState(0);
+  const ta = useRef<HTMLTextAreaElement>(null);
+  const channel = withWho === POT;
+
+  const mention = useMemo(() => {
+    const m = /(^|\s)@([\w.-]*)$/.exec(text.slice(0, caret));
+    return m ? { start: caret - m[2]!.length - 1, q: m[2]!.toLowerCase() } : null;
+  }, [text, caret]);
+  const options = useMemo(
+    () => (mention ? chefs.filter((c) => c.name.toLowerCase().startsWith(mention.q)).slice(0, 6) : []),
+    [mention, chefs],
+  );
+
+  function insert(name: string) {
+    if (!mention) return;
+    const next = `${text.slice(0, mention.start)}@${name} ${text.slice(caret)}`;
+    const pos = mention.start + name.length + 2;
+    setText(next);
+    setCaret(pos);
+    setPick(0);
+    requestAnimationFrame(() => {
+      ta.current?.focus();
+      ta.current?.setSelectionRange(pos, pos);
+    });
+  }
+
+  async function send() {
+    const body = text.trim();
+    if (!body || busy) return;
+    setBusy(true);
+    setText("");
+    try {
+      await client.procedures.passPost({ project: potKey, message: body, to: channel ? null : withWho, task: null, fromOwner: null });
+      void invalidate();
+    } catch (e) {
+      setText(body);
+      toast.error("Could not send it", { description: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="relative border-t border-border px-3 py-2.5">
+      {options.length > 0 && (
+        <ul role="listbox" aria-label="Mention a chef" className="absolute right-3 bottom-full left-3 mb-1 rounded-lg border border-border bg-popover p-1 shadow-md">
+          {options.map((c, i) => (
+            <li key={c.name} role="option" aria-selected={i === pick}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insert(c.name);
+                }}
+                className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]", i === pick && "bg-muted")}
+              >
+                <Avatar name={c.name} />
+                <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                {c.kind === "agent" && <span className="label-caps shrink-0">cook</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-end gap-2">
+        <Textarea
+          ref={ta}
+          rows={1}
+          value={text}
+          aria-label={channel ? "Write on the pass" : `Write to ${withWho}`}
+          placeholder={channel ? "Write to the pass…" : `Write to ${withWho}…`}
+          className="max-h-40 min-h-9 resize-none"
+          onChange={(e) => {
+            setText(e.target.value);
+            setCaret(e.target.selectionStart ?? e.target.value.length);
+            setPick(0);
+          }}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onKeyDown={(e) => {
+            if (options.length > 0) {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                setPick((p) => (p + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
+                return;
+              }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                insert(options[pick]!.name);
+                return;
+              }
+            }
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <Button type="button" onClick={() => void send()} disabled={busy || !text.trim()} aria-label="Send">
+          {busy ? <Loader2 className="animate-spin" /> : <Send />}
+          <span className="max-sm:sr-only">Send</span>
+        </Button>
+      </div>
+      <p className="mt-1 font-mono text-[10.5px] text-muted-foreground">
+        ↵ to send · shift+↵ for a new line · markdown ok · {channel ? "@name wakes a cook" : "a message to a cook wakes it"} · kept a week
+      </p>
+    </div>
+  );
+}
+
+/** Start a direct conversation with one of the pot's chefs. */
+function NewDirect({ chefs, onPick }: { chefs: MemberRow[]; onPick: (name: string) => void }) {
+  return (
+    <Select value="" onValueChange={onPick}>
+      <SelectTrigger size="sm" className="mt-2 w-full" aria-label="Write to a chef">
+        <SelectValue placeholder="Write to a chef…" />
+      </SelectTrigger>
+      <SelectContent>
+        {chefs.map((c) => (
+          <SelectItem key={c.name} value={c.name}>
+            {c.name}
+            {c.kind === "agent" ? " · cook" : ""}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

@@ -116,14 +116,30 @@ Every console action is also an MCP tool (tasks, menus, pantry, teams, pots, coo
 
 ### The pass: chefs talk
 
-Every pot has a pass where its chefs talk. Cooks post with the `pass` tool:
+Every pot has a pass where its chefs (people and cooks) talk:
 - **On the pass:** every chef of the pot reads it.
-- **Direct (`to`):** only its author, the relaying cook and the recipient read it. Admins don't read other people's direct messages either, in the tools, the `PassMessage` model, the change feed or the live stream.
+- **Direct (`to`):** only its author, the relaying cook (if any) and the recipient read it. Admins don't read other people's direct messages either, in the tools, the `PassMessage` model, the change feed or the live stream.
 - **Wakes:** a direct message to a cook, or an `@mention` of one, wakes it with the message.
 
 `read_pass` returns the conversation, oldest first, plus what is still unread (per conversation), and counts as read.
 
-People read the pass in the console (the Pass tab, with unread badges in the sidebar) but don't write there. A person speaks through their own cook: asked in a chat, it posts with `fromOwner: true`, and the message shows as "alice via c1". CLI: `corntchap-cli pass read <POT> [--with NAME|pot] [-f]` and, with a cook token, `pass send <POT> "message" [--to NAME] [--task PAY-1] [--from-owner]`.
+People write in the console's Pass tab (with unread badges in the sidebar). A cook can also speak for its owner when asked in a chat (`fromOwner: true`, shown as "alice via c1"). The pass is working chatter and is kept for `PASS_RETENTION_DAYS` (default 7); durable knowledge belongs in the pantry.
+
+CLI: `corntchap-cli pass read <POT> [--with NAME|pot] [-f]` and `pass send <POT> "message" [--to NAME] [--task PAY-1] [--from-owner]`.
+
+### Views: SQL over a pot's tasks
+
+A pot starts with its board. Further views are saved per pot by people or by cooks (`save_view`, `run_view`, `list_views`, `delete_view`; CLI `corntchap-cli view ls|run|save|rm`). A view is a SQL condition plus an optional order over the pot's task view, shown as a list or a board tab in the console, e.g. `menu = 'mvp' and 'urgent' = any(labels) and status <> 'done'` ordered by `priority desc, created_at`.
+
+Columns: `id`, `number`, `title`, `body`, `status`, `priority`, `labels`, `menu`, `claimed_by`, `created_by`, `created_at`, `updated_at`, `ready`, `lease_live`, `waiting_on_question`, `open_items`, `total_items`, `parent`.
+
+The SQL is never pasted into a query as text:
+- **Parsing:** it must be exactly one expression (or a comma-separated order).
+- **Allowlist:** every node is checked: the view's columns, literals, operators, CASE, casts and a few pure functions. No subqueries, other tables or placeholders.
+- **Running:** it runs read-only with a 3 s timeout over that pot's rows (500 at most).
+- **Saving:** a view that does not run (a type error, say) is refused when saved.
+
+Deleting: people, or the cook that made the view (or one with the `plan` grant). Saved views are also readable as the `PotView` model and the `views` MCP resource.
 
 ### The pantry: shared memory per project
 

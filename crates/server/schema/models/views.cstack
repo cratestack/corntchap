@@ -1,0 +1,24 @@
+part of "../corntchap.cstack"
+
+// Saved views, read-only here: they are written with viewSave, which checks their SQL.
+
+model PotView {
+  id Uuid @id @default(uuid())
+  projectId Uuid @readonly @map("project_id")
+  key String @readonly
+  name String @readonly
+  description String? @readonly
+  layout String @readonly
+  whereSql String @readonly @map("where_sql")
+  orderSql String? @readonly @map("order_sql")
+  position Int @readonly
+  createdBy Uuid? @readonly @map("created_by")
+  createdAt DateTime @readonly @map("created_at")
+  updatedAt DateTime @readonly @map("updated_at")
+  project Project @relation(fields:[projectId],references:[id])
+
+  @@map("pot_views")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "views")
+}

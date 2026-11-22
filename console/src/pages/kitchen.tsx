@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import type { MenuView, ProjectSummary, TaskView } from "@corntchap/api";
-import { Bookmark, Check, ChevronDown, Plus, X } from "lucide-react";
+import type { ViewOut } from "@corntchap/api";
+import { ChevronDown, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useProc, useProjects, useQuestions } from "@/lib/data";
 import { useLive } from "@/lib/live";
 import { useUi } from "@/lib/ui";
 import { BUCKETS, bucketOf, plural, type Bucket } from "@/lib/format";
-import { lastView, loadViews, rememberView, saveViews, type BaseView, type Filters, type SavedView } from "@/lib/views";
+import { forgetView, isBaseView, lastView, rememberView, type BaseView, type Filters } from "@/lib/views";
 import { useOpenTask } from "@/lib/nav";
 import { errorMessage } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -35,10 +35,11 @@ import { MenuDialog, MenuStrip, MenusView, useMenus } from "@/components/menus";
 import { FilesView } from "@/components/files";
 import { PassView } from "@/components/pass";
 import { AskQuestionDialog, QuestionsView } from "@/components/questions";
+import { DeleteViewDialog, ViewDialog, layoutOf, useViews } from "@/components/views";
 
-const VIEWS: { id: BaseView; label: string }[] = [
-  { id: "list", label: "List" },
-  { id: "board", label: "Board" },
+/** Tabs before the saved views (just the Board) and after them. */
+const HEAD_VIEWS: { id: BaseView; label: string }[] = [{ id: "board", label: "Board" }];
+const TAIL_VIEWS: { id: BaseView; label: string }[] = [
   { id: "activity", label: "Activity" },
   { id: "pantry", label: "Pantry" },
   { id: "menus", label: "Menus" },
@@ -46,9 +47,6 @@ const VIEWS: { id: BaseView; label: string }[] = [
   { id: "pass", label: "Pass" },
   { id: "files", label: "Files" },
 ];
-
-/** The views that show tasks (and so take filters). */
-const TASK_VIEWS: BaseView[] = ["list", "board"];
 
 function readFilters(p: URLSearchParams): Filters {
   const f: Filters = {};
@@ -96,16 +94,21 @@ export function PotRedirect() {
 }
 
 export function KitchenPage() {
-  const { key = "", view = "list" } = useParams();
+  const { key = "", view, viewKey } = useParams();
   const potKey = key.toUpperCase();
-  const base: BaseView = view === "board" || view === "activity" || view === "pantry" || view === "menus" || view === "questions" || view === "pass" || view === "files" ? view : "list";
+  const base: BaseView = isBaseView(view) ? view : "board";
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const openTask = useOpenTask();
   const { openNewTask } = useUi();
   const projects = useProjects();
   const project = projects.data?.find((p) => p.key === potKey);
-  const tasks = useProc("projectTasks", { project: potKey }, { enabled: !!project });
+  const tasks = useProc("projectTasks", { project: potKey }, { enabled: !!project && !viewKey });
+  const saved = useViews(potKey, !!project);
+  const savedView = viewKey ? saved.views.find((v) => v.key === viewKey) : undefined;
+  const [viewDialog, setViewDialog] = useState<{ open: boolean; view: ViewOut | null }>({ open: false, view: null });
+  const [deleting, setDeleting] = useState<ViewOut | null>(null);
+  const taskView = !!viewKey || base === "board";
   const { events } = useLive();
   const filters = readFilters(params);
   const selected = params.get("task");
@@ -116,9 +119,11 @@ export function KitchenPage() {
   const menus = useMenus(potKey, !!project);
 
   useEffect(() => {
-    if (project) rememberView(potKey, base);
-    document.title = project ? `${project.name} · corntchap` : "corntchap";
-  }, [potKey, base, project]);
+    if (project && viewKey) {
+      if (savedView) rememberView(potKey, `v/${viewKey}`);
+    } else if (project) rememberView(potKey, base);
+    document.title = project ? `${project.name}${savedView ? ` · ${savedView.name}` : ""} · corntchap` : "corntchap";
+  }, [potKey, base, project, viewKey, savedView]);
 
   // `?new=1` (from the command palette) opens the New menu dialog on the Menus tab
   useEffect(() => {
@@ -186,6 +191,10 @@ export function KitchenPage() {
       <PotHeader
         project={project}
         base={base}
+        viewKey={viewKey}
+        saved={saved.views}
+        taskView={taskView}
+        onNewView={() => setViewDialog({ open: true, view: null })}
         filters={filters}
         setFilter={setFilter}
         clearFilters={clearFilters}
@@ -201,39 +210,39 @@ export function KitchenPage() {
                 : openNewTask(potKey, filters.menu)
         }
         openQuestions={openQuestions}
-        applyView={(v) => {
-          const qs = new URLSearchParams();
-          for (const [k, val] of Object.entries(v.filters)) if (val) qs.set(k, val);
-          void navigate(`/pots/${potKey}/${v.base}${qs.size ? `?${qs}` : ""}`);
-        }}
       />
 
-      {selectedMenu && (base === "list" || base === "board") && <MenuStrip menu={selectedMenu} />}
+      {savedView && (
+        <ViewBar
+          view={savedView}
+          onEdit={() => setViewDialog({ open: true, view: savedView })}
+          onDelete={() => setDeleting(savedView)}
+        />
+      )}
+
+      {selectedMenu && taskView && <MenuStrip menu={selectedMenu} />}
 
       <div className="mt-6">
-        {base === "list" && (
-          <ListView
-            loading={tasks.isLoading}
-            error={tasks.error}
-            tasks={visible}
-            total={all.length}
-            filtered={Object.keys(filters).length > 0}
+        {viewKey ? (
+          <SavedViewBody
+            potKey={potKey}
+            view={savedView}
+            loadingViews={saved.isLoading}
+            filters={filters}
             selected={selected}
             onOpen={openTask}
             events={potEvents}
-            potKey={potKey}
             onClear={clearFilters}
-            onNew={() => openNewTask(potKey, filters.menu)}
             menus={chipNames}
           />
-        )}
-        {base === "board" && <BoardView loading={tasks.isLoading} tasks={visible} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} total={all.length} menus={chipNames} />}
-        {base === "activity" && <ActivityView events={potEvents} />}
-        {base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
-        {base === "files" && <FilesView potKey={potKey} />}
-        {base === "pass" && <PassView potKey={potKey} />}
-        {base === "questions" && <QuestionsView potKey={potKey} onAsk={() => setAsking(true)} />}
-        {base === "menus" && (
+        ) : null}
+        {!viewKey && base === "board" && <BoardView loading={tasks.isLoading} tasks={visible} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} total={all.length} menus={chipNames} />}
+        {!viewKey && base === "activity" && <ActivityView events={potEvents} />}
+        {!viewKey && base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
+        {!viewKey && base === "files" && <FilesView potKey={potKey} />}
+        {!viewKey && base === "pass" && <PassView potKey={potKey} />}
+        {!viewKey && base === "questions" && <QuestionsView potKey={potKey} onAsk={() => setAsking(true)} />}
+        {!viewKey && base === "menus" && (
           <MenusView
             potKey={potKey}
             menus={menus.menus}
@@ -247,6 +256,22 @@ export function KitchenPage() {
       </div>
 
       <TaskSheet id={selected} onClose={closeSheet} />
+      <ViewDialog
+        potKey={potKey}
+        open={viewDialog.open}
+        view={viewDialog.view}
+        onClose={() => setViewDialog((s) => ({ ...s, open: false }))}
+        onSaved={(v) => void navigate(`/pots/${potKey}/v/${v.key}`)}
+      />
+      <DeleteViewDialog
+        potKey={potKey}
+        view={deleting}
+        onClose={() => setDeleting(null)}
+        onDeleted={(v) => {
+          forgetView(potKey, v.key);
+          if (v.key === viewKey) void navigate(`/pots/${potKey}/board`, { replace: true });
+        }}
+      />
       <MenuDialog
         potKey={potKey}
         open={menuDialog.open}
@@ -269,33 +294,62 @@ export function KitchenPage() {
 function PotHeader({
   project,
   base,
+  viewKey,
+  saved,
+  taskView,
+  onNewView,
   filters,
   setFilter,
   clearFilters,
   tasks,
   menus,
   onNew,
-  applyView,
   openQuestions,
 }: {
   project: ProjectSummary;
   base: BaseView;
+  viewKey: string | undefined;
+  saved: ViewOut[];
+  taskView: boolean;
+  onNewView: () => void;
   filters: Filters;
   setFilter: (k: keyof Filters, v: string | undefined) => void;
   clearFilters: () => void;
   tasks: TaskView[];
   menus: MenuView[];
   onNew: () => void;
-  applyView: (v: SavedView) => void;
   openQuestions: number;
 }) {
   const loc = useLocation();
-  const [saved, setSaved] = useState<SavedView[]>(() => loadViews(project.key));
-  useEffect(() => setSaved(loadViews(project.key)), [project.key]);
-
   const labels = useMemo(() => [...new Set(tasks.flatMap((t) => t.labels))].sort(), [tasks]);
   const holders = useMemo(() => [...new Set(tasks.map((t) => t.claimed_by).filter((h): h is string => !!h))].sort(), [tasks]);
   const active = Object.values(filters).some(Boolean);
+
+  const tab = (v: { id: BaseView; label: string }) => (
+    <Link
+      key={v.id}
+      to={{ pathname: `/pots/${project.key}/${v.id}`, search: v.id !== "board" || !taskView ? "" : loc.search }}
+      aria-current={!viewKey && base === v.id && !(active && taskView) ? "page" : undefined}
+      className={cn(
+        "rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
+        !viewKey && base === v.id && "bg-card text-foreground shadow-sm",
+      )}
+    >
+      {v.label}
+      {v.id === "pass" && project.unread_pass > 0 && (
+        <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
+          <span aria-hidden="true">{project.unread_pass}</span>
+          <span className="sr-only"> unread {project.unread_pass === 1 ? "message" : "messages"}</span>
+        </span>
+      )}
+      {v.id === "questions" && openQuestions > 0 && (
+        <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
+          <span aria-hidden="true">{openQuestions}</span>
+          <span className="sr-only"> open {openQuestions === 1 ? "question" : "questions"}</span>
+        </span>
+      )}
+    </Link>
+  );
 
   return (
     <header>
@@ -329,51 +383,31 @@ function PotHeader({
 
       <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-3">
         <nav aria-label="Views" className="flex max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
-          {VIEWS.map((v) => (
+          {HEAD_VIEWS.map(tab)}
+          {saved.map((v) => (
             <Link
-              key={v.id}
-              to={{ pathname: `/pots/${project.key}/${v.id}`, search: !TASK_VIEWS.includes(v.id) || !TASK_VIEWS.includes(base) ? "" : loc.search }}
-              aria-current={base === v.id && !(active && TASK_VIEWS.includes(base)) ? "page" : undefined}
+              key={v.key}
+              to={{ pathname: `/pots/${project.key}/v/${v.key}`, search: taskView ? loc.search : "" }}
+              aria-current={viewKey === v.key && !active ? "page" : undefined}
               className={cn(
                 "rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
-                base === v.id && "bg-card text-foreground shadow-sm",
+                viewKey === v.key && "bg-card text-foreground shadow-sm",
               )}
             >
-              {v.label}
-              {v.id === "pass" && project.unread_pass > 0 && (
-                <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
-                  <span aria-hidden="true">{project.unread_pass}</span>
-                  <span className="sr-only"> unread {project.unread_pass === 1 ? "message" : "messages"}</span>
-                </span>
-              )}
-              {v.id === "questions" && openQuestions > 0 && (
-                <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
-                  <span aria-hidden="true">{openQuestions}</span>
-                  <span className="sr-only"> open {openQuestions === 1 ? "question" : "questions"}</span>
-                </span>
-              )}
+              {v.name}
             </Link>
           ))}
-          {saved.map((v) => (
-            <button
-              key={v.id}
-              type="button"
-              onClick={() => applyView(v)}
-              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground hover:text-foreground"
-            >
-              <Bookmark className="size-3" aria-hidden="true" /> {v.name}
-            </button>
-          ))}
-          <AddView
-            pot={project.key}
-            base={base}
-            filters={filters}
-            onSaved={(v) => setSaved(v)}
-            saved={saved}
-          />
+          <button
+            type="button"
+            onClick={onNewView}
+            className="rounded-lg px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground hover:text-foreground"
+          >
+            + View
+          </button>
+          {TAIL_VIEWS.map(tab)}
         </nav>
 
-        {TASK_VIEWS.includes(base) && (
+        {taskView && (
           <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
             <FilterChip
               label="Menu"
@@ -506,75 +540,107 @@ function FilterChip({
   );
 }
 
-function AddView({
-  pot,
-  base,
-  filters,
-  saved,
-  onSaved,
-}: {
-  pot: string;
-  base: BaseView;
-  filters: Filters;
-  saved: SavedView[];
-  onSaved: (v: SavedView[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
+function ViewBar({ view, onEdit, onDelete }: { view: ViewOut; onEdit: () => void; onDelete: () => void }) {
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="rounded-lg px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground hover:text-foreground"
+    <div className="mt-4 flex items-start gap-3 rounded-[14px] border border-border bg-card px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="flex flex-wrap items-baseline gap-x-2 text-[13px]">
+          <b className="font-semibold">{view.name}</b>
+          <span className="text-muted-foreground">
+            {view.layout === "list" ? "list" : "board"}
+            {view.created_by ? ` · made by ${view.created_by}` : ""}
+          </span>
+        </p>
+        {view.description && <p className="mt-0.5 text-[12.5px] text-muted-foreground">{view.description}</p>}
+        <p className="mt-1 font-mono text-[12px] break-words text-muted-foreground">
+          {view.where.trim() || "all tasks"}
+          {view.order ? ` · order by ${view.order}` : ""}
+        </p>
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          aria-label={`Options for the ${view.name} view`}
+          className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          + View
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 space-y-3">
-        <form
-          className="space-y-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!name.trim()) return;
-            const next = [...saved, { id: crypto.randomUUID(), name: name.trim(), base, filters }];
-            saveViews(pot, next);
-            onSaved(next);
-            setName("");
-            setOpen(false);
-          }}
-        >
-          <div>
-            <p className="font-display text-[15px]">Save this view</p>
-            <p className="mt-0.5 text-[12px] text-muted-foreground">
-              Keeps the {base} layout and the current filters for {pot}, in this browser.
-            </p>
-          </div>
-          <Input aria-label="View name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Frontend on the fire" autoFocus />
-          <div className="flex justify-between gap-2">
-            {saved.length > 0 ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  saveViews(pot, []);
-                  onSaved([]);
-                  setOpen(false);
-                }}
-              >
-                Remove saved
-              </Button>
-            ) : (
-              <span />
-            )}
-            <Button type="submit" size="sm" disabled={!name.trim()}>
-              <Check /> Save view
-            </Button>
-          </div>
-        </form>
-      </PopoverContent>
-    </Popover>
+          <Settings2 className="size-4" aria-hidden="true" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={onEdit}>
+            <Pencil /> Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+            <Trash2 /> Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function SavedViewBody({
+  potKey,
+  view,
+  loadingViews,
+  filters,
+  selected,
+  onOpen,
+  events,
+  onClear,
+  menus,
+}: {
+  potKey: string;
+  view: ViewOut | undefined;
+  loadingViews: boolean;
+  filters: Filters;
+  selected: string | null;
+  onOpen: (id: string) => void;
+  events: ReturnType<typeof useLive>["events"];
+  onClear: () => void;
+  menus: Record<string, string>;
+}) {
+  const run = useProc("viewRun", { project: potKey, key: view?.key ?? null }, { enabled: !!view });
+  if (loadingViews) return <RowSkeleton rows={4} />;
+  if (!view) {
+    return (
+      <EmptyState title="No such view" action={<Button asChild variant="outline"><Link to={`/pots/${potKey}/board`}>Back to the board</Link></Button>}>
+        It may have been deleted, or it was never made on this pot.
+      </EmptyState>
+    );
+  }
+  const tasks = run.data ?? [];
+  const visible = applyFilters(tasks, filters);
+  if (run.error && !run.isLoading) {
+    return (
+      <EmptyState band={false} title="This view would not run">
+        <span className="font-mono text-[12.5px] break-words">{errorMessage(run.error)}</span>
+      </EmptyState>
+    );
+  }
+  if (!run.isLoading && tasks.length === 0) {
+    return (
+      <EmptyState title="No tasks match this view">
+        <code className="font-mono text-[12.5px] break-words">{view.where.trim() || "(no condition)"}</code>
+      </EmptyState>
+    );
+  }
+  return layoutOf(view) === "list" ? (
+    <ListView
+      loading={run.isLoading}
+      error={null}
+      tasks={visible}
+      total={tasks.length}
+      filtered={Object.keys(filters).length > 0}
+      selected={selected}
+      onOpen={onOpen}
+      events={events}
+      potKey={potKey}
+      onClear={onClear}
+      onNew={() => undefined}
+      menus={menus}
+      keepOrder
+    />
+  ) : (
+    <BoardView loading={run.isLoading} tasks={visible} selected={selected} onOpen={onOpen} onNew={() => undefined} total={tasks.length} menus={menus} keepOrder />
   );
 }
 
@@ -593,6 +659,7 @@ function ListView({
   onClear,
   onNew,
   menus,
+  keepOrder = false,
 }: {
   loading: boolean;
   error: unknown;
@@ -606,8 +673,9 @@ function ListView({
   onClear: () => void;
   onNew: () => void;
   menus: Record<string, string>;
+  keepOrder?: boolean;
 }) {
-  const groups = useMemo(() => groupTasks(tasks), [tasks]);
+  const groups = useMemo(() => groupTasks(tasks, keepOrder), [tasks, keepOrder]);
   return (
     <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_300px]">
       <div className="min-w-0 space-y-6">
@@ -665,6 +733,7 @@ function BoardView({
   onNew,
   total,
   menus,
+  keepOrder = false,
 }: {
   loading: boolean;
   tasks: TaskView[];
@@ -673,8 +742,9 @@ function BoardView({
   onNew: () => void;
   total: number;
   menus: Record<string, string>;
+  keepOrder?: boolean;
 }) {
-  const groups = useMemo(() => groupTasks(tasks), [tasks]);
+  const groups = useMemo(() => groupTasks(tasks, keepOrder), [tasks, keepOrder]);
   if (loading) return <RowSkeleton rows={3} />;
   if (total === 0) {
     return (
@@ -684,8 +754,13 @@ function BoardView({
     );
   }
   return (
-    <div className="-mx-5 overflow-x-auto px-5 pb-3 lg:-mx-8 lg:px-8 scrollbar-thin">
-      <div className="grid min-w-[1000px] grid-cols-[repeat(4,minmax(180px,1fr))_minmax(150px,0.75fr)] gap-3.5 xl:min-w-0">
+    <div
+      role="region"
+      aria-label="Board"
+      tabIndex={0}
+      className="scrollbar-thin -mx-5 max-h-[calc(100dvh-16rem)] min-h-64 overflow-auto overscroll-contain px-5 pb-3 focus-visible:outline-none lg:-mx-8 lg:px-8"
+    >
+      <div className="flex w-max min-w-full items-stretch gap-3.5">
         {BOARD_COLS.map((id) => {
           const meta = BUCKETS.find((b) => b.id === id)!;
           const col = groups[id];
@@ -693,16 +768,16 @@ function BoardView({
             <section
               key={id}
               aria-labelledby={`col-${id}`}
-              className={cn("flex max-h-[calc(100dvh-14rem)] min-h-40 flex-col rounded-[14px] bg-column p-2.5", id === "cancelled" && "opacity-80")}
+              className={cn("flex w-[17.5rem] shrink-0 flex-col rounded-[14px] bg-column p-2.5 sm:w-[19rem]", id === "cancelled" && "opacity-80")}
             >
-              <h2 id={`col-${id}`} className="flex items-center gap-2 px-1.5 pt-1 pb-2.5 text-[15px]">
+              <h2 id={`col-${id}`} className="sticky top-0 z-10 -mx-2.5 -mt-2.5 mb-1 flex items-center gap-2 rounded-t-[14px] bg-column px-4 pt-3.5 pb-2.5 text-[15px]">
                 <span className={cn("size-2.5 rounded-full", BUCKET_DOT[id], id === "claimed" && "live-dot")} aria-hidden="true" />
                 {meta.label}
                 <span className="font-mono text-[11.5px] font-normal text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
                   {col.length}
                 </span>
               </h2>
-              <div className="scrollbar-thin flex-1 space-y-2 overflow-y-auto pr-0.5">
+              <div className="space-y-2">
                 {col.length === 0 && <p className="px-2 py-5 text-center text-[12.5px] text-muted-foreground">Nothing here.</p>}
                 {col.map((t) => (
                   <TaskCard key={t.id} task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />
@@ -712,9 +787,6 @@ function BoardView({
           );
         })}
       </div>
-      <p className="mt-3 text-[12px] text-muted-foreground">
-        Cooks move cards by scooping and serving; the board is read-only so a lease is never broken by a stray drag.
-      </p>
     </div>
   );
 }

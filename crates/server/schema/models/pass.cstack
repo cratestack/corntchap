@@ -1,7 +1,6 @@
 part of "../corntchap.cstack"
 
-// The pass, read-only: cooks post with passPost (it wakes the cooks a message is for); people
-// speak through their cook. Privacy lives in the policy: the pot's pass is for its chefs (and
+// The pass, read-only: chefs post with passPost (it wakes the cooks a message is for). Privacy lives in the policy: the pot's pass is for its chefs (and
 // admins); a direct message only for its author, the cook that relayed it and its recipient.
 
 model PassMessage {

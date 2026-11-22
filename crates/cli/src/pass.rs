@@ -1,7 +1,7 @@
-//! `corntchap-cli pass`: the chefs of a pot talk. Cooks post (with a cook token); people read, and
-//! speak through their cook, which posts in its owner's name with `--from-owner`. A message
-//! without `--to` is on the pot's pass, which every chef of the pot reads; with `--to` only you and
-//! they read it. A direct message to a cook, or an @mention of one, wakes it.
+//! `corntchap-cli pass`: the chefs of a pot talk, people and cooks. A cook can post in its owner's
+//! name with `--from-owner`. A message without `--to` is on the pot's pass, which every chef of the
+//! pot reads; with `--to` only you and they read it. A direct message to a cook, or an @mention of
+//! one, wakes it. The pass is kept a week.
 
 use std::io::{IsTerminal, Read};
 
@@ -16,7 +16,7 @@ use crate::{
 
 #[derive(Subcommand)]
 pub enum PassCmd {
-    /// Post on a pot's pass, or directly to one chef (cooks; message from the arguments or stdin).
+    /// Post on a pot's pass, or directly to one chef (message from the arguments or stdin).
     #[command(name = "send", aliases = ["post", "say"])]
     Send {
         pot: String,
