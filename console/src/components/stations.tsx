@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { StationView } from "@corntchap/api";
-import { Hourglass, Loader2, SquareTerminal, Trash2 } from "lucide-react";
+import { Hourglass, Loader2, SquareTerminal, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useProcCall } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
@@ -17,6 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 import { IdChip, LabelChip } from "./bits";
 
 const RUNTIME: Record<string, string> = {
@@ -49,6 +50,19 @@ export function StationList({ stations }: { stations: StationView[] }) {
   const [removing, setRemoving] = useState<StationView | null>(null);
   const [busy, setBusy] = useState(false);
 
+  async function setMain(s: StationView, main: boolean) {
+    try {
+      await call("stationSetMain", { id: s.id, main });
+      toast.success(main ? "Main station set" : "No main station", {
+        description: main
+          ? `${s.label ?? s.session} now answers ${s.cook}'s messages and mentions in ${s.project}.`
+          : `The session woken last answers ${s.cook}'s messages in ${s.project}.`,
+      });
+    } catch (e) {
+      toast.error("Could not change the main station", { description: errorMessage(e) });
+    }
+  }
+
   async function remove(s: StationView) {
     setBusy(true);
     try {
@@ -70,12 +84,14 @@ export function StationList({ stations }: { stations: StationView[] }) {
         </p>
       ) : (
         <>
-          <p className="text-[12px] text-muted-foreground">The fire wakes each station’s session directly, so work resumes where it left off.</p>
+          <p className="text-[12px] text-muted-foreground">
+            The fire wakes each station’s session directly, so work resumes where it left off. The main station <Star className="inline size-3 align-[-1px]" aria-hidden="true" /> answers messages and mentions in its pot.
+          </p>
           <ul className="space-y-2">
             {stations.map((s) => {
               const where = s.label ?? s.directory ?? s.session;
               return (
-                <li key={s.id} className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-[12.5px]">
+                <li key={s.id} className={cn("rounded-lg border bg-muted/40 px-3 py-2 text-[12.5px]", s.main ? "border-primary/50" : "border-border")}>
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-mono text-[12px] font-medium" title={s.directory ?? where}>
@@ -87,6 +103,16 @@ export function StationList({ stations }: { stations: StationView[] }) {
                         </p>
                       )}
                     </div>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-pressed={s.main}
+                      aria-label={s.main ? `${where} is the main station of ${s.project}: unset it` : `Make ${where} the main station of ${s.project}`}
+                      title={s.main ? "Main station: answers messages and mentions (click to unset)" : "Make it the main station: it answers messages and mentions"}
+                      onClick={() => void setMain(s, !s.main)}
+                    >
+                      <Star className={cn(s.main && "fill-primary text-primary")} />
+                    </Button>
                     <Button size="icon-xs" variant="ghost" aria-label={`Remove station ${where}`} onClick={() => setRemoving(s)}>
                       <Trash2 />
                     </Button>
@@ -96,6 +122,7 @@ export function StationList({ stations }: { stations: StationView[] }) {
                       <SquareTerminal className="size-3.5" aria-hidden="true" /> {RUNTIME[s.runtime] ?? s.runtime}
                     </span>
                     <LabelChip className="font-mono">{s.project}</LabelChip>
+                    {s.main && <span className="label-caps text-primary">main</span>}
                     <span className="font-mono text-[11px] text-muted-foreground" title={`Session ${s.session}`}>
                       {shortSession(s.session)}
                     </span>

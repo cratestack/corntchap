@@ -501,7 +501,11 @@ pub fn stations_table(v: &Value) -> String {
                 .to_string(),
             };
             vec![
-                plain(s(x, "id")),
+                plain(if x["main"] == true {
+                    format!("{} ★", s(x, "id"))
+                } else {
+                    s(x, "id")
+                }),
                 plain(s(x, "cook")),
                 plain(s(x, "project")),
                 plain(s(x, "runtime")),
@@ -532,7 +536,7 @@ pub fn stations_table(v: &Value) -> String {
             "last woken",
         ],
         rows,
-        "no stations (register your sessions with `station scan`, run inside a repo)",
+        "no stations (register your sessions with `station scan`, run inside a repo); ★ marks the main station",
     )
 }
 

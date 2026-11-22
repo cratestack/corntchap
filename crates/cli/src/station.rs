@@ -51,6 +51,18 @@ pub enum StationCmd {
     },
     /// Unregister a station.
     Rm { id: String },
+    /// Make a station its cook's main one in its pot: the session that answers messages,
+    /// mentions and question answers (without one, the session woken last answers).
+    #[command(name = "main", alias = "pin")]
+    Main {
+        id: String,
+        /// Stop it being the main station.
+        #[arg(long)]
+        off: bool,
+    },
+    /// Stop a station being the main one (same as `main <id> --off`).
+    #[command(name = "unpin")]
+    Unpin { id: String },
 }
 
 pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
@@ -85,6 +97,8 @@ pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
             ok_line(format!("station {id} removed"));
             Ok(())
         }
+        StationCmd::Main { id, off } => set_main(api, &id, !off).await,
+        StationCmd::Unpin { id } => set_main(api, &id, false).await,
     }
 }
 
@@ -715,6 +729,28 @@ pub async fn doctor(server: &str) {
             dir.unwrap_or("-")
         );
     }
+}
+
+async fn set_main(api: &Api, id: &str, main: bool) -> Result<()> {
+    let v = api
+        .post(
+            &format!("/stations/{id}/main"),
+            serde_json::json!({"main": main}),
+        )
+        .await?;
+    let who = format!(
+        "{} in {}",
+        v["cook"].as_str().unwrap_or("?"),
+        v["project"].as_str().unwrap_or("?")
+    );
+    if main {
+        ok_line(format!(
+            "{id} is now the main station of {who}: it answers messages and mentions"
+        ));
+    } else {
+        ok_line(format!("{id} is no longer the main station of {who}"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

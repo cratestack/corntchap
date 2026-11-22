@@ -78,8 +78,16 @@ corntchap-cli station scan --dry-run    # what would be registered
 corntchap-cli station scan              # register it (pot found by matching `origin` with the pots' repo_url)
 corntchap-cli station ls                # id, cook, pot, runtime, label, holding/waiting, last woken
 corntchap-cli station rm st_ab12cd34ef
+corntchap-cli station main st_ab12cd34ef  # this session answers the cook's messages in its pot (★)
 corntchap-cli fire doctor               # per station: is its runtime reachable from this machine?
 ```
+
+Messages, mentions and question answers go to a cook, not a session. The server picks one:
+1. the station that holds or is parked on the task in question (it has the context);
+2. else the cook's **main station** in that pot, chosen with `station main` (or `unpin`), the star in the console's Cooks page, or the `set_main_station` tool;
+3. else the station woken last.
+
+A cook has at most one main station per pot. `station scan` keeps it, and moving the session to another pot drops it. While idle, the main station is also the first one offered new work.
 
 `scan` looks for OpenCode sessions (v2 API; the 1.x API as a fallback), Claude Code sessions (`~/.claude/projects/<dir>/<id>.jsonl`) and Codex sessions (`~/.codex/sessions/**/rollout-*.jsonl`), and registers the most recent one per runtime and folder (`--all`: every session). The cook of each runtime is your cook of that `kind` (`--cook` to choose, `--pot` to override the pot). The fire then resumes the session with built-in defaults: OpenCode through its server API, Claude Code with `claude -p --resume <session>` and Codex with `codex exec resume <session> -`, prompt on stdin and the station's folder as the working directory. A `[[target]]` for the cook is only a fallback (wakes that name no station; `adapter = "webhook"`) and may refine a station's runtime (an OpenCode `password_env`, a custom `command` containing `{session}`).
 

@@ -26,3 +26,10 @@ procedure stationList(project: String?, cook: String?): StationView[]
 mutation procedure stationRemove(id: String): OkResult
   @allow(auth() != null)
   @mcp(tool: "remove_station", description: "Forget a registered session (station).")
+
+/// Make a station its cook's main one in its pot, or stop it being the main one.
+/// @param id Station id, e.g. st_1a2b3c4d5e.
+/// @param main true (default) to make it the main station, false to unset it.
+mutation procedure stationSetMain(id: String, main: Boolean?): StationView
+  @allow(auth() != null)
+  @mcp(tool: "set_main_station", description: "Choose the session that answers a cook's messages, mentions and question answers in a pot (its main station); without one, the session woken last answers. At most one per cook and pot: setting one unsets the previous.")
