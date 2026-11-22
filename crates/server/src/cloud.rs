@@ -37,6 +37,8 @@ pub struct Delivered {
     pub status: u16,
     /// The cloud session a Claude routine started.
     pub session_url: Option<String>,
+    /// Characters of wake text the delivery carried (for the usage estimate).
+    pub chars: usize,
 }
 
 pub struct Failed {
@@ -67,6 +69,8 @@ pub async fn deliver(
         error: e,
         retry_after: None,
     };
+    // the wake text the request carries, in characters
+    let mut chars = 0usize;
     let req = match typ {
         "webhook" => {
             let url = config["url"]
@@ -75,8 +79,11 @@ pub async fn deliver(
             let body = match config.get("body") {
                 // a fixed body the endpoint expects (no content is added to it)
                 Some(b) => b.clone(),
-                None => json!({"text": text.full, "agent": agent, "project": project,
-                               "reasons": text.meta["reasons"], "wakes": text.meta["wakes"]}),
+                None => {
+                    chars = text.full.chars().count();
+                    json!({"text": text.full, "agent": agent, "project": project,
+                               "reasons": text.meta["reasons"], "wakes": text.meta["wakes"]})
+                }
             };
             let bytes = serde_json::to_vec(&body).map_err(|e| fail(e.to_string()))?;
             let mut r = state
@@ -120,6 +127,7 @@ pub async fn deliver(
                 .filter(|m| !m.trim().is_empty())
                 .unwrap_or(&state.config.github_mention);
             let body = cut(&format!("{mention} {}", text.pointer), MAX_COMMENT);
+            chars = body.chars().count();
             state
                 .http
                 .post(format!("{base}/repos/{repo}/issues/{issue}/comments"))
@@ -134,12 +142,14 @@ pub async fn deliver(
             let token = config["token"]
                 .as_str()
                 .ok_or_else(|| fail("missing token".into()))?;
+            let routine_text = cut(&text.full, MAX_ROUTINE_TEXT);
+            chars = routine_text.chars().count();
             state
                 .http
                 .post(url)
                 .bearer_auth(token)
                 .header("anthropic-version", "2023-06-01")
-                .json(&json!({"text": cut(&text.full, MAX_ROUTINE_TEXT)}))
+                .json(&json!({"text": routine_text}))
         }
         other => return Err(fail(format!("{other} is not a cloud target"))),
     };
@@ -150,6 +160,7 @@ pub async fn deliver(
         return Ok(Delivered {
             status: status.as_u16(),
             session_url: v["claude_code_session_url"].as_str().map(String::from),
+            chars,
         });
     }
     let retry_after = resp

@@ -726,6 +726,15 @@ pub async fn wake(
         ),
         None => text.to_string(),
     };
+    crate::usage::record_in(
+        c,
+        agent,
+        Some(project),
+        crate::usage::WAKE,
+        reason,
+        text.chars().count(),
+    )
+    .await;
     emit(
         c,
         Some(project),
