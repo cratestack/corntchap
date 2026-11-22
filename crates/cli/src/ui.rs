@@ -30,6 +30,14 @@ pub fn s(v: &Value, k: &str) -> String {
     }
 }
 
+/// A person for humans: "Display Name · @handle", or just the handle without a display name.
+pub fn person(v: &Value) -> String {
+    match v["display_name"].as_str().filter(|d| !d.is_empty()) {
+        Some(d) => format!("{d} · @{}", s(v, "name")),
+        None => s(v, "name"),
+    }
+}
+
 pub fn status_color(status: &str) -> Color {
     match status {
         "open" => Color::Cyan,
@@ -402,12 +410,13 @@ pub fn members_table(v: &Value) -> String {
         .map(|m| {
             vec![
                 plain(s(m, "name")),
+                plain(s(m, "display_name")),
                 plain(s(m, "kind")),
                 plain(role_label(&s(m, "role"))),
             ]
         })
         .collect();
-    table(&["name", "kind", "role"], rows, "no chefs")
+    table(&["handle", "name", "kind", "role"], rows, "no chefs")
 }
 
 pub fn users_table(v: &Value) -> String {
@@ -418,6 +427,7 @@ pub fn users_table(v: &Value) -> String {
         .map(|u| {
             vec![
                 plain(s(u, "name")),
+                plain(s(u, "display_name")),
                 plain(if u["is_admin"] == true {
                     "admin"
                 } else {
@@ -431,7 +441,7 @@ pub fn users_table(v: &Value) -> String {
             ]
         })
         .collect();
-    table(&["name", "role", "sso"], rows, "no users")
+    table(&["handle", "name", "role", "sso"], rows, "no users")
 }
 
 pub fn agents_table(v: &Value) -> String {
