@@ -208,6 +208,31 @@ async fn stations_and_the_question_pool() {
         &app.mcp(&c1, "release", json!({"id": c2claim["task"]["id"], "epoch": c2claim["lease"]["epoch"], "reason": "later"})).await,
         "release",
     );
+    // the cook's lease slots bound the wakes: with one slot, a second station is not woken while
+    // the first one has not claimed yet
+    sqlx::query("update principals set max_leases = 1 where id = $1")
+        .bind(agent)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("update stations set last_woken_at = null where agent_id = $1")
+        .bind(agent)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let (_, one) = stations::pick_for_wake(&mut conn, agent, project)
+        .await
+        .unwrap();
+    assert!(one.is_some());
+    let (has, held_back) = stations::pick_for_wake(&mut conn, agent, project)
+        .await
+        .unwrap();
+    assert!(has && held_back.is_none(), "{held_back:?}");
+    sqlx::query("update principals set max_leases = 3 where id = $1")
+        .bind(agent)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
     drop(conn);
 
     // --- ask with wait: the task is parked for c1 ---
@@ -417,6 +442,13 @@ async fn stations_and_the_question_pool() {
         (&a3["answered_by"], &a3["relayed_by"]),
         (&json!("c2"), &Value::Null)
     );
+    // asked without `station` and no task: the cook's last woken station in the pot is woken
+    let w = last_wake(&app).await;
+    assert_eq!(w["reason"], "answer");
+    assert!(
+        w["station"]["id"].is_string(),
+        "an answer wake infers a station: {w}"
+    );
     ok(
         &app.mcp(
             &c1,
@@ -458,6 +490,20 @@ async fn stations_and_the_question_pool() {
         )
         .await,
         "ask 5",
+    );
+    // asked without `station` on a task held from st[0]: a note wakes that very station
+    let (code, _) = app
+        .post(
+            &alice,
+            "/questions/PAY-Q5/note",
+            json!({"note": "Which flag?"}),
+        )
+        .await;
+    assert_eq!(code, 200);
+    let w = last_wake(&app).await;
+    assert_eq!(
+        (&w["reason"], &w["station"]["id"]),
+        (&json!("note"), &json!(st[0]))
     );
     ok(
         &app.mcp(&c2, "pick_question", json!({"project": "PAY"}))

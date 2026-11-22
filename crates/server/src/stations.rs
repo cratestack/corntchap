@@ -225,6 +225,22 @@ pub async fn pick_for_wake(
     if !has_any {
         return Ok((false, None));
     }
+    // Stations share the cook's lease slots: do not wake more sessions than there are free slots,
+    // counting stations woken in the last minute that have not claimed yet.
+    let full: bool = sqlx::query_scalar(
+        "select (select count(*) from tasks t where t.claimed_by = $1 and t.status = 'claimed' and t.lease_expires_at > now())
+              + (select count(*) from stations st where st.agent_id = $1
+                   and st.last_woken_at > now() - interval '60 seconds'
+                   and not exists (select 1 from tasks t where t.station_id = st.id and t.status = 'claimed'
+                                     and t.lease_expires_at > now() and t.updated_at >= st.last_woken_at))
+              >= (select max_leases from principals where id = $1)",
+    )
+    .bind(agent)
+    .fetch_one(&mut *c)
+    .await?;
+    if full {
+        return Ok((true, None));
+    }
     let row: Option<(String, String, String, Option<String>, Option<String>)> = sqlx::query_as(
         "update stations set last_woken_at = now() where id = (
            select st.id from stations st

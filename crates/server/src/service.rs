@@ -23,6 +23,7 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
        from task_deps d join tasks dt on dt.id = d.depends_on join projects dp on dp.id = dt.project_id
        where d.task_id = t.id), '[]'::jsonb),
   'claimed_by', (select name from principals where id = t.claimed_by),
+  'station', (select ref from stations where id = t.station_id),
   'lease_epoch', t.lease_epoch, 'lease_expires_at', t.lease_expires_at,
   'lease_live', (t.status = 'claimed' and t.lease_expires_at > now()),
   'ready', (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on

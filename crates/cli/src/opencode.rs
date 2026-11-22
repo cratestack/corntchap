@@ -782,12 +782,15 @@ pub async fn prompt(t: &Target, text: &str) -> Result<i32> {
         .iter()
         .max_by_key(|s| s.updated)
         .map(|s| s.id.clone())
-        .ok_or_else(|| {
-            anyhow!(
-                "OpenCode at {} has no session in {}: open the project in OpenCode once, or register sessions with `corntchap-cli station scan`",
-                ep.base,
-                t.directory.as_deref().unwrap_or("any directory")
-            )
+        .ok_or_else(|| match t.directory.as_deref() {
+            Some(d) => anyhow!(
+                "OpenCode at {} has no session in {d}: open the project in OpenCode once, or register sessions with `corntchap-cli station scan`",
+                ep.base
+            ),
+            None => anyhow!(
+                "this wake names no station and the target has no directory, so OpenCode at {} has no session to fall back to: register the session with `corntchap-cli station scan` (wakes then name it), or set `directory` on the target",
+                ep.base
+            ),
         })?;
     prompt_session(&ep, &id, text).await
 }
