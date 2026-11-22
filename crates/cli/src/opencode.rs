@@ -5,6 +5,11 @@
 //! `/api` (`GET /api/info`, `GET /api/session`, `POST /api/session/{id}/prompt`). That is tried
 //! first. The 1.x discovery below stays as the fallback.
 //!
+//! v2 wakes are sent as synthetic session input (`POST /api/session/{id}/synthetic`, no
+//! description): the agent gets the text and starts a turn, but the chat shows no message from
+//! you. `show_wakes = true` on the target sends them as ordinary prompts instead; servers without
+//! the synthetic route get the ordinary prompt too.
+//!
 //! OpenCode 1.x's TUI and desktop app start their server on a random port, so a fixed `url` breaks
 //! on every restart. Without `url` (or with `url = "auto"`) the relay looks for the server:
 //!   1. `OPENCODE_PORT` (the desktop app uses it for its server when set);
@@ -715,9 +720,10 @@ pub async fn resolve_with(t: &Target, program: &str) -> Result<Endpoint> {
     }
 }
 
-/// Send `text` to one session. v2: queued (the server waits for the current turn), falling back to
-/// simpler bodies on 400. v1: `prompt_async`, skipped when the session is busy.
-pub async fn prompt_session(ep: &Endpoint, id: &str, text: &str) -> Result<i32> {
+/// Send `text` to one session. v2: hidden synthetic input unless `visible`, else (or when the
+/// server has no synthetic route) a queued prompt (the server waits for the current turn), falling
+/// back to simpler bodies on 400. v1: `prompt_async`, skipped when the session is busy.
+pub async fn prompt_session(ep: &Endpoint, id: &str, text: &str, visible: bool) -> Result<i32> {
     let http = http();
     let gone = || {
         anyhow!(
@@ -726,6 +732,25 @@ pub async fn prompt_session(ep: &Endpoint, id: &str, text: &str) -> Result<i32> 
     };
     match ep.api {
         ApiVersion::V2 => {
+            if !visible {
+                let r = with_auth(
+                    http.post(format!("{}/api/session/{id}/synthetic", ep.base)),
+                    &ep.auth,
+                )
+                .json(&json!({"text": text, "delivery": "queue"}))
+                .send()
+                .await?;
+                let st = r.status();
+                if st.is_success() {
+                    return Ok(0);
+                }
+                if st.as_u16() == 404 && session_exists(ep, id).await == Some(false) {
+                    return Err(gone());
+                }
+                eprintln!(
+                    "relay: this OpenCode has no hidden (synthetic) input (HTTP {st}); sending the wake as a prompt"
+                );
+            }
             let url = format!("{}/api/session/{id}/prompt", ep.base);
             let mut last = String::new();
             for body in prompt_bodies(text) {
@@ -792,14 +817,14 @@ pub async fn prompt(t: &Target, text: &str) -> Result<i32> {
                 ep.base
             ),
         })?;
-    prompt_session(&ep, &id, text).await
+    prompt_session(&ep, &id, text, t.show_wakes.unwrap_or(false)).await
 }
 
 /// Prompt one registered session (a station); the target only refines how to reach the server.
 pub async fn prompt_station(t: &Target, session: &str, text: &str) -> Result<i32> {
     let ep = resolve(t).await?;
     eprintln!("relay: opencode at {} ({})", ep.base, ep.api.label());
-    prompt_session(&ep, session, text).await
+    prompt_session(&ep, session, text, t.show_wakes.unwrap_or(false)).await
 }
 
 #[cfg(test)]
@@ -973,6 +998,13 @@ mod tests {
                         )
                     } else if path == "/api/session/ses_new" && method == "GET" {
                         (200, json!({"id": "ses_new"}))
+                    } else if path == "/api/session/ses_new/synthetic" && method == "POST" {
+                        // an older v2 build (reject_delivery) has no synthetic route
+                        if reject_delivery {
+                            (404, json!({"error": "not found"}))
+                        } else {
+                            (200, json!({"ok": true}))
+                        }
                     } else if path == "/api/session/ses_new/prompt" && method == "POST" {
                         if reject_delivery && b.get("delivery").is_some() {
                             (400, json!({"error": "unknown field delivery"}))
@@ -1038,10 +1070,16 @@ mod tests {
         assert_eq!(session_exists(&ep, "nope").await, Some(false));
 
         assert_eq!(
-            prompt_session(&ep, "ses_new", "hello fire").await.unwrap(),
+            prompt_session(&ep, "ses_new", "hello fire", false)
+                .await
+                .unwrap(),
             0
         );
-        let err = prompt_session(&ep, "gone", "x").await.unwrap_err();
+        assert_eq!(
+            prompt_session(&ep, "ses_new", "shown", true).await.unwrap(),
+            0
+        );
+        let err = prompt_session(&ep, "gone", "x", false).await.unwrap_err();
         assert!(err.to_string().contains("station scan"), "{err}");
 
         let seen = seen.lock().unwrap().clone();
@@ -1054,12 +1092,19 @@ mod tests {
             .unwrap();
         assert!(l.1.contains("directory=%2Fwork%2Fpay"), "{}", l.1);
         assert!(l.1.contains("order=desc"), "{}", l.1);
+        // hidden by default: synthetic input; shown on request: a prompt
+        let p = seen
+            .iter()
+            .find(|r| r.0 == "POST" && r.1 == "/api/session/ses_new/synthetic")
+            .unwrap();
+        let body: Value = serde_json::from_str(&p.3).unwrap();
+        assert_eq!(body, json!({"text": "hello fire", "delivery": "queue"}));
         let p = seen
             .iter()
             .find(|r| r.0 == "POST" && r.1 == "/api/session/ses_new/prompt")
             .unwrap();
         let body: Value = serde_json::from_str(&p.3).unwrap();
-        assert_eq!(body, json!({"text": "hello fire", "delivery": "queue"}));
+        assert_eq!(body, json!({"text": "shown", "delivery": "queue"}));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1071,12 +1116,15 @@ mod tests {
         let ep = resolve_with(&Target::blank("c", "opencode"), &bin)
             .await
             .unwrap();
-        prompt_session(&ep, "ses_new", "again").await.unwrap();
+        // no synthetic route on this build: falls back to the prompt, then to plainer bodies
+        prompt_session(&ep, "ses_new", "again", false)
+            .await
+            .unwrap();
         let bodies: Vec<Value> = seen
             .lock()
             .unwrap()
             .iter()
-            .filter(|r| r.0 == "POST")
+            .filter(|r| r.0 == "POST" && r.1.ends_with("/prompt"))
             .map(|r| serde_json::from_str(&r.3).unwrap())
             .collect();
         assert_eq!(
