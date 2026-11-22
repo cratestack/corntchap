@@ -347,3 +347,123 @@ async fn sessions_sign_what_they_write() {
         .await;
     assert_eq!(r["isError"], true, "{r}");
 }
+
+#[tokio::test]
+async fn one_session_writes_to_another() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let root = tok.unwrap();
+    app.post(&root, "/teams", json!({"name": "acme"})).await;
+    app.post(
+        &root,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "Payments"}),
+    )
+    .await;
+    let (_, v) = app
+        .post(
+            &root,
+            "/agents",
+            json!({"name": "doug", "kind": "opencode", "runtime": "local"}),
+        )
+        .await;
+    let doug = v["token"].as_str().unwrap().to_string();
+    app.post(&root, "/teams/acme/members", json!({"principal": "doug"}))
+        .await;
+    let mut st = vec![];
+    for (s, label) in [
+        ("ses_a", "quiet-planet"),
+        ("ses_b", "tidy-eagle"),
+        ("ses_c", "crisp-mountain"),
+    ] {
+        let (_, v) = app
+            .post(
+                &root,
+                "/stations",
+                json!({"cook": "doug", "project": "PAY", "runtime": "opencode", "session": s, "label": label}),
+            )
+            .await;
+        st.push(v["id"].as_str().unwrap().to_string());
+    }
+    // quiet-planet is the main station, yet a message to tidy-eagle wakes tidy-eagle only
+    app.post(&root, &format!("/stations/{}/main", st[0]), json!({}))
+        .await;
+    let c = cursor(&app).await;
+    let m = ok(
+        &app.mcp(
+            &doug,
+            "pass",
+            json!({"project": "PAY", "message": "can you rebase first?", "to": st[1], "station": st[0]}),
+        )
+        .await,
+        "station dm",
+    );
+    assert_eq!(
+        (
+            &m["station_label"],
+            &m["to_station"],
+            &m["to_station_label"]
+        ),
+        (&json!("quiet-planet"), &json!(st[1]), &json!("tidy-eagle"))
+    );
+    let w = wakes_after(&app, c).await;
+    assert_eq!(w, [("doug".to_string(), st[1].clone())].into());
+    let text: String =
+        sqlx::query_scalar("select payload->>'text' from events where kind = 'wake' and seq > $1")
+            .bind(c)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert!(
+        text.contains("doug (quiet-planet) wrote to this session (tidy-eagle)")
+            && text.contains(&format!("to {}", st[0])),
+        "the answer goes back to the sending session: {text}"
+    );
+    // tidy-eagle answers to quiet-planet: that one is woken, not the others
+    let c = cursor(&app).await;
+    ok(
+        &app.mcp(
+            &doug,
+            "pass",
+            json!({"project": "PAY", "message": "done", "to": st[0], "station": st[1]}),
+        )
+        .await,
+        "answer",
+    );
+    assert_eq!(
+        wakes_after(&app, c).await,
+        [("doug".to_string(), st[0].clone())].into()
+    );
+    // not to yourself; not to a station of another pot
+    let r = app
+        .mcp(
+            &doug,
+            "pass",
+            json!({"project": "PAY", "message": "x", "to": st[0], "station": st[0]}),
+        )
+        .await;
+    assert_eq!(r["isError"], true, "{r}");
+    let r = app
+        .mcp(
+            &doug,
+            "pass",
+            json!({"project": "PAY", "message": "x", "to": "st_nothere00"}),
+        )
+        .await;
+    assert_eq!(r["isError"], true, "{r}");
+    // a person can reach one session too
+    let c = cursor(&app).await;
+    ok(
+        &app.mcp(
+            &root,
+            "pass",
+            json!({"project": "PAY", "message": "status?", "to": st[2]}),
+        )
+        .await,
+        "person to a session",
+    );
+    assert_eq!(
+        wakes_after(&app, c).await,
+        [("doug".to_string(), st[2].clone())].into()
+    );
+}

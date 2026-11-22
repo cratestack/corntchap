@@ -5,7 +5,7 @@ part of "../corntchap.cstack"
 /// Post on a pot's pass, or directly to one chef.
 /// @param project Pot key, e.g. PAY.
 /// @param message What to say (markdown). @name mentions a chef; a mentioned cook is woken.
-/// @param to A chef's name (a person's login or a cook): only you and they read it, and a cook is woken with it. Leave out to post on the pot's pass, which every chef of the pot reads.
+/// @param to A chef's name (a person's login or a cook), or one session's station id (st_..., see list_stations): only you and they read it. A cook is woken on its main session; a station id wakes exactly that session, one of your own other sessions included. Leave out to post on the pot's pass, which every chef of the pot reads.
 /// @param task The task it is about, e.g. PAY-42.
 /// @param fromOwner Post in your owner's name: they asked you to say it in your chat with them. It shows as from them, via you.
 /// @param broadcast Wake every session of every chef in the pot (`@all` in the message does the same), not only the ones mentioned. Each is told to answer only if it has something to add.

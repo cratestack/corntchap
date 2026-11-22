@@ -26,6 +26,9 @@ type PassMessageView {
   station String?
   /// That session's label (its folder or title), e.g. "quiet-planet: payments".
   station_label String?
+  /// The one session a direct message was sent to (to: st_...), and its label.
+  to_station String?
+  to_station_label String?
 }
 
 /// Unread messages in a direct conversation.

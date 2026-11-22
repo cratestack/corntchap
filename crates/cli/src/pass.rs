@@ -165,10 +165,11 @@ fn print_page(page: &Value, json: bool) {
             Some(l) => format!("{from} · {l}"),
             None => from,
         };
-        let to = m["to"]
-            .as_str()
-            .map(|t| format!(" → {t}"))
-            .unwrap_or_default();
+        let to = match (m["to"].as_str(), m["to_station_label"].as_str()) {
+            (Some(t), Some(l)) => format!(" → {t} · {l}"),
+            (Some(t), None) => format!(" → {t}"),
+            _ => String::new(),
+        };
         let task = m["task"]
             .as_str()
             .map(|t| format!(" · {t}"))

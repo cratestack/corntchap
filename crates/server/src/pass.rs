@@ -32,7 +32,9 @@ const MSG_JSON: &str = r#"jsonb_build_object(
   'task', (select pr.key || '-' || t.number from tasks t where t.id = m.task_id),
   'at', m.created_at, 'woken', m.woken,
   'station', (select s.ref from stations s where s.id = m.station_id),
-  'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = m.station_id))"#;
+  'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = m.station_id),
+  'to_station', (select s.ref from stations s where s.id = m.to_station_id),
+  'to_station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = m.to_station_id))"#;
 
 /// Messages of pot `$1` that principal `$2` may read.
 const VISIBLE: &str = "m.project_id = $1 and (m.to_principal is null or m.author_id = $2 or m.relayed_by = $2 or m.to_principal = $2)";
@@ -92,15 +94,54 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
         Some(_) => format!("{author_name} (via {})", p.name),
         None => author_name.clone(),
     };
+    // the session sending it, if it said: shown with the message, a broadcast skips it, and a
+    // direct answer can come back to it
+    let own_station = crate::stations::for_claim(&mut tx, &p, a.station.as_deref(), pr.id).await?;
+    let own_ref: Option<(String, String)> =
+        match own_station {
+            Some(s) => sqlx::query_as(
+                "select ref, coalesce(label, directory, session_ref) from stations where id = $1",
+            )
+            .bind(s)
+            .fetch_optional(&mut *tx)
+            .await?,
+            None => None,
+        };
+    // `to` names a chef, or one session (st_...): then exactly that session is woken
+    let mut to_station: Option<(Uuid, String, String)> = None;
     let to = match a.to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         None => None,
+        Some(r) if r.starts_with("st_") => {
+            let row: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
+                "select st.id, st.agent_id, a.name, coalesce(st.label, st.directory, st.session_ref)
+                 from stations st join principals a on a.id = st.agent_id
+                 join team_members tm on tm.principal_id = a.id and tm.team_id = $3
+                 where st.ref = $1 and st.project_id = $2 and a.disabled_at is null",
+            )
+            .bind(r)
+            .bind(pr.id)
+            .bind(pr.team_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let (sid, agent, name, label) =
+                row.ok_or_else(|| Error::NotFound(format!("no station {r} in {}", pr.key)))?;
+            if own_station == Some(sid) {
+                return invalid(
+                    "that is your own session: name another station, or leave `to` out",
+                );
+            }
+            to_station = Some((sid, r.to_string(), label));
+            Some((agent, name))
+        }
         Some(name) => {
             let name = name.trim_start_matches('@').to_lowercase();
             let id = chef(&mut tx, pr.team_id, &name)
                 .await?
                 .ok_or_else(|| Error::NotFound(format!("no chef named {name} in {}", pr.key)))?;
             if id == p.id || id == author {
-                return invalid("that is you: leave `to` out to post on the pot's pass");
+                return invalid(
+                    "that is you: leave `to` out to post on the pot's pass, or name one of your other sessions (to: st_...)",
+                );
             }
             Some((id, name))
         }
@@ -115,11 +156,9 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             Some(t.id)
         }
     };
-    // the session sending it, if it said: shown with the message, and a broadcast skips it
-    let own_station = crate::stations::for_claim(&mut tx, &p, a.station.as_deref(), pr.id).await?;
     let (id, seq): (Uuid, i64) = sqlx::query_as(
-        "insert into pass_messages (project_id, author_id, to_principal, body, task_id, relayed_by, station_id)
-         values ($1,$2,$3,$4,$5,$6,$7) returning id, seq",
+        "insert into pass_messages (project_id, author_id, to_principal, body, task_id, relayed_by, station_id, to_station_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8) returning id, seq",
     )
     .bind(pr.id)
     .bind(author)
@@ -128,6 +167,7 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     .bind(task)
     .bind(relayed_by)
     .bind(own_station)
+    .bind(to_station.as_ref().map(|t| t.0))
     .fetch_one(&mut *tx)
     .await?;
     // Your own message is read (by its author and by the cook that relayed it).
@@ -234,9 +274,18 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
         if !is_agent || !woken.insert(id) {
             continue;
         }
+        // answers go back to the sending session when it said which one it is
+        let (from, reply_to) = match &own_ref {
+            Some((r, label)) => (format!("{signature} ({label})"), r.clone()),
+            None => (signature.clone(), author_name.clone()),
+        };
         let prompt = if direct {
+            let whom = match &to_station {
+                Some((_, _, label)) => format!("this session ({label})"),
+                None => "you".to_string(),
+            };
             format!(
-                "{signature} wrote to you on {}'s pass (only you can read it):\n\n{body}\n\nAnswer with the `pass` tool (project {}, to {author_name}); read_pass shows the conversation.",
+                "{from} wrote to {whom} on {}'s pass (only you can read it):\n\n{body}\n\nAnswer with the `pass` tool (project {}, to {reply_to}); read_pass shows the conversation.",
                 pr.key, pr.key
             )
         } else {
@@ -245,7 +294,12 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
                 pr.key, pr.key
             )
         };
-        reached.push(wake(&mut tx, pr.id, &pr.key, id, None, task, &prompt, "pass").await?);
+        let station = if direct {
+            to_station.as_ref().map(|t| t.0)
+        } else {
+            None
+        };
+        reached.push(wake(&mut tx, pr.id, &pr.key, id, station, task, &prompt, "pass").await?);
     }
     let out = record_woken(&mut tx, id, &reached).await?;
     tx.commit().await?;
