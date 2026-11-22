@@ -748,6 +748,8 @@ mod tests {
             r.git(&["init", "-q", "-b", "main"]);
             r.git(&["config", "user.email", "t@example.test"]);
             r.git(&["config", "user.name", "t"]);
+            // byte-exact files on every OS (Windows runners default to core.autocrlf=true)
+            r.git(&["config", "core.autocrlf", "false"]);
             r
         }
         fn git(&self, args: &[&str]) -> String {
