@@ -115,6 +115,9 @@ pub struct Inner {
     /// OIDC provider, discovered lazily so the server can start before the IdP is up.
     pub oidc: tokio::sync::OnceCell<authkestra::oidc::OidcProvider>,
     pub storage: Option<Arc<crate::files::Storage>>,
+    /// Flips to true when the server starts shutting down: the endless streams (relay wakes,
+    /// the live feed) and long-polls end so the graceful drain finishes at once.
+    pub stopping: tokio::sync::watch::Sender<bool>,
 }
 
 #[derive(Clone)]
@@ -161,6 +164,18 @@ impl AppState {
             guard,
             oidc: tokio::sync::OnceCell::new(),
             storage,
+            stopping: tokio::sync::watch::channel(false).0,
         }))
+    }
+
+    /// Ask the streams and long-polls to end (the server is shutting down).
+    pub fn shut_down(&self) {
+        self.stopping.send_replace(true);
+    }
+
+    /// Resolves once the server starts shutting down.
+    pub async fn stopped(&self) {
+        let mut rx = self.stopping.subscribe();
+        let _ = rx.wait_for(|s| *s).await;
     }
 }

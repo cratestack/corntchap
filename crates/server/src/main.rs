@@ -143,7 +143,7 @@ async fn main() -> anyhow::Result<()> {
             }
             let bind = cfg.bind.clone();
             let state = AppState::new(pool, cfg);
-            let router = app::build(state)?;
+            let router = app::build(state.clone())?;
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!("listening on {bind}");
             // The first signal starts a graceful shutdown; a second one force-exits. One task
@@ -154,6 +154,8 @@ async fn main() -> anyhow::Result<()> {
                 async move {
                     next_signal().await;
                     let _ = stop.send(true);
+                    // End the endless streams so the drain below has nothing left to wait for.
+                    state.shut_down();
                     next_signal().await;
                     tracing::warn!("second signal: forcing exit");
                     std::process::exit(130);

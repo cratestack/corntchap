@@ -38,9 +38,13 @@ pub async fn wait_for_work(
         if now >= deadline {
             return Ok(json!({"ready": []}));
         }
-        // Wake on any event; the periodic re-check also catches expiring leases.
+        // Wake on any event; the periodic re-check also catches expiring leases. A shutdown ends
+        // the wait with nothing, so the client simply asks again (of the next server).
         let wait = (deadline - now).min(Duration::from_secs(3));
-        let _ = tokio::time::timeout(wait, rx.recv()).await;
+        tokio::select! {
+            _ = tokio::time::timeout(wait, rx.recv()) => {}
+            _ = state.stopped() => return Ok(json!({"ready": []})),
+        }
     }
 }
 
@@ -102,7 +106,14 @@ pub async fn relay_stream(
                 });
                 yield Ok(Event::default().id(seq.to_string()).event("wake").data(data.to_string()));
             }
-            let _ = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+            tokio::select! {
+                _ = tokio::time::timeout(Duration::from_secs(5), rx.recv()) => {}
+                _ = state.stopped() => {
+                    // Tell the relay, then end the stream: it reconnects (from its Last-Event-ID).
+                    yield Ok(Event::default().event("shutdown").data("{}"));
+                    return;
+                }
+            }
         }
     };
     Ok(Sse::new(s).keep_alive(
@@ -172,7 +183,13 @@ pub async fn events_stream(
                 }
             }
             // Lagged or closed channels just mean "re-read"; a timeout bounds missed NOTIFYs.
-            let _ = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await;
+            tokio::select! {
+                _ = tokio::time::timeout(Duration::from_secs(10), rx.recv()) => {}
+                _ = state.stopped() => {
+                    yield Ok(Event::default().event("shutdown").data("{}"));
+                    return;
+                }
+            }
         }
     };
     Ok(Sse::new(s).keep_alive(
