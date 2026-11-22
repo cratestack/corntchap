@@ -1199,6 +1199,8 @@ impl ProcedureRegistry for Procedures {
                     to: a.to,
                     task: a.task,
                     from_owner: a.fromOwner.unwrap_or(false),
+                    broadcast: a.broadcast.unwrap_or(false),
+                    station: a.station,
                 },
             )
             .await,

@@ -31,6 +31,12 @@ pub enum PassCmd {
         /// Post in your owner's name (they asked you to say it).
         #[arg(long)]
         from_owner: bool,
+        /// Wake every session of every cook in the pot (same as writing @all).
+        #[arg(long, conflicts_with = "to")]
+        broadcast: bool,
+        /// Your own station (st_...): a broadcast skips it but reaches your other sessions.
+        #[arg(long)]
+        station: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -60,6 +66,8 @@ pub async fn run(c: PassCmd, api: &Api) -> Result<()> {
             to,
             task,
             from_owner,
+            broadcast,
+            station,
             json,
         } => {
             let mut body = message.join(" ");
@@ -72,7 +80,8 @@ pub async fn run(c: PassCmd, api: &Api) -> Result<()> {
             let m = api
                 .procedure(
                     "passPost",
-                    json!({"project": pot, "message": body, "to": to, "task": task, "fromOwner": from_owner}),
+                    json!({"project": pot, "message": body, "to": to, "task": task, "fromOwner": from_owner,
+                           "broadcast": broadcast, "station": station}),
                 )
                 .await?;
             if json {
@@ -81,6 +90,15 @@ pub async fn run(c: PassCmd, api: &Api) -> Result<()> {
                 match m["to"].as_str() {
                     Some(t) => ok_line(format!("sent to {t} on {}", s(&m, "project"))),
                     None => ok_line(format!("posted on {}'s pass", s(&m, "project"))),
+                }
+                let woken: Vec<&str> = m["woken"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                if !woken.is_empty() {
+                    println!("  woke {}", woken.join(", "));
                 }
             }
         }

@@ -8,9 +8,11 @@ part of "../corntchap.cstack"
 /// @param to A chef's name (a person's login or a cook): only you and they read it, and a cook is woken with it. Leave out to post on the pot's pass, which every chef of the pot reads.
 /// @param task The task it is about, e.g. PAY-42.
 /// @param fromOwner Post in your owner's name: they asked you to say it in your chat with them. It shows as from them, via you.
-mutation procedure passPost(project: String, message: String, to: String?, task: String?, fromOwner: Boolean?): PassMessageView
+/// @param broadcast Wake every session of every chef in the pot (`@all` in the message does the same), not only the ones mentioned. Each is told to answer only if it has something to add.
+/// @param station Your own station (st_...): a broadcast then skips this session but reaches your other sessions. Without it your cook's sessions are all skipped.
+mutation procedure passPost(project: String, message: String, to: String?, task: String?, fromOwner: Boolean?, broadcast: Boolean?, station: String?): PassMessageView
   @allow(auth() != null)
-  @mcp(tool: "pass", description: "Talk to the other chefs (cooks and people) of a pot: post on the pot's pass, which everyone in the pot reads, or pass `to` for a direct message only you and they read. A direct message to a cook, or an @mention of one, wakes it with your message. Use it to coordinate (who takes what, a heads-up about a shared file, a handoff); decisions that need a person go to ask, durable knowledge to remember (the pass is kept a week). When your owner asks you in your chat to tell the pot (or someone) something, post it with fromOwner=true.")
+  @mcp(tool: "pass", description: "Talk to the other chefs (cooks and people) of a pot: post on the pot's pass, which everyone in the pot reads, or pass `to` for a direct message only you and they read. A direct message to a cook, or an @mention of one, wakes it with your message. Use it to coordinate (who takes what, a heads-up about a shared file, a handoff); decisions that need a person go to ask, durable knowledge to remember (the pass is kept a week). When your owner asks you in your chat to tell the pot (or someone) something, post it with fromOwner=true. To reach everyone at once (every session of every cook, your own other sessions included), set broadcast=true (or write @all) and pass your station.")
 
 /// Read a pot's pass and your direct messages.
 /// @param project Pot key, e.g. PAY.
