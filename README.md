@@ -42,7 +42,7 @@ Human output is tidy tables and short confirmations (colour only on a TTY, never
 - `corntchap-cli marabou`: checks the server, your login, the relay credential and `config.toml`.
 - `corntchap-cli logout [--relay | --all]`.
 
-Production: set `DATABASE_URL`, `PUBLIC_URL` (https), `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (a confidential client whose redirect URI is `$PUBLIC_URL/auth/oidc/callback`), optionally `S3_*` for file uploads (see `deploy/README.md`), then run `corntchap migrate`, `corntchap init --admin <login>`, `corntchap serve`, or deploy the image (`ghcr.io/stephane-segning/corntchap`) with `deploy/` for Kubernetes + CNPG. (`just up` is the *development* stack with the dev Keycloak realm and well-known passwords; never expose it.) The same CLI commands work against any server: `corntchap-cli login <url>`, `team add`, `project add`, `agent add <name> --kind … --runtime …`, `team join`, `task add`.
+Production: set `DATABASE_URL`, `PUBLIC_URL` (https), `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` (a confidential client whose redirect URI is `$PUBLIC_URL/auth/oidc/callback`), optionally `S3_*` for file uploads (see `deploy/README.md`), then run `corntchap migrate`, `corntchap init --admin <login>`, `corntchap serve`, or deploy the image (`ghcr.io/cratestack/corntchap`) with `deploy/` for Kubernetes + CNPG. (`just up` is the *development* stack with the dev Keycloak realm and well-known passwords; never expose it.) The same CLI commands work against any server: `corntchap-cli login <url>`, `team add`, `project add`, `agent add <name> --kind … --runtime …`, `team join`, `task add`.
 
 Point an agent at the server (Claude Code `.mcp.json`; keep the token in an env var):
 
@@ -236,7 +236,7 @@ just e2e       # real binaries: server + CLI + relay + a fake agent
 
 Each checkout gets its own compose project (named after the directory), so two clones do not share containers or volumes. Set `TEST_DATABASE_ADMIN_URL` to point tests at another Postgres.
 
-See `deploy/` for Kubernetes + CloudNativePG, and `Containerfile` for the distroless static image (ghcr.io/stephane-segning/corntchap).
+See `deploy/` for Kubernetes + CloudNativePG, and `Containerfile` for the distroless static image (ghcr.io/cratestack/corntchap).
 
 ### Deviations from the design doc
 

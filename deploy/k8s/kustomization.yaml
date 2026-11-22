@@ -9,5 +9,5 @@ resources:
   - service.yaml
   - ingress.yaml
 images:
-  - name: ghcr.io/stephane-segning/corntchap
+  - name: ghcr.io/cratestack/corntchap
     newTag: latest   # pin to a release tag or sha-<commit> in production

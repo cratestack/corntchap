@@ -20,7 +20,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: corntchap
-          image: ghcr.io/stephane-segning/corntchap:latest
+          image: ghcr.io/cratestack/corntchap:latest
           args: ["serve"]
           ports:
             - name: http

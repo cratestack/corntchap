@@ -57,7 +57,7 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-    image: ghcr.io/stephane-segning/corntchap:dev
+    image: ghcr.io/cratestack/corntchap:dev
     depends_on:
       db: { condition: service_healthy }
       keycloak: { condition: service_healthy }

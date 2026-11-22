@@ -3,7 +3,7 @@ set positional-arguments
 
 # Static musl target (needs `musl-tools` on Debian/Ubuntu: apt install musl-tools).
 target := "x86_64-unknown-linux-musl"
-image  := "ghcr.io/stephane-segning/corntchap"
+image  := "ghcr.io/cratestack/corntchap"
 
 # Local settings: random ports from `just setup` live in .env.dev; optional overrides in .env.
 # .env.dev is loaded first, then .env, so values in .env win. Every recipe that needs them starts with {{load}}.

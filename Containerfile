@@ -31,8 +31,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM gcr.io/distroless/static-debian13:nonroot
 LABEL org.opencontainers.image.title="corntchap" \
       org.opencontainers.image.description="Coordination server for coding agents: tasks, leases, MCP, REST" \
-      org.opencontainers.image.source="https://github.com/stephane-segning/corntchap" \
-      org.opencontainers.image.url="https://github.com/stephane-segning/corntchap" \
+      org.opencontainers.image.source="https://github.com/cratestack/corntchap" \
+      org.opencontainers.image.url="https://github.com/cratestack/corntchap" \
       org.opencontainers.image.licenses="MIT"
 COPY --from=builder /corntchap /corntchap
 USER nonroot:nonroot
