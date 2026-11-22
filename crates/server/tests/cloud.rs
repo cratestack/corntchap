@@ -246,7 +246,7 @@ async fn cloud_cooks_get_work_and_messages() {
     }
     assert_eq!(url.as_deref(), Some("https://claude.ai/code/session_01X"));
 
-    // Codex cloud: the comment mentions @codex and points at the messages, without their content
+    // a GitHub comment mentions the server's default (@cook) and points at the messages, without their content
     ok(
         &app.mcp(&root, "pass", json!({"project": "PAY", "message": "the vault password is hunter2", "to": "codex-cloud"}))
             .await,
@@ -256,7 +256,7 @@ async fn cloud_cooks_get_work_and_messages() {
     let last = serde_json::from_str::<Value>(&comments.last().unwrap().3).unwrap();
     let body = last["body"].as_str().unwrap();
     assert!(
-        body.starts_with("@codex ") && body.contains("read_pass (project PAY)"),
+        body.starts_with("@cook ") && body.contains("read_pass (project PAY)"),
         "{body}"
     );
     assert!(

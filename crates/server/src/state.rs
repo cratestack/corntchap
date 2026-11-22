@@ -21,6 +21,20 @@ pub struct Config {
     pub pass_retention_days: i64,
     /// Minutes a cook has to answer a person's comment before its main station is woken again.
     pub comment_nudge_minutes: i64,
+    /// Who a github-comment wake mentions when its target names nobody (`GITHUB_MENTION`).
+    pub github_mention: String,
+}
+
+pub const DEFAULT_GITHUB_MENTION: &str = "@cook";
+
+/// `codex` and `@codex` both mean `@codex`.
+pub fn mention(m: &str) -> String {
+    let m = m.trim();
+    if m.starts_with('@') {
+        m.to_string()
+    } else {
+        format!("@{m}")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +68,7 @@ impl Config {
             storage: None,
             pass_retention_days: 7,
             comment_nudge_minutes: 10,
+            github_mention: DEFAULT_GITHUB_MENTION.into(),
         }
     }
 }

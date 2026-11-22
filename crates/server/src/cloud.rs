@@ -1,5 +1,5 @@
 //! Waking cloud cooks: agents that run as one-shot cloud sessions (a Claude Code routine on the
-//! web, Codex cloud through an `@codex` comment, or any webhook). Each wake starts a fresh session
+//! web, Codex cloud or Copilot through a mention in a GitHub comment, or any webhook). Each wake starts a fresh session
 //! that remembers nothing, so the prompt carries what it needs: who it is, every message for it,
 //! the task each one is about with its latest comments, and the pantry news.
 //!
@@ -8,7 +8,7 @@
 //!   text to the run as an untrusted `<routine-fire-payload>`, so the routine's own prompt must say
 //!   to act on corntchap wakes ([`ROUTINE_PROMPT`]). 30 fires an hour per routine: wakes are
 //!   batched, and a 429 waits for `Retry-After` instead of retrying blindly (a retry is a new run).
-//! - `github-comment`: a comment mentioning the agent (`@codex` by default). Comments can be public,
+//! - `github-comment`: a comment mentioning the agent (`GITHUB_MENTION`, `@cook` by default). Comments can be public,
 //!   so they carry a pointer ("you have messages: read them with read_pass"), never the messages.
 //! - `webhook`: JSON `{text, agent, project, reasons, wakes}` to your endpoint, signed with
 //!   `X-Corntchap-Signature: sha256=<hmac>` when the target has a `secret`.
@@ -115,7 +115,10 @@ pub async fn deliver(
             let base = config["api_url"]
                 .as_str()
                 .unwrap_or("https://api.github.com");
-            let mention = config["mention"].as_str().unwrap_or("@codex");
+            let mention = config["mention"]
+                .as_str()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or(&state.config.github_mention);
             let body = cut(&format!("{mention} {}", text.pointer), MAX_COMMENT);
             state
                 .http

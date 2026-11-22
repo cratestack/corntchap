@@ -341,6 +341,11 @@ async fn a_cook_connects_itself_through_the_form_the_link_or_the_tool() {
         "gh",
     );
     let code2 = s["code"].as_str().unwrap().to_string();
+    assert_eq!(s["fields"][2]["name"], "mention");
+    assert_eq!(
+        s["fields"][2]["placeholder"], "@cook",
+        "the server's default mention"
+    );
     err(
         &call(
             &app,

@@ -106,7 +106,7 @@ procedure adminWakeTargets(cook: String): WakeTargetView[]
 
 /// Add a wake target to a cook you own (claude-routine, webhook and github-comment: admins only).
 /// @param cook The cook's name.
-/// @param type relay (default), claude-routine (a Claude Code routine on the web), webhook or github-comment (e.g. @codex for Codex cloud).
+/// @param type relay (default), claude-routine (a Claude Code routine on the web), webhook or github-comment (a mention in a GitHub comment, e.g. @codex for Codex cloud).
 /// @param projects Comma-separated pot keys to wake for (default all).
 /// @param labels Comma-separated labels to wake for (default any).
 /// @param url claude-routine: the routine's API trigger URL (https://api.anthropic.com/v1/claude_code/routines/trig_.../fire); webhook: the URL to POST to.
@@ -114,10 +114,10 @@ procedure adminWakeTargets(cook: String): WakeTargetView[]
 /// @param issue github-comment: issue or PR number to comment on.
 /// @param token claude-routine: the routine's API token; webhook: a bearer token; github-comment: a GitHub token allowed to comment (stored, never shown again).
 /// @param secret webhook: sign each body with HMAC-SHA256 in X-Corntchap-Signature (stored, never shown again).
-/// @param mention github-comment: who the comment mentions (default @codex).
+/// @param mention github-comment: who the comment mentions (default: the server's GITHUB_MENTION, @cook).
 mutation procedure adminAddWakeTarget(cook: String, type: String?, projects: String?, labels: String?, url: String?, repo: String?, issue: Int?, token: String?, secret: String?, mention: String?): WakeTargetAdded
   @allow(auth() != null)
-  @mcp(tool: "add_wake_target", description: "Add a way to wake an idle cook you own: relay (a fire on its machine), claude-routine (fires a Claude Code routine on the web, each wake a fresh cloud session), webhook, or github-comment (e.g. @codex on an issue for Codex cloud). Cloud targets (admins only) get new work and every message for the cook: pass messages, mentions, comments, answers. A claude-routine's own prompt must tell it to act on corntchap wakes: the answer gives the text to paste.")
+  @mcp(tool: "add_wake_target", description: "Add a way to wake an idle cook you own: relay (a fire on its machine), claude-routine (fires a Claude Code routine on the web, each wake a fresh cloud session), webhook, or github-comment (a mention on an issue or PR, e.g. @codex for Codex cloud or @copilot). Cloud targets (admins only) get new work and every message for the cook: pass messages, mentions, comments, answers. A claude-routine's own prompt must tell it to act on corntchap wakes: the answer gives the text to paste.")
 
 /// Delete a wake target.
 /// @param id The wake target's id.

@@ -65,7 +65,7 @@ corntchap-cli fire uninstall [--purge] [--yes]  # stop, disable and delete that 
 corntchap-cli cook wake ls                      # all your agents' wake targets
 # cloud agents (see "Cloud cooks" below)
 corntchap-cli cook wake add claude-web --type claude-routine --url https://api.anthropic.com/v1/claude_code/routines/trig_…/fire --token sk-ant-oat01-…
-corntchap-cli cook wake add codex-cloud --type github-comment --repo acme/payments --issue 12 --token ghp_… [--mention @codex]
+corntchap-cli cook wake add codex-cloud --type github-comment --repo acme/payments --issue 12 --token ghp_… [--mention @codex]   # default: GITHUB_MENTION (@cook)
 corntchap-cli cook wake add hooked --type webhook --url https://… [--token …] [--secret …]
 # an agent registered by device flow instead (token printed once): corntchap-cli cook enroll <name> --kind codex --runtime local
 ```
@@ -172,7 +172,7 @@ The session reads the rest through the corntchap MCP tools.
   - Prompt: Anthropic passes corntchap's text to the run as an untrusted payload, so the routine's own prompt must say to act on it. Adding the target prints that text; the console shows it with a copy button.
   - Limits: a routine takes 30 fires an hour, and a retry starts a second run. A `429` is respected (`Retry-After`), not retried blindly.
   - Each run's session link is recorded (`wake.delivered`).
-- **`github-comment`** (Codex cloud): a comment mentioning `@codex` (or `--mention`) on an issue. Comments can be public, so they only point at the messages ("read_pass …, get_task PAY-3"); the content never goes there.
+- **`github-comment`** (Codex cloud, Copilot, or any bot that answers mentions): a comment on an issue or PR mentioning the target's `mention` (`@codex`, `@copilot`, …). Without one it mentions the server's `GITHUB_MENTION`, `@cook` by default, so a fresh install never pings a bot that already works on the repository. Comments can be public, so they only point at the messages ("read_pass …, get_task PAY-3"); the content never goes there.
 - **`webhook`** (your own endpoint): `POST {text, agent, project, reasons, wakes}`, with `Authorization: Bearer <token>` when set. It is signed `X-Corntchap-Signature: sha256=<HMAC-SHA256 of the body>` when the target has a `secret`. A target `body` replaces this with a fixed body.
 
 #### Connecting a cloud cook from the agent itself
