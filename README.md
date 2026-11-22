@@ -242,6 +242,7 @@ Messages that arrive close together are batched into one run.
 - who the cook is;
 - every message;
 - each task concerned, with its status, holder and latest comments;
+- the cook's recent exchange on the pass (its direct messages and mentions from the last two days, oldest first), so a follow-up like "how far?" makes sense to a run that remembers nothing;
 - the pantry news.
 
 The session reads the rest through the corntchap MCP tools.
