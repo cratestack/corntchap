@@ -146,59 +146,68 @@ async fn main() -> anyhow::Result<()> {
             let router = app::build(state)?;
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!("listening on {bind}");
-            let served = axum::serve(listener, router).with_graceful_shutdown(shutdown_signal());
-            if !drain_within(SHUTDOWN_GRACE, served).await? {
-                tracing::warn!(
-                    "graceful shutdown did not finish within {SHUTDOWN_GRACE:?}: abandoning the \
-                     connections still open (the SSE endpoints are endless by design)"
-                );
-            }
+            // The first signal starts a graceful shutdown; a second one force-exits. One task
+            // owns the signal streams so the second is never lost to a race with a spawn.
+            let (stop, stopped) = tokio::sync::watch::channel(false);
+            tokio::spawn({
+                let stop = stop.clone();
+                async move {
+                    next_signal().await;
+                    let _ = stop.send(true);
+                    next_signal().await;
+                    tracing::warn!("second signal: forcing exit");
+                    std::process::exit(130);
+                }
+            });
+            let mut graceful = stopped.clone();
+            let served = axum::serve(listener, router).with_graceful_shutdown(async move {
+                let _ = graceful.wait_for(|stopping| *stopping).await;
+                tracing::info!("shutting down");
+            });
+            supervise(SHUTDOWN_GRACE, served.into_future(), stopped).await?;
         }
     }
     Ok(())
 }
 
-/// How long a graceful shutdown waits for open connections before abandoning them.
+/// How long a graceful shutdown may spend draining the connections still open.
 ///
-/// `/relay/stream` and `/events/stream` are endless SSE streams by design, and axum's
-/// graceful shutdown waits for every open connection to finish. Without a bound a
-/// connected relay holds `serve(..).await` forever: the process never exits, and because
-/// tokio keeps its signal handler installed after the first one fires, every later Ctrl-C
-/// is swallowed too.
+/// `/relay/stream` and `/events/stream` are endless SSE streams by design, so a connected
+/// relay would otherwise hold a drain forever. **The bound applies only after a signal has
+/// started the shutdown** — never to the server's normal running life.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
-/// Await a server until it stops, for at most `grace`. Returns whether it stopped by itself.
+/// Run `served` until it stops by itself, or until `stop` reports a signal — then give it
+/// `grace` to drain and abandon whatever is still open.
 ///
-/// `axum::serve(..).with_graceful_shutdown(..)` implements `IntoFuture`, not `Future`, so the
-/// bound is `IntoFuture` and the conversion happens here.
-async fn drain_within<F>(grace: Duration, served: F) -> std::io::Result<bool>
+/// Nothing bounds the server before the signal: it runs until asked to stop.
+async fn supervise<F>(
+    grace: Duration,
+    served: F,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) -> std::io::Result<()>
 where
-    F: std::future::IntoFuture<Output = std::io::Result<()>>,
+    F: std::future::Future<Output = std::io::Result<()>>,
 {
-    match tokio::time::timeout(grace, served.into_future()).await {
-        Ok(finished) => finished.map(|()| true),
-        Err(_) => Ok(false),
+    let mut served = std::pin::pin!(served);
+    let signalled = async move {
+        let _ = stop.wait_for(|stopping| *stopping).await;
+    };
+    tokio::pin!(signalled);
+    tokio::select! {
+        res = &mut served => return res,
+        _ = &mut signalled => {}
     }
-}
-
-/// Resolves on the first SIGINT or (on unix) SIGTERM, so Kubernetes can stop the pod
-/// cleanly.
-///
-/// A second signal force-exits: once the first is handled, a wedged shutdown would
-/// otherwise ignore every later Ctrl-C, leaving SIGKILL as the only way out.
-async fn shutdown_signal() {
-    let (fired, wait) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
-        next_signal().await;
-        let _ = fired.send(());
-        loop {
-            next_signal().await;
-            tracing::warn!("second signal: forcing exit");
-            std::process::exit(130);
+    match tokio::time::timeout(grace, &mut served).await {
+        Ok(res) => res,
+        Err(_) => {
+            tracing::warn!(
+                "graceful shutdown did not finish within {grace:?}: abandoning the \
+                 connections still open (the SSE endpoints are endless by design)"
+            );
+            Ok(())
         }
-    });
-    let _ = wait.await;
-    tracing::info!("shutting down");
+    }
 }
 
 /// Resolves on the next SIGINT or SIGTERM.
@@ -226,34 +235,61 @@ async fn next_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::watch;
 
-    /// The bound is what stops a wedged shutdown: without it `serve(..).await` waits forever
-    /// on a connected SSE client, which is the bug this guards.
+    /// Regression: bounding the whole serve future made every server exit one grace period
+    /// after starting, whether or not anything asked it to stop.
     #[tokio::test]
-    async fn drain_abandons_a_server_that_never_stops() {
+    async fn supervise_keeps_running_without_a_signal() {
+        let (_tx, rx) = watch::channel(false);
         let endless = std::future::pending::<std::io::Result<()>>();
-        let finished = drain_within(Duration::from_millis(20), endless)
+        let ran = tokio::time::timeout(
+            Duration::from_millis(50),
+            supervise(Duration::from_millis(20), endless, rx),
+        )
+        .await;
+        assert!(
+            ran.is_err(),
+            "the server must keep running until a signal asks it to stop"
+        );
+    }
+
+    /// The bug the bound exists for: an endless SSE client must not hold the drain forever.
+    #[tokio::test]
+    async fn supervise_abandons_a_stream_that_never_drains() {
+        let (tx, rx) = watch::channel(false);
+        let endless = std::future::pending::<std::io::Result<()>>();
+        tokio::spawn(async move {
+            let _ = tx.send(true);
+        });
+        let started = std::time::Instant::now();
+        supervise(Duration::from_millis(20), endless, rx)
             .await
             .expect("abandoning is not an error");
         assert!(
-            !finished,
-            "an endless server must be abandoned, not waited on"
+            started.elapsed() >= Duration::from_millis(20),
+            "the drain gets its grace, then is abandoned"
         );
     }
 
     #[tokio::test]
-    async fn drain_reports_a_server_that_stopped_in_time() {
+    async fn supervise_returns_as_soon_as_the_server_stops() {
+        let (_tx, rx) = watch::channel(false);
         let done = async { Ok::<(), std::io::Error>(()) };
-        let finished = drain_within(Duration::from_secs(5), done)
-            .await
-            .expect("a clean stop is not an error");
-        assert!(finished, "a server that closed its connections finished");
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            supervise(Duration::from_secs(30), done, rx),
+        )
+        .await
+        .expect("a server that stopped is not waited on")
+        .expect("no error");
     }
 
     #[tokio::test]
-    async fn drain_propagates_a_serve_error() {
+    async fn supervise_propagates_a_serve_error() {
+        let (_tx, rx) = watch::channel(false);
         let failing = async { Err::<(), std::io::Error>(std::io::Error::other("bind")) };
-        let err = drain_within(Duration::from_secs(5), failing)
+        let err = supervise(Duration::from_secs(5), failing, rx)
             .await
             .expect_err("io errors surface");
         assert_eq!(err.kind(), std::io::ErrorKind::Other);
