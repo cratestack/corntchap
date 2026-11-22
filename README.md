@@ -127,6 +127,20 @@ People write in the console's Pass tab (with unread badges in the sidebar). A co
 
 CLI: `corntchap-cli pass read <POT> [--with NAME|pot] [-f]` and `pass send <POT> "message" [--to NAME] [--task PAY-1] [--from-owner]`.
 
+### Views: SQL over a pot's tasks
+
+A pot starts with its board. Further views are saved per pot by people or by cooks (`save_view`, `run_view`, `list_views`, `delete_view`; CLI `corntchap-cli view ls|run|save|rm`). A view is a SQL condition plus an optional order over the pot's task view, shown as a list or a board tab in the console, e.g. `menu = 'mvp' and 'urgent' = any(labels) and status <> 'done'` ordered by `priority desc, created_at`.
+
+Columns: `id`, `number`, `title`, `body`, `status`, `priority`, `labels`, `menu`, `claimed_by`, `created_by`, `created_at`, `updated_at`, `ready`, `lease_live`, `waiting_on_question`, `open_items`, `total_items`, `parent`.
+
+The SQL is never pasted into a query as text:
+- **Parsing:** it must be exactly one expression (or a comma-separated order).
+- **Allowlist:** every node is checked: the view's columns, literals, operators, CASE, casts and a few pure functions. No subqueries, other tables or placeholders.
+- **Running:** it runs read-only with a 3 s timeout over that pot's rows (500 at most).
+- **Saving:** a view that does not run (a type error, say) is refused when saved.
+
+Deleting: people, or the cook that made the view (or one with the `plan` grant). Saved views are also readable as the `PotView` model and the `views` MCP resource.
+
 ### The pantry: shared memory per project
 
 Every project has a pantry: what agents and people learned about it (conventions, gotchas, decisions and their reasons, how to build/test/deploy, facts about the system), saved under a stable key so the next agent starts from it instead of rediscovering it. MCP tools: `read_pantry` (the whole pantry as markdown, read once when starting on a project), `recall` (ranked full-text search with kind/tag filters; excerpts), `get_memory`, `remember` (create or update by key; `append`; pass the `revision` you read and a concurrent edit is refused instead of lost) and `forget` (agents only forget what they saved). Overwrites keep the previous version (`memory_revisions`); saves and deletions appear in the change feed (`memory.saved`, `memory.forgotten`). Also at `/api/v1/projects/{key}/pantry`, as the `memories` MCP resource and the read-only `Memory` model at `/api/v2`. Visibility follows the project: whoever sees the project shares its pantry.

@@ -11,7 +11,7 @@ use crate::{
     schema::cratestack_schema::{self, procedures::*},
     service,
     state::{AppState, Principal},
-    stations, stream,
+    stations, stream, views,
 };
 
 fn csv(v: &Option<String>) -> Vec<String> {
@@ -1223,6 +1223,76 @@ impl ProcedureRegistry for Procedures {
                 a.limit,
             )
             .await,
+        )
+    }
+
+    async fn view_list(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: view_list::Args,
+        _z: view_list::Authorized,
+    ) -> Result<view_list::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(views::list(&self.state.db, &p, &a.project).await)
+    }
+
+    async fn view_save(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: view_save::Args,
+        _z: view_save::Authorized,
+    ) -> Result<view_save::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            views::save(
+                &self.state.db,
+                &p,
+                views::Save {
+                    project: a.project,
+                    name: a.name,
+                    key: a.key,
+                    description: a.description,
+                    layout: a.layout,
+                    where_sql: a.r#where,
+                    order_sql: a.orderBy,
+                },
+            )
+            .await,
+        )
+    }
+
+    async fn view_delete(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: view_delete::Args,
+        _z: view_delete::Authorized,
+    ) -> Result<view_delete::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(views::delete(&self.state.db, &p, &a.project, &a.key).await)
+    }
+
+    async fn view_run(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: view_run::Args,
+        _z: view_run::Authorized,
+    ) -> Result<view_run::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            views::run(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.key.as_deref(),
+                a.r#where.as_deref(),
+                a.orderBy.as_deref(),
+            )
+            .await
+            .map(serde_json::Value::Array),
         )
     }
 }

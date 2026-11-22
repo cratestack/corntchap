@@ -9,6 +9,7 @@ mod setup;
 mod station;
 mod tui;
 mod ui;
+mod view;
 
 use anyhow::{Result, anyhow, bail};
 use api::{Api, Credentials, device_login};
@@ -79,6 +80,9 @@ enum Cmd {
     /// The pass: talk with a pot's chefs (people and cooks), on the pot's pass or directly.
     #[command(subcommand, name = "pass", alias = "chat")]
     Pass(pass::PassCmd),
+    /// Saved views: a SQL condition and order over a pot's tasks, shown as a tab in the console.
+    #[command(subcommand, name = "view", alias = "views")]
+    View(view::ViewCmd),
     /// Files: share screenshots, logs and build artifacts (up to 1 GiB) in a pot, behind corntchap's login.
     #[command(subcommand, name = "file", alias = "files")]
     File(file::FileCmd),
@@ -773,6 +777,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         Cmd::Menu(c) => menu::run(c, &api).await?,
         Cmd::File(c) => file::run(c, &api).await?,
         Cmd::Pass(c) => pass::run(c, &api).await?,
+        Cmd::View(c) => view::run(c, &api).await?,
         Cmd::Agent(a) => agent(a, &api).await?,
         Cmd::Station(c) => station::run(c, &api).await?,
         Cmd::Login { .. } | Cmd::Logout { .. } | Cmd::Doctor | Cmd::Relay { .. } => unreachable!(),

@@ -1,0 +1,20 @@
+part of "../corntchap.cstack"
+
+// Saved views (src/views.rs).
+
+/// A saved view of a pot's tasks.
+type ViewOut {
+  /// Stable key, e.g. urgent-mvp.
+  key String
+  name String
+  description String?
+  /// list or board.
+  layout String
+  /// The SQL condition over the pot's task view.
+  where String
+  /// The SQL order, e.g. priority desc, created_at.
+  order String?
+  position Int
+  created_by String?
+  updated_at String
+}

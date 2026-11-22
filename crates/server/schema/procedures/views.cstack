@@ -1,0 +1,42 @@
+part of "../corntchap.cstack"
+
+// Saved views (src/views.rs): a SQL condition and order over a pot's tasks, shown as a list or a
+// board. The SQL is one checked expression over the view's columns: id, number, title, body,
+// status (open, claimed, blocked, done, cancelled), priority, labels (text[]), menu, claimed_by,
+// created_by, created_at, updated_at, ready, lease_live, waiting_on_question, open_items,
+// total_items, parent. No subqueries or other tables; functions: lower, upper, length, coalesce,
+// nullif, greatest, least, now, date_trunc, age, cardinality, array_length, abs, round, starts_with.
+
+/// A pot's saved views.
+/// @param project Pot key, e.g. PAY.
+procedure viewList(project: String): ViewOut[]
+  @allow(auth() != null)
+  @mcp(tool: "list_views", description: "The saved views of a pot (besides its board): name, layout and the SQL each one runs.")
+
+/// Create a view, or update the one with the same key.
+/// @param project Pot key, e.g. PAY.
+/// @param name What people see on the tab, e.g. "Urgent on the MVP".
+/// @param where SQL condition over the pot's tasks, e.g. `menu = 'mvp' and 'urgent' = any(labels) and status <> 'done'`. Columns: id, number, title, body, status (open, claimed, blocked, done, cancelled), priority, labels (text[]), menu, claimed_by, created_by, created_at, updated_at, ready, lease_live, waiting_on_question, open_items, total_items, parent. Empty: every task.
+/// @param orderBy SQL order, e.g. `priority desc, created_at` (default priority desc, created_at).
+/// @param layout list (default) or board.
+/// @param key Stable key; derived from the name when left out. Saving the same key updates the view.
+/// @param description One line on what the view is for.
+mutation procedure viewSave(project: String, name: String, where: String?, orderBy: String?, layout: String?, key: String?, description: String?): ViewOut
+  @allow(auth() != null)
+  @mcp(tool: "save_view", description: "Build a view of a pot's tasks for the people you work with: a SQL condition and order over the pot's task view (one checked expression: the view's columns, literals, operators, CASE and a few pure functions; no subqueries or other tables), shown as a list or a board tab in the console. Try it first with run_view. A pot starts with its board only, so only add views someone asked for.")
+
+/// Delete a view.
+/// @param project Pot key, e.g. PAY.
+/// @param key The view's key.
+mutation procedure viewDelete(project: String, key: String): OkResult
+  @allow(auth() != null)
+  @mcp(tool: "delete_view", description: "Delete a saved view (people; a cook only the views it made, unless it has the plan grant).")
+
+/// The tasks of a saved view, or of a condition you are trying out.
+/// @param project Pot key, e.g. PAY.
+/// @param key A saved view's key.
+/// @param where A condition to try instead (same rules as save_view).
+/// @param orderBy An order to try.
+procedure viewRun(project: String, key: String?, where: String?, orderBy: String?): TaskView[]
+  @allow(auth() != null)
+  @mcp(tool: "run_view", description: "Run a saved view, or try a SQL condition and order over a pot's tasks before saving it with save_view (at most 500 tasks).")

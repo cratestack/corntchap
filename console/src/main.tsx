@@ -69,6 +69,7 @@ function Providers() {
             <Route element={<AppShell />}>
               <Route index element={<PotRedirect />} />
               <Route path="pots/:key" element={<PotRedirect />} />
+              <Route path="pots/:key/v/:viewKey" element={<KitchenPage />} />
               <Route path="pots/:key/:view" element={<KitchenPage />} />
               <Route path="cooks" element={<CooksPage />} />
               <Route path="fires" element={<FiresPage />} />
