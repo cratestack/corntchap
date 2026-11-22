@@ -23,9 +23,9 @@ use crate::{
 
 #[derive(Subcommand)]
 pub enum StationCmd {
-    /// Find the agent sessions of this repo and its worktrees and register them as stations (run it inside a git repo).
+    /// Find the agent sessions of this folder (in a git checkout: its root and worktrees) and register them as stations.
     Scan {
-        /// The pot (project key); default: the pot whose repo_url matches this repo's `origin`.
+        /// The pot (project key); default: the pot whose repo_url matches this checkout's git `origin`.
         #[arg(long)]
         pot: Option<String>,
         /// The cook to register the sessions for (default: your cook of the runtime's kind).
@@ -63,7 +63,7 @@ pub enum StationCmd {
     /// Stop a station being the main one (same as `main <id> --off`).
     #[command(name = "unpin")]
     Unpin { id: String },
-    /// Start a new Claude Code session in this repo (`claude -p`, in the background) and register
+    /// Start a new Claude Code session in this folder (`claude -p`, in the background) and register
     /// it as a station, so the fire can wake it later. With --fire, the cook's relay starts it
     /// instead, in a folder where the cook already has a station (works from any machine).
     Start {
@@ -499,10 +499,7 @@ async fn scan(
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let root = git(&cwd, &["rev-parse", "--show-toplevel"]).map_err(|_| {
-        anyhow!("not inside a git repository: run `station scan` from your checkout")
-    })?;
+    let root = work_folder()?;
     let mut dirs: Vec<String> = vec![root.clone()];
     if let Ok(w) = git(Path::new(&root), &["worktree", "list", "--porcelain"]) {
         for d in parse_worktrees(&w) {
@@ -522,7 +519,15 @@ async fn scan(
     scan_found(api, &dirs, pot, cook, all, dry_run, json).await
 }
 
-/// The pot of a checkout: the one given, else the pot whose repo_url matches its `origin`.
+/// Where the sessions work: the git checkout's root when there is one (its worktrees are covered
+/// too), else this very folder. Repositories are a convenience, never a requirement: a pot can
+/// span many repos, or none.
+fn work_folder() -> Result<String> {
+    let cwd = std::env::current_dir()?;
+    Ok(git(&cwd, &["rev-parse", "--show-toplevel"]).unwrap_or_else(|_| cwd.display().to_string()))
+}
+
+/// The pot of a folder: the one given, else the pot whose repo_url matches its git `origin`.
 async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<String> {
     let pots = api.get("/projects").await?;
     Ok(match pot {
@@ -530,7 +535,7 @@ async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<Strin
         None => {
             let origin = git(Path::new(root), &["remote", "get-url", "origin"]).map_err(|_| {
                 anyhow!(
-                    "this repo has no `origin` remote to match against the pots' repo_url: pass --pot KEY\n{}",
+                    "which pot? pass --pot KEY (this folder has no git `origin` to match against a pot's repo_url)\n{}",
                     pot_list(&pots)
                 )
             })?;
@@ -890,12 +895,7 @@ async fn start_here(api: &Api, a: StartArgs) -> Result<()> {
             "`claude` is not on PATH: install Claude Code first (or use --fire to start it on the cook's machine)"
         );
     }
-    let cwd = std::env::current_dir()?;
-    let root = git(&cwd, &["rev-parse", "--show-toplevel"]).map_err(|_| {
-        anyhow!(
-            "not inside a git repository: run `station start` from your checkout (or use --fire)"
-        )
-    })?;
+    let root = work_folder()?;
     let pot = resolve_pot(api, &root, a.pot).await?;
     let cook = claude_cook(api, a.cook).await?;
     let session = uuid::Uuid::new_v4().to_string();

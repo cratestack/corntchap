@@ -90,8 +90,8 @@ pub fn load_config() -> Result<RelayConfig> {
 pub const TEMPLATE: &str = r##"# corntchap relay configuration.
 #
 # Normally you need NO [[target]] at all. Register the agent sessions you work in as stations,
-# from inside a repo (all its worktrees are covered):
-#   corntchap-cli station scan
+# from the folder you run the agent in (a git checkout covers its worktrees too):
+#   corntchap-cli station scan --pot KEY
 # and the fire wakes exactly that session (OpenCode, Claude Code or Codex) in its own folder when
 # work lands. A cook needs a relay wake target: corntchap-cli cook wake add <cook> --type relay
 # Check everything with: corntchap-cli fire doctor
@@ -169,7 +169,7 @@ pub fn init(force: bool) -> Result<()> {
     std::fs::write(&p, TEMPLATE)?;
     crate::ui::ok_line(format!("wrote {}", p.display()));
     println!(
-        "Nothing else is needed: from inside a repo run `corntchap-cli station scan` to register your agent sessions as stations, then `corntchap-cli fire doctor`.\n[[target]] entries are optional (fallback / webhook); `corntchap-cli cook setup <name> --kind opencode|codex|claude-code` prints a matching block."
+        "Nothing else is needed: from the folder you run an agent in, `corntchap-cli station scan --pot KEY` registers your agent sessions as stations, then `corntchap-cli fire doctor`.\n[[target]] entries are optional (fallback / webhook); `corntchap-cli cook setup <name> --kind opencode|codex|claude-code` prints a matching block."
     );
     Ok(())
 }
