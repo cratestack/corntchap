@@ -33,3 +33,15 @@ mutation procedure stationRemove(id: String): OkResult
 mutation procedure stationSetMain(id: String, main: Boolean?): StationView
   @allow(auth() != null)
   @mcp(tool: "set_main_station", description: "Choose the session that answers a cook's messages, mentions and question answers in a pot (its main station); without one, the session woken last answers. At most one per cook and pot: setting one unsets the previous.")
+
+/// Start a new agent session for a cook in a pot, in a folder where it already has a station.
+/// The cook's relay runs it on its machine and the session becomes a station.
+/// @param project Pot key, e.g. PAY.
+/// @param cook The cook it works as (default: you, when a cook starts a session of its own).
+/// @param task A task it should take, e.g. PAY-12.
+/// @param prompt What to tell the session, on top of the task.
+/// @param directory The folder, one of the cook's station folders in that pot (default: its main station's).
+/// @param label A short name shown in the console.
+mutation procedure stationStart(project: String, cook: String?, task: String?, prompt: String?, directory: String?, label: String?): StationView
+  @allow(auth() != null)
+  @mcp(tool: "start_station", description: "Start a new Claude Code session for a cook in a pot, in a folder where the cook already has a station (its relay runs it with `claude -p` on that machine). The session becomes a new station; give it a task to take and/or a prompt.")

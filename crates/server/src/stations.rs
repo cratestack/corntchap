@@ -10,7 +10,8 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::{Error, Result, invalid},
-    service::project_by_key,
+    questions,
+    service::{project_by_key, task_by_ref},
     state::Principal,
 };
 
@@ -127,6 +128,171 @@ pub async fn register(db: &PgPool, p: &Principal, n: NewStation) -> Result<Value
     let out = one(&mut tx, id).await?;
     tx.commit().await?;
     Ok(out)
+}
+
+pub struct Start {
+    pub cook: Option<String>,
+    pub project: String,
+    pub task: Option<String>,
+    pub prompt: Option<String>,
+    pub directory: Option<String>,
+    pub label: Option<String>,
+}
+
+/// Runtimes the relay can start a fresh session for: it needs to choose the session id up front.
+pub const STARTABLE: &[&str] = &["claude-code"];
+
+/// Start a new session: a new station with a session id chosen here, woken at once. The cook's
+/// relay sees a session it has never run (no transcript on disk) and starts it with that id
+/// (`claude -p --session-id`). The folder must be one where the cook already has a station in the
+/// pot, so nobody can make a relay run an agent in an arbitrary folder.
+pub async fn start(db: &PgPool, p: &Principal, s: Start) -> Result<Value> {
+    let cook = cook_for(db, p, s.cook.as_deref()).await?;
+    let kind: Option<String> =
+        sqlx::query_scalar("select agent_kind from principals where id = $1")
+            .bind(cook.id)
+            .fetch_one(db)
+            .await?;
+    let runtime = kind.unwrap_or_default();
+    if !STARTABLE.contains(&runtime.as_str()) {
+        return invalid(format!(
+            "{} is a {} cook: only Claude Code sessions can be started for now (others: start the agent yourself, then `corntchap-cli station scan`)",
+            cook.name,
+            if runtime.is_empty() { "?" } else { &runtime }
+        ));
+    }
+    let key = s.project.trim().to_uppercase();
+    let mut tx = db.begin().await?;
+    let pr = project_by_key(&mut tx, &cook, &key).await.map_err(|_| {
+        Error::NotFound(format!(
+            "{} cannot see pot {key}: add the cook to the pot's team first",
+            cook.name
+        ))
+    })?;
+    let dirs: Vec<String> = sqlx::query_scalar(
+        "select directory from stations where agent_id = $1 and project_id = $2 and directory is not null
+         group by directory order by bool_or(main) desc, max(coalesce(last_woken_at, created_at)) desc",
+    )
+    .bind(cook.id)
+    .bind(pr.id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let want = s
+        .directory
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty());
+    let directory = match want {
+        Some(d) if dirs.iter().any(|x| x == d) => d.to_string(),
+        Some(d) => {
+            return invalid(format!(
+                "{} has no station in {d} for {key}: start it in one of {}",
+                cook.name,
+                if dirs.is_empty() {
+                    "(none yet)".into()
+                } else {
+                    dirs.join(", ")
+                }
+            ));
+        }
+        None => match dirs.first() {
+            Some(d) => d.clone(),
+            None => {
+                return invalid(format!(
+                    "{} has no station with a folder in {key} yet: run `corntchap-cli station start` (or `station scan`) once in the repo on its machine",
+                    cook.name
+                ));
+            }
+        },
+    };
+    let task = match s.task.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => {
+            let t = task_by_ref(&mut tx, &cook, t).await?;
+            if t.project_id != pr.id {
+                return invalid(format!("task {}-{} is not in pot {key}", t.key, t.number));
+            }
+            Some(t)
+        }
+        None => None,
+    };
+    let prompt = s.prompt.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    if prompt.is_some_and(|t| t.len() > 20_000) {
+        return invalid("prompt is at most 20000 characters");
+    }
+    let task_ref = task.as_ref().map(|t| format!("{}-{}", t.key, t.number));
+    let base = directory
+        .rsplit(['/', '\\'])
+        .find(|x| !x.is_empty())
+        .unwrap_or(&directory)
+        .to_string();
+    let label = s
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| match &task_ref {
+            Some(t) => format!("{base} ({t})"),
+            None => format!("{base} (new)"),
+        });
+    let session = Uuid::new_v4().to_string();
+    let id: Uuid = sqlx::query_scalar(
+        "insert into stations (ref, agent_id, project_id, runtime, session_ref, directory, label, created_by)
+         values ($1,$2,$3,$4,$5,$6,$7,$8) returning id",
+    )
+    .bind(new_ref())
+    .bind(cook.id)
+    .bind(pr.id)
+    .bind(&runtime)
+    .bind(&session)
+    .bind(&directory)
+    .bind(&label)
+    .bind(p.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query("update stations set last_woken_at = now() where id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let who: String = sqlx::query_scalar("select name from principals where id = $1")
+        .bind(p.id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let text = start_text(&who, &key, task_ref.as_deref(), prompt);
+    questions::wake(
+        &mut tx,
+        pr.id,
+        &key,
+        cook.id,
+        Some(id),
+        task.as_ref().map(|t| t.id),
+        &text,
+        "start",
+    )
+    .await?;
+    let out = one(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(out)
+}
+
+/// The first prompt of a started session. The wake adds the station hint and pantry news.
+pub fn start_text(who: &str, pot: &str, task: Option<&str>, prompt: Option<&str>) -> String {
+    let mut t = format!(
+        "{who} started this session for you in corntchap pot {pot}. Use the corntchap MCP tools."
+    );
+    match task {
+        Some(r) => t.push_str(&format!(
+            " Your task is {r}: read it (get_task), claim it (claim_task with your station), work it, tick its items and complete it. If it is taken, say so on the pass and take the next ready one (claim_next)."
+        )),
+        None if prompt.is_none() => t.push_str(
+            " Take the next ready task (claim_next with your station), work it and complete it; when none is ready, stop.",
+        ),
+        None => {}
+    }
+    if let Some(p) = prompt {
+        t.push_str(&format!("\n\n{p}"));
+    }
+    t
 }
 
 async fn one(c: &mut PgConnection, id: Uuid) -> Result<Value> {

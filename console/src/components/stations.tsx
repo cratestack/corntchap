@@ -1,12 +1,17 @@
 import { useState } from "react";
 import type { StationView } from "@corntchap/api";
-import { Hourglass, Loader2, SquareTerminal, Star, Trash2 } from "lucide-react";
+import { AppWindow, Hourglass, Loader2, Play, SquareTerminal, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useProcCall } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useOpenTask } from "@/lib/nav";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,11 +49,23 @@ function TaskButton({ id, children }: { id: string; children?: React.ReactNode }
 }
 
 /** A cook's registered agent sessions. Registration happens in the CLI; the console shows and removes them. */
-export function StationList({ stations }: { stations: StationView[] }) {
+export function StationList({ stations, cook, kind }: { stations: StationView[]; cook?: string; kind?: string | null }) {
   const call = useProcCall();
   const now = useNow();
   const [removing, setRemoving] = useState<StationView | null>(null);
   const [busy, setBusy] = useState(false);
+  const [starting, setStarting] = useState(false);
+
+  async function copyOpen(s: StationView) {
+    try {
+      await navigator.clipboard.writeText(`corntchap-cli station open ${s.id}`);
+      toast.success("Command copied", {
+        description: "Run it on that machine: it opens the session in Claude Desktop (claude --desktop --resume). Add --terminal to resume it in a terminal instead.",
+      });
+    } catch {
+      toast.error("Could not copy the command", { description: `Run corntchap-cli station open ${s.id} on that machine.` });
+    }
+  }
 
   async function setMain(s: StationView, main: boolean) {
     try {
@@ -76,8 +93,24 @@ export function StationList({ stations }: { stations: StationView[] }) {
     }
   }
 
+  const canStart = kind === "claude-code" && !!cook;
+  const startable = stations.filter((s) => !!s.directory);
+
   return (
     <div className="mt-2 space-y-2">
+      {canStart && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" disabled={startable.length === 0} onClick={() => setStarting(true)}>
+            <Play /> Start a session
+          </Button>
+          {startable.length === 0 && (
+            <span className="text-[12px] text-muted-foreground">
+              Register a session first: run <code className="font-mono text-[11.5px]">corntchap-cli station start</code> or <code className="font-mono text-[11.5px]">station scan</code> in the repo.
+            </span>
+          )}
+        </div>
+      )}
+      {canStart && <StartSessionDialog open={starting} onOpenChange={setStarting} cook={cook} stations={startable} />}
       {stations.length === 0 ? (
         <p className="text-[12.5px] text-muted-foreground">
           No stations yet. Run <code className="font-mono text-[11.5px]">corntchap-cli station scan</code> in a repo to register this cook’s sessions.
@@ -103,6 +136,17 @@ export function StationList({ stations }: { stations: StationView[] }) {
                         </p>
                       )}
                     </div>
+                    {s.runtime === "claude-code" && s.directory && (
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        aria-label={`Open ${where} in Claude Desktop`}
+                        title="Open in Claude Desktop"
+                        onClick={() => void copyOpen(s)}
+                      >
+                        <AppWindow />
+                      </Button>
+                    )}
                     <Button
                       size="icon-xs"
                       variant="ghost"
@@ -174,5 +218,125 @@ export function StationList({ stations }: { stations: StationView[] }) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+function StartSessionDialog({
+  open,
+  onOpenChange,
+  cook,
+  stations,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  cook: string;
+  stations: StationView[];
+}) {
+  const call = useProcCall();
+  const pots = [...new Set(stations.map((s) => s.project))];
+  const [pot, setPot] = useState(pots[0] ?? "");
+  const [directory, setDirectory] = useState("");
+  const [task, setTask] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const activePot = pots.includes(pot) ? pot : (pots[0] ?? "");
+  const inPot = stations.filter((s) => s.project === activePot);
+  const dirs = [...new Set([...inPot.filter((s) => s.main), ...inPot].map((s) => s.directory!))];
+  const activeDir = dirs.includes(directory) ? directory : (dirs[0] ?? "");
+
+  const t = task.trim();
+  const p = prompt.trim();
+  const text = p || (t ? `Take task ${t} in corntchap pot ${activePot}` : `Take the next ready task in corntchap pot ${activePot}`);
+  const desktop = `claude://code/new?folder=${encodeURIComponent(activeDir)}&q=${encodeURIComponent(text)}`;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const s = await call("stationStart", {
+        project: activePot,
+        cook,
+        task: t || null,
+        prompt: p || null,
+        directory: activeDir,
+      });
+      toast.success("Session started", {
+        description: `${s.label ?? s.session} starts on ${cook}’s machine when its relay (corntchap-cli fire) picks it up.`,
+      });
+      setTask("");
+      setPrompt("");
+      onOpenChange(false);
+    } catch (err) {
+      toast.error("Could not start the session", { description: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
+      <DialogContent>
+        <form onSubmit={(e) => void submit(e)} className="space-y-3">
+          <DialogHeader>
+            <DialogTitle>Start a session</DialogTitle>
+            <DialogDescription>
+              A new Claude Code session for {cook}, in a folder where it already has a station.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="start-pot" className="label-caps">Pot</Label>
+            <Select value={activePot} onValueChange={setPot}>
+              <SelectTrigger id="start-pot" size="sm" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {pots.map((x) => (
+                  <SelectItem key={x} value={x}>
+                    {x}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="start-dir" className="label-caps">Folder</Label>
+            <Select value={activeDir} onValueChange={setDirectory}>
+              <SelectTrigger id="start-dir" size="sm" className="w-full font-mono text-[12px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {dirs.map((d) => (
+                  <SelectItem key={d} value={d} className="font-mono text-[12px]">
+                    {d}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="start-task" className="label-caps">Task (optional)</Label>
+            <Input id="start-task" value={task} onChange={(e) => setTask(e.target.value)} placeholder="PAY-12" className="font-mono" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="start-prompt" className="label-caps">Prompt (optional)</Label>
+            <Textarea id="start-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} />
+          </div>
+          <DialogFooter className="sm:items-center sm:justify-between">
+            <div className="text-[12px] text-muted-foreground sm:max-w-[55%]">
+              <a href={desktop} className="underline underline-offset-2 hover:text-foreground">
+                Draft it in Claude Desktop instead
+              </a>
+              <p className="mt-1 text-[11.5px]">
+                Desktop asks you to confirm the folder and to press Send. Run <code className="font-mono">corntchap-cli station scan</code> afterwards so corntchap can wake it.
+              </p>
+            </div>
+            <Button type="submit" disabled={busy || !activePot || !activeDir}>
+              {busy ? <Loader2 className="animate-spin" /> : <Play />} Start session
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

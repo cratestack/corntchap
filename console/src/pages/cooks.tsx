@@ -329,7 +329,7 @@ function CookCard({
         <span className="label-caps">Stations</span>
         <span className="font-mono text-[11px] text-muted-foreground">{stations.length}</span>
       </button>
-      {showStations && <StationList stations={stations} />}
+      {showStations && <StationList stations={stations} cook={a.name} kind={a.agent_kind} />}
 
       <button
         type="button"

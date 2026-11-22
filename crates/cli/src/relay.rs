@@ -290,6 +290,9 @@ pub struct Station {
     pub session: String,
     pub directory: Option<String>,
     pub label: Option<String>,
+    /// A session that has never run here (a station started from the server, `stationStart`): the
+    /// fire starts it with that session id instead of resuming it.
+    pub fresh: bool,
 }
 
 /// One `wake` event.
@@ -317,6 +320,7 @@ pub fn parse_wake(v: &Value) -> Option<Wake> {
             session: str_of(st, "session")?,
             directory: str_of(st, "directory"),
             label: str_of(st, "label"),
+            fresh: false,
         })
     });
     Some(Wake {
@@ -376,6 +380,22 @@ fn fill(arg: &str, s: &Station) -> String {
         .replace("{directory}", s.directory.as_deref().unwrap_or("."))
 }
 
+/// Mark a Claude Code station whose transcript is not on this machine yet as fresh: it was started
+/// from the server with a new session id, so the fire starts it (`--session-id`) instead of
+/// resuming it.
+pub fn mark_fresh(mut w: Wake, claude_root: Option<&std::path::Path>) -> Wake {
+    if let (Some(s), Some(root)) = (w.station.as_mut(), claude_root)
+        && s.runtime == "claude-code"
+        && let Some(d) = &s.directory
+    {
+        let file = root
+            .join(crate::station::claude_dir_name(&expand(d)))
+            .join(format!("{}.jsonl", s.session));
+        s.fresh = !file.exists();
+    }
+    w
+}
+
 /// Decide the adapter, command/cwd and session for a wake. Built-in defaults per runtime need no
 /// `[[target]]`; one for the cook may refine them (OpenCode password/url, a custom command that
 /// contains `{session}`, a timeout), but the session and directory always come from the station.
@@ -421,6 +441,15 @@ pub fn plan(w: &Wake, targets: &[Target]) -> Plan {
                 session: s.session.clone(),
             }
         }
+        "claude-code" if s.fresh => Plan::Exec {
+            agent: w.agent.clone(),
+            command: ["claude", "-p", "--session-id", "{session}"]
+                .iter()
+                .map(|a| fill(a, s))
+                .collect(),
+            cwd: s.directory.clone(),
+            timeout: target.and_then(|t| t.timeout.clone()),
+        },
         "claude-code" => exec(&["claude", "-p", "--resume", "{session}"]),
         "codex" => exec(&["codex", "exec", "resume", "{session}", "-"]),
         other => match target {
@@ -574,6 +603,8 @@ pub async fn poke(cook: &str, pot: &str) -> Result<()> {
 
 /// Deliver one wake; returns an exit code (0 ok, -1 skipped/failed to start).
 pub async fn run_wake(w: &Wake, targets: &[Target]) -> i32 {
+    let fresh = mark_fresh(w.clone(), crate::station::claude_root().as_deref());
+    let w = &fresh;
     let prompt = wake_prompt(w);
     let who = match &w.station {
         Some(s) => format!("{} ({})", w.agent, s.id),
@@ -1230,6 +1261,51 @@ mod tests {
         assert!(matches!(plan(&w, &[]), Plan::Skip(_)));
         let t = Target::blank("c", "exec");
         assert_eq!(plan(&w, std::slice::from_ref(&t)), Plan::Target(t));
+    }
+
+    #[test]
+    fn a_started_claude_session_without_a_transcript_is_started_not_resumed() {
+        let root = std::env::temp_dir().join(format!("ct-fresh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let w = wake(
+            json!({"agent": "c", "project": "PAY", "station": st("claude-code", Some("/w/pay"))}),
+        );
+        let w = mark_fresh(w, Some(&root));
+        assert!(w.station.as_ref().unwrap().fresh);
+        // a custom resume command does not apply to a session that does not exist yet
+        let mut t = Target::blank("c", "exec");
+        t.command = Some(vec!["my-claude".into(), "--resume={session}".into()]);
+        match plan(&w, std::slice::from_ref(&t)) {
+            Plan::Exec { command, cwd, .. } => {
+                assert_eq!(command, ["claude", "-p", "--session-id", "sess-1"]);
+                assert_eq!(cwd.as_deref(), Some("/w/pay"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // once its transcript is on disk it is resumed like any other
+        let dir = root.join("-w-pay");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("sess-1.jsonl"), "{}\n").unwrap();
+        let w = mark_fresh(
+            wake(
+                json!({"agent": "c", "project": "PAY", "station": st("claude-code", Some("/w/pay"))}),
+            ),
+            Some(&root),
+        );
+        assert!(!w.station.as_ref().unwrap().fresh);
+        match plan(&w, &[]) {
+            Plan::Exec { command, .. } => {
+                assert_eq!(command, ["claude", "-p", "--resume", "sess-1"])
+            }
+            other => panic!("{other:?}"),
+        }
+        // other runtimes are never fresh
+        let w = mark_fresh(
+            wake(json!({"agent": "c", "project": "PAY", "station": st("codex", Some("/w/pay"))})),
+            Some(&root),
+        );
+        assert!(!w.station.as_ref().unwrap().fresh);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
