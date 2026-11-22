@@ -367,6 +367,30 @@ async fn a_cook_connects_itself_through_the_form_the_link_or_the_tool() {
     assert_eq!(cfg["mention"], "@codex");
     assert_eq!(cfg["issue"], 3);
 
+    // add_wake_target (the tool, the CLI, REST) follows the very same rules as a setup
+    err(
+        &call(&app, &alice, "add_wake_target", json!({"cook": "rita", "type": "claude-routine", "url": format!("{base}/v1/claude_code/routines/trig_9/fire"), "token": "t"})).await,
+        "routine's API trigger URL",
+    );
+    let added = call(&app, &alice, "add_wake_target", json!({"cook": "rita", "type": "claude-routine", "url": "https://api.anthropic.com/v1/claude_code/routines/trig_9/fire", "token": "sk-ant-oat01-x"})).await;
+    assert_ne!(added["isError"], true, "an owner adds a routine: {added}");
+    err(
+        &call(
+            &app,
+            &alice,
+            "add_wake_target",
+            json!({"cook": "rita", "type": "webhook", "url": "https://example.com/h"}),
+        )
+        .await,
+        "only an admin",
+    );
+    let (status, _) = app
+        .post(&alice, "/agents/rita/wake-targets", json!({"type": "github-comment", "config": {"repo": "acme/pay", "issue": 2, "token": "t", "api_url": "http://169.254.169.254"}}))
+        .await;
+    assert_eq!(
+        status, 403,
+        "only an admin points GitHub comments at another API"
+    );
     // webhooks stay an admin's call
     let s = ok(
         &call(
@@ -439,4 +463,172 @@ async fn a_cook_connects_itself_through_the_form_the_link_or_the_tool() {
         )["status"],
         "removed"
     );
+}
+
+/// A 2026-07-28 request (cratestack's path), with the client's capabilities in `_meta`.
+async fn modern(
+    app: &common::TestApp,
+    token: &str,
+    method: &str,
+    mut params: Value,
+    ui: bool,
+) -> Value {
+    let caps = if ui {
+        json!({"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}})
+    } else {
+        json!({})
+    };
+    params["_meta"] = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                             "io.modelcontextprotocol/clientCapabilities": caps});
+    let mut r = app
+        .http
+        .post(format!("{}/mcp", app.base))
+        .bearer_auth(token)
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", method)
+        .header("accept", "application/json, text/event-stream");
+    if let Some(n) = params["name"].as_str().or(params["uri"].as_str()) {
+        r = r.header("Mcp-Name", n);
+    }
+    let resp = r
+        .json(&json!({"jsonrpc": "2.0", "id": 3, "method": method, "params": params}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "{method}");
+    let v: Value = resp.json().await.unwrap();
+    assert_eq!(v["id"], 3, "{v}");
+    v["result"].clone()
+}
+
+#[tokio::test]
+async fn the_agent_is_told_whether_its_client_shows_the_form() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let root = tok.unwrap();
+    let (_, c) = app
+        .post(
+            &root,
+            "/agents",
+            json!({"name": "rita", "kind": "claude-code", "runtime": "cloud"}),
+        )
+        .await;
+    let rita = c["token"].as_str().unwrap().to_string();
+    let open = json!({"name": "connect_cloud", "arguments": {"kind": "claude-routine"}});
+    let ui_caps = json!({"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}});
+
+    // handshake era, before any initialize: the neutral wording, both ways
+    let r = rpc(&app, &rita, "tools/call", open.clone()).await["result"].clone();
+    assert!(
+        r["structuredContent"]["next"]
+            .as_str()
+            .unwrap()
+            .contains("If your client shows the corntchap form"),
+        "{r}"
+    );
+    // a client that renders MCP Apps (as said at initialize) is told the form is there
+    rpc(
+        &app,
+        &rita,
+        "initialize",
+        json!({"protocolVersion": "2025-11-25", "capabilities": ui_caps}),
+    )
+    .await;
+    let r = rpc(&app, &rita, "tools/call", open.clone()).await["result"].clone();
+    let s = ok(&r, "ui");
+    assert_eq!(s["form_shown"], true);
+    assert!(
+        s["next"]
+            .as_str()
+            .unwrap()
+            .contains("The corntchap form is shown"),
+        "{s}"
+    );
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("The corntchap form is shown"),
+        "the model reads the text"
+    );
+    // Claude Code and other terminals: give the link
+    rpc(
+        &app,
+        &rita,
+        "initialize",
+        json!({"protocolVersion": "2025-11-25", "capabilities": {}}),
+    )
+    .await;
+    let s = ok(
+        &rpc(&app, &rita, "tools/call", open.clone()).await["result"],
+        "no ui",
+    );
+    assert_eq!(s["form_shown"], false);
+    let next = s["next"].as_str().unwrap();
+    assert!(
+        next.contains("cannot show the corntchap form")
+            && next.contains(s["link"].as_str().unwrap()),
+        "{next}"
+    );
+
+    // 2026-07-28: cratestack answers, corntchap adds the form's metadata, resource and prompts
+    let tools = modern(&app, &rita, "tools/list", json!({}), true).await;
+    let t = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "connect_cloud")
+        .unwrap();
+    assert_eq!(
+        t["_meta"]["ui"]["resourceUri"], "ui://corntchap/connect-cloud",
+        "{t}"
+    );
+    let res = modern(&app, &rita, "resources/list", json!({}), true).await;
+    assert!(
+        res.to_string().contains("ui://corntchap/connect-cloud"),
+        "{res}"
+    );
+    let html = modern(
+        &app,
+        &rita,
+        "resources/read",
+        json!({"uri": "ui://corntchap/connect-cloud"}),
+        true,
+    )
+    .await;
+    assert_eq!(html["contents"][0]["mimeType"], "text/html;profile=mcp-app");
+    let p = modern(&app, &rita, "prompts/list", json!({}), true).await;
+    assert_eq!(p["prompts"][0]["name"], "connect-cloud", "{p}");
+    let s = ok(
+        &modern(&app, &rita, "tools/call", open.clone(), true).await,
+        "modern ui",
+    );
+    assert_eq!(s["form_shown"], true, "{s}");
+    let s = ok(
+        &modern(&app, &rita, "tools/call", open.clone(), false).await,
+        "modern no ui",
+    );
+    assert_eq!(s["form_shown"], false, "{s}");
+    // other tools pass through untouched
+    let w = modern(
+        &app,
+        &rita,
+        "tools/call",
+        json!({"name": "whoami", "arguments": {}}),
+        false,
+    )
+    .await;
+    assert_ne!(w["isError"], true, "{w}");
+    // the prompts and the form still need a valid token
+    let resp = app
+        .http
+        .post(format!("{}/mcp", app.base))
+        .bearer_auth("ct_nope")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "prompts/list")
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "prompts/list", "params": {}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 401);
 }

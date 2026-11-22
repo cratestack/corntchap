@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useLocation } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { ChefHat, ChevronDown, Loader2, Minus, Plug, Plus, Power, RotateCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,7 @@ import {
   useAgents,
   useClaimedTasks,
   useProc,
+  useProcCall,
   useProjects,
   useV1,
   useInvalidateAll,
@@ -426,53 +427,28 @@ function WakeTargets({ agent, runtime }: { agent: string; runtime: string | null
   );
 }
 
+/**
+ * Relays are added here. Cloud kinds go through a cloud setup, the same page an agent's
+ * connect_cloud links to (/connect/<code>): one form and one set of rules for both.
+ */
 function AddWake({ open, onOpenChange, agent, admin }: { open: boolean; onOpenChange: (o: boolean) => void; agent: string; admin: boolean }) {
   const call = useV1Call();
+  const proc = useProcCall();
+  const navigate = useNavigate();
   const [type, setType] = useState("relay");
-  const [url, setUrl] = useState("");
-  const [token, setToken] = useState("");
-  const [secret, setSecret] = useState("");
-  const [repo, setRepo] = useState("");
-  const [issue, setIssue] = useState("");
-  const [mention, setMention] = useState("");
   const [busy, setBusy] = useState(false);
-  const [routinePrompt, setRoutinePrompt] = useState<string | null>(null);
-  const reset = () => {
-    setUrl("");
-    setToken("");
-    setSecret("");
-    setRepo("");
-    setIssue("");
-    setRoutinePrompt(null);
-  };
-  const config = (): Record<string, unknown> => {
-    switch (type) {
-      case "claude-routine":
-        return { url, token };
-      case "webhook":
-        return { url, ...(token ? { token } : {}), ...(secret ? { secret } : {}) };
-      case "github-comment":
-        return { repo, issue: Number(issue), token, ...(mention.trim() ? { mention: mention.trim() } : {}) };
-      default:
-        return {};
-    }
-  };
-  const ready =
-    type === "relay" ||
-    (type === "claude-routine" && url && token) ||
-    (type === "webhook" && url) ||
-    (type === "github-comment" && repo && issue && token);
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     try {
-      const r = await call<{ routine_prompt?: string }>("POST", `/agents/${agent}/wake-targets`, { type, config: config() });
-      toast.success("Wake target added");
-      if (r.routine_prompt) {
-        setRoutinePrompt(r.routine_prompt);
-      } else {
+      if (type === "relay") {
+        await call("POST", `/agents/${agent}/wake-targets`, { type, config: {} });
+        toast.success("Wake target added");
         onOpenChange(false);
-        reset();
+      } else {
+        const s = await proc("cloudConnect", { kind: type, cook: agent });
+        onOpenChange(false);
+        navigate(`/connect/${s.code}`);
       }
     } catch (err) {
       toast.error("Could not add it", { description: errorMessage(err) });
@@ -480,130 +456,47 @@ function AddWake({ open, onOpenChange, agent, admin }: { open: boolean; onOpenCh
       setBusy(false);
     }
   }
-  const close = (o: boolean) => {
-    onOpenChange(o);
-    if (!o) reset();
-  };
   return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-lg">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Wake target for {agent}</DialogTitle>
           <DialogDescription>How an idle cook hears that there is work, or a message for it.</DialogDescription>
         </DialogHeader>
-        {routinePrompt ? (
-          <div className="space-y-3 text-[13px]">
-            <p>
-              Last step: paste this into the routine&rsquo;s prompt on <span className="font-mono">claude.ai/code/routines</span>, so each run acts on what
-              corntchap sends. The routine also needs the corntchap MCP server with {agent}&rsquo;s token (its connectors, or the repo&rsquo;s{" "}
-              <span className="font-mono">.mcp.json</span>).
-            </p>
-            <pre className="max-h-56 overflow-auto rounded-lg border border-border bg-muted/50 p-3 font-mono text-[11.5px] whitespace-pre-wrap">{routinePrompt}</pre>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(routinePrompt);
-                  toast.success("Copied");
-                }}
-              >
-                Copy the prompt
-              </Button>
-              <Button type="button" onClick={() => close(false)}>
-                Done
-              </Button>
-            </DialogFooter>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="wt-type">Kind</Label>
+            <Select value={type} onValueChange={setType}>
+              <SelectTrigger id="wt-type" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="relay">Relay: a fire on your laptop</SelectItem>
+                <SelectItem value="claude-routine">Claude Code on the web (a routine)</SelectItem>
+                <SelectItem value="github-comment">GitHub comment (Codex cloud, Copilot, …)</SelectItem>
+                {admin && <SelectItem value="webhook">Webhook (your own endpoint)</SelectItem>}
+              </SelectContent>
+            </Select>
+            {type === "relay" ? (
+              <p className="text-[12px] text-muted-foreground">
+                The fire on {agent}&rsquo;s machine wakes its sessions (<span className="font-mono">corntchap-cli fire</span>).
+              </p>
+            ) : (
+              <p className="text-[12px] text-muted-foreground">
+                Each wake starts a fresh cloud session: new work, and every message for {agent} (pass, mentions, comments, answers), batched. Next you get
+                the steps and the form, the same page {agent} gets from <span className="font-mono">connect_cloud</span>.
+              </p>
+            )}
           </div>
-        ) : (
-          <form onSubmit={submit} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="wt-type">Kind</Label>
-              <Select value={type} onValueChange={setType}>
-                <SelectTrigger id="wt-type" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="relay">Relay: a fire on your laptop</SelectItem>
-                  {admin && <SelectItem value="claude-routine">Claude Code on the web (a routine)</SelectItem>}
-                  {admin && <SelectItem value="github-comment">GitHub comment (Codex cloud, Copilot, …)</SelectItem>}
-                  {admin && <SelectItem value="webhook">Webhook (your own endpoint)</SelectItem>}
-                </SelectContent>
-              </Select>
-              {type !== "relay" && (
-                <p className="text-[12px] text-muted-foreground">
-                  Each wake starts a fresh cloud session: new work, and every message for {agent} (pass, mentions, comments, answers), batched.
-                </p>
-              )}
-            </div>
-            {(type === "claude-routine" || type === "webhook") && (
-              <div className="space-y-1.5">
-                <Label htmlFor="wt-url">{type === "claude-routine" ? "The routine's API trigger URL" : "Webhook URL"}</Label>
-                <Input
-                  id="wt-url"
-                  type="url"
-                  required
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder={type === "claude-routine" ? "https://api.anthropic.com/v1/claude_code/routines/trig_…/fire" : "https://…"}
-                />
-              </div>
-            )}
-            {type === "github-comment" && (
-              <div className="grid grid-cols-[1fr_6rem] gap-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="wt-repo">Repository</Label>
-                  <Input id="wt-repo" required value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="wt-issue">Issue</Label>
-                  <Input id="wt-issue" required inputMode="numeric" value={issue} onChange={(e) => setIssue(e.target.value.replace(/\D/g, ""))} placeholder="12" />
-                </div>
-              </div>
-            )}
-            {type !== "relay" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="wt-token">
-                  {type === "claude-routine" ? "The routine's API token" : type === "github-comment" ? "GitHub token (allowed to comment)" : "Bearer token (optional)"}
-                </Label>
-                <Input
-                  id="wt-token"
-                  type="password"
-                  autoComplete="off"
-                  required={type !== "webhook"}
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder={type === "claude-routine" ? "sk-ant-oat01-…" : ""}
-                />
-                <p className="text-[12px] text-muted-foreground">Stored on the server and never shown again.</p>
-              </div>
-            )}
-            {type === "webhook" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="wt-secret">Signing secret (optional)</Label>
-                <Input id="wt-secret" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} />
-                <p className="text-[12px] text-muted-foreground">
-                  Each body is signed: <span className="font-mono">X-Corntchap-Signature: sha256=…</span> (HMAC-SHA256).
-                </p>
-              </div>
-            )}
-            {type === "github-comment" && (
-              <div className="space-y-1.5">
-                <Label htmlFor="wt-mention">Mention</Label>
-                <Input id="wt-mention" value={mention} placeholder="@cook (the server's default), @codex, @copilot" onChange={(e) => setMention(e.target.value)} />
-                <p className="text-[12px] text-muted-foreground">Comments can be public: they point at the messages, never carry them.</p>
-              </div>
-            )}
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => close(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={busy || !ready}>
-                {busy && <Loader2 className="animate-spin" />} Add
-              </Button>
-            </DialogFooter>
-          </form>
-        )}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy}>
+              {busy && <Loader2 className="animate-spin" />} {type === "relay" ? "Add" : "Continue"}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

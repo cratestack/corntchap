@@ -10,7 +10,10 @@
 //! Routing (see [`front_door`]): a request whose `MCP-Protocol-Version` header is one of
 //! [`LEGACY_VERSIONS`], or absent, is handled here; anything else goes to cratestack.
 
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use axum::{
     body::{Body, to_bytes},
@@ -24,6 +27,8 @@ use cratestack::{
 };
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use serde_json::{Value, json};
+
+use uuid::Uuid;
 
 use crate::{auth, connect, error::Error, procs, state::AppState};
 
@@ -65,11 +70,32 @@ condition over the pot's tasks, tried first with run_view.";
 pub struct Compat<T> {
     tools: T,
     state: AppState,
+    /// Per token: whether the client said at `initialize` that it renders MCP Apps. Handshake-era
+    /// requests are stateless, so this is how a later `connect_cloud` knows if its form is shown.
+    renders_ui: Mutex<HashMap<Uuid, bool>>,
 }
 
 impl<T: McpTools> Compat<T> {
     pub fn new(tools: T, state: AppState) -> Arc<Self> {
-        Arc::new(Self { tools, state })
+        Arc::new(Self {
+            tools,
+            state,
+            renders_ui: Mutex::new(HashMap::new()),
+        })
+    }
+
+    fn remember_ui(&self, token: Option<Uuid>, renders: bool) {
+        if let (Some(t), Ok(mut m)) = (token, self.renders_ui.lock()) {
+            if m.len() > 10_000 {
+                m.clear();
+            }
+            m.insert(t, renders);
+        }
+    }
+
+    fn known_ui(&self, token: Option<Uuid>) -> Option<bool> {
+        let t = token?;
+        self.renders_ui.lock().ok()?.get(&t).copied()
     }
 }
 
@@ -91,8 +117,50 @@ pub async fn front_door<T: McpTools>(
     if is_legacy(req.headers()) {
         c.handle(req).await
     } else {
-        next.run(req).await
+        c.modern(req, next).await
     }
+}
+
+/// The methods where corntchap adds to what cratestack answers on 2026-07-28: the connect form
+/// (MCP App metadata, its ui:// resource, client-aware guidance) and the prompts.
+const MODERN_EXTRAS: &[&str] = &[
+    "tools/list",
+    "tools/call",
+    "resources/list",
+    "resources/read",
+    "prompts/list",
+    "prompts/get",
+];
+
+/// Rewrite every JSON-RPC message in a body: plain JSON, or the `data:` lines of an event stream.
+fn rewrite_body(body: &[u8], f: &dyn Fn(&mut Value)) -> Option<Vec<u8>> {
+    if let Ok(mut v) = serde_json::from_slice::<Value>(body) {
+        f(&mut v);
+        return Some(v.to_string().into_bytes());
+    }
+    let text = std::str::from_utf8(body).ok()?;
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (content, nl) = match line.strip_suffix('\n') {
+            Some(c) => (c, "\n"),
+            None => (line, ""),
+        };
+        let (content, cr) = match content.strip_suffix('\r') {
+            Some(c) => (c, "\r"),
+            None => (content, ""),
+        };
+        match content
+            .strip_prefix("data:")
+            .and_then(|d| serde_json::from_str::<Value>(d.trim_start()).ok())
+        {
+            Some(mut v) => {
+                f(&mut v);
+                out.push_str(&format!("data: {v}{cr}{nl}"));
+            }
+            None => out.push_str(line),
+        }
+    }
+    Some(out.into_bytes())
 }
 
 fn rpc_error(id: Value, code: i64, message: impl Into<String>) -> Value {
@@ -120,6 +188,90 @@ fn empty(status: StatusCode) -> Response {
 }
 
 impl<T: McpTools> Compat<T> {
+    /// 2026-07-28 requests: cratestack answers, corntchap adds the connect form and the prompts.
+    async fn modern(&self, req: Request, next: Next) -> Response {
+        let method = req
+            .headers()
+            .get("mcp-method")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        let Some(method) = method.filter(|m| MODERN_EXTRAS.contains(&m.as_str())) else {
+            return next.run(req).await;
+        };
+        let (parts, body) = req.into_parts();
+        let Ok(bytes) = to_bytes(body, MAX_BODY).await else {
+            return json_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                &rpc_error(Value::Null, -32600, "request body too large"),
+            );
+        };
+        let msg: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        let params = msg.get("params").cloned().unwrap_or(Value::Null);
+        let id = msg.get("id").cloned().unwrap_or(Value::Null);
+        // what cratestack does not serve at all: answered here, after the same authentication
+        let own = match method.as_str() {
+            "prompts/list" | "prompts/get" => true,
+            "resources/read" => params["uri"].as_str() == Some(connect::UI_URI),
+            _ => false,
+        };
+        if own {
+            if let Err(e) = auth::authenticate_headers(&self.state, &parts.headers).await {
+                return self.auth_failure(e, &parts.headers);
+            }
+            let r = match method.as_str() {
+                "prompts/list" => rpc_result(id, prompts_list()),
+                "prompts/get" => match prompt_get(&params) {
+                    Ok(r) => rpc_result(id, r),
+                    Err(m) => rpc_error(id, -32602, m),
+                },
+                _ => rpc_result(id, ui_resource()),
+            };
+            return json_response(StatusCode::OK, &r);
+        }
+        let tool = params["name"].as_str().unwrap_or_default().to_string();
+        if method == "tools/call" && !UI_TOOLS.contains(&tool.as_str()) {
+            return next
+                .run(Request::from_parts(parts, Body::from(bytes)))
+                .await;
+        }
+        let renders =
+            connect::renders_ui(&params["_meta"]["io.modelcontextprotocol/clientCapabilities"]);
+        let resp = next
+            .run(Request::from_parts(parts, Body::from(bytes)))
+            .await;
+        if !resp.status().is_success() {
+            return resp;
+        }
+        let (mut rparts, rbody) = resp.into_parts();
+        let Ok(rbytes) = to_bytes(rbody, MAX_BODY * 4).await else {
+            return empty(StatusCode::INTERNAL_SERVER_ERROR);
+        };
+        let patch = |v: &mut Value| {
+            let Some(result) = v.get_mut("result") else {
+                return;
+            };
+            match method.as_str() {
+                "tools/list" => {
+                    for t in result["tools"].as_array_mut().into_iter().flatten() {
+                        if t["name"].as_str().is_some_and(|n| UI_TOOLS.contains(&n)) {
+                            t["_meta"] = ui_meta();
+                        }
+                    }
+                }
+                "resources/list" => {
+                    if let Some(list) = result["resources"].as_array_mut() {
+                        list.push(ui_resource_entry());
+                    }
+                }
+                "tools/call" if result["isError"] != true => connect::guide_client(result, renders),
+                _ => {}
+            }
+        };
+        let out = rewrite_body(&rbytes, &patch).unwrap_or_else(|| rbytes.to_vec());
+        rparts.headers.remove(header::CONTENT_LENGTH);
+        Response::from_parts(rparts, Body::from(out))
+    }
+
     async fn handle(&self, req: Request) -> Response {
         if req.method() != Method::POST {
             let mut r = empty(StatusCode::METHOD_NOT_ALLOWED);
@@ -132,8 +284,11 @@ impl<T: McpTools> Compat<T> {
         {
             return empty(StatusCode::FORBIDDEN);
         }
-        let ctx = match auth::authenticate_headers(&self.state, req.headers()).await {
-            Ok(p) => CratestackContext::authenticated(procs::ctx_fields(&p)),
+        let (ctx, token) = match auth::authenticate_headers(&self.state, req.headers()).await {
+            Ok(p) => (
+                CratestackContext::authenticated(procs::ctx_fields(&p)),
+                p.token_id,
+            ),
             Err(e) => return self.auth_failure(e, req.headers()),
         };
         let body = match to_bytes(req.into_body(), MAX_BODY).await {
@@ -164,7 +319,7 @@ impl<T: McpTools> Compat<T> {
                 }
                 let mut out = Vec::new();
                 for m in items {
-                    if let Some(r) = self.message(&ctx, m).await {
+                    if let Some(r) = self.message(&ctx, token, m).await {
                         out.push(r);
                     }
                 }
@@ -174,7 +329,7 @@ impl<T: McpTools> Compat<T> {
                     json_response(StatusCode::OK, &Value::Array(out))
                 }
             }
-            m => match self.message(&ctx, m).await {
+            m => match self.message(&ctx, token, m).await {
                 Some(r) => json_response(StatusCode::OK, &r),
                 None => empty(StatusCode::ACCEPTED),
             },
@@ -224,7 +379,12 @@ impl<T: McpTools> Compat<T> {
     }
 
     /// One JSON-RPC message; `None` for notifications and stray responses (HTTP 202).
-    async fn message(&self, ctx: &CratestackContext, msg: Value) -> Option<Value> {
+    async fn message(
+        &self,
+        ctx: &CratestackContext,
+        token: Option<Uuid>,
+        msg: Value,
+    ) -> Option<Value> {
         let Value::Object(obj) = msg else {
             return Some(rpc_error(Value::Null, -32600, "invalid request"));
         };
@@ -240,11 +400,23 @@ impl<T: McpTools> Compat<T> {
         let id = obj.get("id").cloned()?;
         let params = obj.get("params").cloned().unwrap_or(Value::Null);
         Some(match method {
-            "initialize" => rpc_result(id, self.initialize(&params)),
+            "initialize" => {
+                self.remember_ui(token, connect::renders_ui(&params["capabilities"]));
+                rpc_result(id, self.initialize(&params))
+            }
             "ping" => rpc_result(id, json!({})),
             "tools/list" => rpc_result(id, self.list_tools()),
             "tools/call" => match self.call_tool(ctx, &params).await {
-                Ok(r) => rpc_result(id, r),
+                Ok(mut r) => {
+                    let name = params["name"].as_str().unwrap_or_default();
+                    if UI_TOOLS.contains(&name)
+                        && r["isError"] != true
+                        && let Some(renders) = self.known_ui(token)
+                    {
+                        connect::guide_client(&mut r, renders);
+                    }
+                    rpc_result(id, r)
+                }
                 Err(m) => rpc_error(id, -32602, m),
             },
             "resources/list" => rpc_result(id, self.list_resources()),
@@ -293,12 +465,7 @@ impl<T: McpTools> Compat<T> {
             })
             .collect();
         let mut resources = resources;
-        resources.push(json!({
-            "uri": connect::UI_URI,
-            "name": "connect_cloud",
-            "description": "The form to connect a cook to a cloud wake (MCP App for connect_cloud).",
-            "mimeType": UI_MIME,
-        }));
+        resources.push(ui_resource_entry());
         json!({"resources": resources})
     }
 
@@ -332,12 +499,7 @@ impl<T: McpTools> Compat<T> {
             .and_then(Value::as_str)
             .ok_or((-32602, "missing uri".to_string()))?;
         if uri == connect::UI_URI {
-            return Ok(json!({"contents": [{
-                "uri": connect::UI_URI,
-                "mimeType": UI_MIME,
-                "text": connect::UI_HTML,
-                "_meta": {"ui": {"prefersBorder": true}},
-            }]}));
+            return Ok(ui_resource());
         }
         let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
         let resource = self
@@ -455,10 +617,31 @@ fn tool_json(d: &ToolDescriptor) -> Value {
     }
     // MCP Apps: hosts that render them show the connect form next to these tools
     if UI_TOOLS.contains(&d.name) {
-        t["_meta"] =
-            json!({"ui": {"resourceUri": connect::UI_URI, "visibility": ["model", "app"]}});
+        t["_meta"] = ui_meta();
     }
     t
+}
+
+fn ui_meta() -> Value {
+    json!({"ui": {"resourceUri": connect::UI_URI, "visibility": ["model", "app"]}})
+}
+
+fn ui_resource_entry() -> Value {
+    json!({
+        "uri": connect::UI_URI,
+        "name": "connect_cloud",
+        "description": "The form to connect a cook to a cloud wake (MCP App for connect_cloud).",
+        "mimeType": UI_MIME,
+    })
+}
+
+fn ui_resource() -> Value {
+    json!({"contents": [{
+        "uri": connect::UI_URI,
+        "mimeType": UI_MIME,
+        "text": connect::UI_HTML,
+        "_meta": {"ui": {"prefersBorder": true}},
+    }]})
 }
 
 /// The MCP Apps (`io.modelcontextprotocol/ui`) HTML profile.
