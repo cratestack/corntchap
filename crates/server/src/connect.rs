@@ -293,6 +293,87 @@ fn opt(s: &Option<String>) -> Option<&str> {
     s.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// The one check for a cloud wake target's config, whoever adds it (a setup, `add_wake_target`,
+/// the CLI, REST): returns the config to store. A cook's owner may connect a Claude routine
+/// (Anthropic's trigger host) or GitHub comments; anything that can point elsewhere (a webhook,
+/// another trigger host, a GitHub API URL) is an admin's call.
+pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
+    let get = |k: &str| c[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    match kind {
+        "claude-routine" => {
+            let url = get("url").ok_or_else(|| {
+                Error::Invalid("url is required: the routine's API trigger URL".into())
+            })?;
+            let local = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
+            let ok = (url.starts_with(ROUTINE_PREFIX)
+                || (is_admin && (local || url.starts_with("https://"))))
+                && url.contains("/fire");
+            if !ok {
+                return invalid(format!(
+                    "url must be a routine's API trigger URL: {ROUTINE_PREFIX}trig_…/fire"
+                ));
+            }
+            let token = get("token").ok_or_else(|| {
+                Error::Invalid("token is required: the trigger's token (sk-ant-oat01-…)".into())
+            })?;
+            Ok(json!({"url": url, "token": token}))
+        }
+        "github-comment" => {
+            let repo = get("repo")
+                .ok_or_else(|| Error::Invalid("repo is required (owner/name)".into()))?;
+            let parts: Vec<&str> = repo.split('/').collect();
+            if parts.len() != 2
+                || parts
+                    .iter()
+                    .any(|x| x.is_empty() || x.contains(char::is_whitespace))
+            {
+                return invalid("repo is owner/name");
+            }
+            let issue = c["issue"]
+                .as_i64()
+                .or_else(|| get("issue").and_then(|i| i.trim_start_matches('#').parse().ok()))
+                .filter(|i| *i > 0)
+                .ok_or_else(|| Error::Invalid("issue is the issue or PR number".into()))?;
+            let token = get("token").ok_or_else(|| {
+                Error::Invalid("token is required: a GitHub token allowed to comment".into())
+            })?;
+            let mut out = json!({"repo": repo, "issue": issue, "token": token});
+            // without one, the server's GITHUB_MENTION applies (and follows it if it changes)
+            if let Some(m) = get("mention") {
+                out["mention"] = json!(crate::state::mention(m));
+            }
+            if let Some(api) = get("api_url") {
+                if !is_admin {
+                    return Err(Error::Forbidden(
+                        "only an admin can point GitHub comments at another API (api_url)".into(),
+                    ));
+                }
+                out["api_url"] = json!(api);
+            }
+            Ok(out)
+        }
+        "webhook" => {
+            if !is_admin {
+                return Err(Error::Forbidden(
+                    "only an admin can connect a webhook: Claude routines and GitHub comments are open to a cook's owner".into(),
+                ));
+            }
+            let url = get("url").ok_or_else(|| Error::Invalid("url is required".into()))?;
+            if !(url.starts_with("https://") || url.starts_with("http://")) {
+                return invalid("url must be http(s)");
+            }
+            // an admin's webhook may also carry headers or a fixed body
+            let mut out = c.clone();
+            out["url"] = json!(url);
+            if let Some(o) = out.as_object_mut() {
+                o.retain(|_, v| !v.is_null() && v.as_str() != Some(""));
+            }
+            Ok(out)
+        }
+        _ => invalid("type must be relay, webhook, claude-routine or github-comment"),
+    }
+}
+
 /// Finish a setup: make its wake target. The answer never contains the secret.
 pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Result<Value> {
     let db = &state.db;
@@ -306,71 +387,22 @@ pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Resul
     if s.expired {
         return invalid("this setup expired: open a new one (connect_cloud)");
     }
-    let config = match s.kind.as_str() {
-        "claude-routine" => {
-            let url = opt(&a.url).ok_or_else(|| {
-                Error::Invalid("url is required: the routine's API trigger URL".into())
-            })?;
-            let local = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
-            let ok = (url.starts_with(ROUTINE_PREFIX)
-                || (is_admin && (local || url.starts_with("https://"))))
-                && url.contains("/fire");
-            if !ok {
-                return invalid(format!(
-                    "url must be a routine's API trigger URL: {ROUTINE_PREFIX}trig_…/fire"
-                ));
-            }
-            let token = opt(&a.token).ok_or_else(|| {
-                Error::Invalid("token is required: the trigger's token (sk-ant-oat01-…)".into())
-            })?;
-            json!({"url": url, "token": token})
+    let mut raw = json!({});
+    for (k, v) in [
+        ("url", &a.url),
+        ("token", &a.token),
+        ("secret", &a.secret),
+        ("repo", &a.repo),
+        ("mention", &a.mention),
+    ] {
+        if let Some(x) = opt(v) {
+            raw[k] = json!(x);
         }
-        "github-comment" => {
-            let repo = opt(&a.repo)
-                .ok_or_else(|| Error::Invalid("repo is required (owner/name)".into()))?;
-            let parts: Vec<&str> = repo.split('/').collect();
-            if parts.len() != 2
-                || parts
-                    .iter()
-                    .any(|x| x.is_empty() || x.contains(char::is_whitespace))
-            {
-                return invalid("repo is owner/name");
-            }
-            let issue = a
-                .issue
-                .filter(|i| *i > 0)
-                .ok_or_else(|| Error::Invalid("issue is the issue or PR number".into()))?;
-            let token = opt(&a.token).ok_or_else(|| {
-                Error::Invalid("token is required: a GitHub token allowed to comment".into())
-            })?;
-            let mut c = json!({"repo": repo, "issue": issue, "token": token});
-            // without one, the server's GITHUB_MENTION applies (and follows it if it changes)
-            if let Some(m) = opt(&a.mention) {
-                c["mention"] = json!(crate::state::mention(m));
-            }
-            c
-        }
-        _ => {
-            if !is_admin {
-                return Err(Error::Forbidden("only an admin can connect a webhook: Claude routines and GitHub comments are open to a cook's owner".into()));
-            }
-            let url = opt(&a.url).ok_or_else(|| Error::Invalid("url is required".into()))?;
-            if !(url.starts_with("https://")
-                || url.starts_with("http://127.0.0.1")
-                || url.starts_with("http://localhost"))
-            {
-                return invalid("url must be https (or localhost)");
-            }
-            let mut c = json!({"url": url});
-            if let Some(sec) = opt(&a.secret) {
-                c["secret"] = json!(sec);
-            }
-            if let Some(t) = opt(&a.token) {
-                c["token"] = json!(t);
-            }
-            c
-        }
-    };
+    }
+    if let Some(i) = a.issue {
+        raw["issue"] = json!(i);
+    }
+    let config = cloud_config(&s.kind, &raw, is_admin)?;
     let mut tx = db.begin().await?;
     // the setup is finished once: lock it
     let done: Option<Option<Uuid>> =
@@ -400,4 +432,40 @@ pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Resul
     .await?;
     tx.commit().await?;
     status(state, p, code).await
+}
+
+/// Whether a client renders MCP Apps, from its capabilities (`initialize`, or a 2026-07-28
+/// request's `_meta`): it lists `io.modelcontextprotocol/ui` with our MIME type.
+pub fn renders_ui(capabilities: &Value) -> bool {
+    capabilities["extensions"]["io.modelcontextprotocol/ui"]["mimeTypes"]
+        .as_array()
+        .is_some_and(|m| {
+            m.iter()
+                .any(|t| t.as_str() == Some("text/html;profile=mcp-app"))
+        })
+}
+
+/// Tell the agent exactly what to do with a waiting setup, now that we know whether its client
+/// shows the form. Rewrites a `connect_cloud`/`connect_cloud_save` tool result in place.
+pub fn guide_client(result: &mut Value, renders: bool) {
+    let Some(v) = result.get_mut("structuredContent") else {
+        return;
+    };
+    if v["status"] != "waiting" {
+        return;
+    }
+    let code = v["code"].as_str().unwrap_or_default().to_string();
+    let link = v["link"].as_str().unwrap_or_default().to_string();
+    v["form_shown"] = json!(renders);
+    v["next"] = json!(if renders {
+        format!(
+            "The corntchap form is shown to the user next to this tool call. Tell them to follow its steps and enter the values there; do not ask them for the secret and do not tell them to do it elsewhere. If they cannot see the form, give them this link instead: {link}. Then call connect_cloud with code {code} to check."
+        )
+    } else {
+        format!(
+            "This client cannot show the corntchap form. Walk the user through the steps (the parts on claude.ai or GitHub only they can do), then give them this link, where they enter the values on corntchap, signed in: {link}. Only if they prefer to paste the values to you, call connect_cloud_save with code {code}, after warning them that the secret then stays in this conversation. Then call connect_cloud with code {code} to check, and offer a test wake (test=true)."
+        )
+    });
+    let text = v.to_string();
+    result["content"] = json!([{"type": "text", "text": text}]);
 }

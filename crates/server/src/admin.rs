@@ -484,41 +484,11 @@ pub async fn add_wake_target(
     if kind != "agent" {
         return invalid("wake targets belong to agents");
     }
-    if typ != "relay" && !p.is_admin {
-        return Err(Error::Forbidden(
-            "only an admin can add webhook, claude-routine and github-comment wake targets".into(),
-        ));
-    }
-    match typ {
-        "relay" => {}
-        "webhook" => {
-            if config.get("url").and_then(|u| u.as_str()).is_none() {
-                return invalid("webhook targets need config.url");
-            }
-        }
-        "github-comment" => {
-            for k in ["repo", "issue", "token"] {
-                if config.get(k).is_none() {
-                    return invalid(format!("github-comment targets need config.{k}"));
-                }
-            }
-        }
-        "claude-routine" => {
-            let url = config.get("url").and_then(|u| u.as_str()).unwrap_or("");
-            let local = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
-            if !(url.starts_with("https://") || local) || !url.contains("/fire") {
-                return invalid(
-                    "claude-routine targets need config.url, the routine's API trigger URL (https://api.anthropic.com/v1/claude_code/routines/trig_.../fire)",
-                );
-            }
-            if config.get("token").and_then(|t| t.as_str()).is_none() {
-                return invalid(
-                    "claude-routine targets need config.token, the routine's API token (sk-ant-oat01-...)",
-                );
-            }
-        }
-        _ => return invalid("type must be relay, webhook, claude-routine or github-comment"),
-    }
+    // relays need nothing; cloud targets: the same rules as a cloud setup (src/connect.rs)
+    let config = match typ {
+        "relay" => config,
+        _ => crate::connect::cloud_config(typ, &config, p.is_admin)?,
+    };
     let tid = Uuid::new_v4();
     let projects: Vec<String> = projects.into_iter().map(|s| s.to_uppercase()).collect();
     sqlx::query("insert into wake_targets (id, agent_id, type, projects, labels, config) values ($1,$2,$3,$4,$5,$6)")

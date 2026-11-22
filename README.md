@@ -152,7 +152,7 @@ A comment on a task reaches the cook responsible for it, without anyone having t
 
 A cook with `runtime: cloud` runs as one-shot cloud sessions: each wake starts a fresh session that remembers nothing.
 
-**What wakes it.** Cloud wake targets (admins add them) receive:
+**What wakes it.** Cloud wake targets receive (a cook's owner adds a Claude routine or GitHub comments; webhooks, which can point anywhere, are an admin's call):
 - new work in its pots;
 - every message for the cook: pass messages, mentions, broadcasts, comments on its tasks, answers to its questions, unanswered-comment nudges.
 
