@@ -1,9 +1,9 @@
 #!/bin/sh
 # Install corntchap-cli from the latest GitHub release.
-#   curl -fsSL https://raw.githubusercontent.com/stephane-segning/corntchap/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | sh
 # Env: VERSION=v0.1.0 to pin, INSTALL_DIR=~/.local/bin to override the destination.
 set -eu
-REPO=stephane-segning/corntchap
+REPO=cratestack/corntchap
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 arch=$(uname -m)
 case "$os" in linux|darwin) ;; *) echo "unsupported OS: $os" >&2; exit 1;; esac
