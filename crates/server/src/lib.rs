@@ -10,6 +10,7 @@ pub mod files;
 pub mod jobs;
 pub mod mcp_compat;
 pub mod menus;
+pub mod oauth;
 pub mod pages;
 pub mod pantry;
 pub mod pass;

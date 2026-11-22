@@ -125,14 +125,7 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
             get(
                 |axum::extract::State(st): axum::extract::State<AppState>| async move {
                     let base = &st.config.public_url;
-                    axum::Json(serde_json::json!({
-                        "issuer": base,
-                        "device_authorization_endpoint": format!("{base}/oauth/device/code"),
-                        "token_endpoint": format!("{base}/oauth/token"),
-                        "grant_types_supported": [crate::web::DEVICE_GRANT],
-                        "token_endpoint_auth_methods_supported": ["none"],
-                        "response_types_supported": [],
-                    }))
+                    axum::Json(crate::oauth::metadata(base))
                 },
             ),
         )

@@ -48,6 +48,15 @@ pub fn routes() -> Router<AppState> {
         .route("/logout", get(logout_page).post(logout))
         .route("/oauth/device/code", post(device_code))
         .route("/oauth/token", post(device_token))
+        .route("/oauth/register", post(crate::oauth::register))
+        .route(
+            "/oauth/authorize",
+            get(crate::oauth::authorize).post(crate::oauth::decide),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource/mcp/{pot}",
+            get(crate::oauth::pot_resource_metadata),
+        )
         .route("/device", get(device_page).post(device_decision))
         .route("/board", get(|| async { Redirect::to("/") }))
         .route("/board/{key}", get(board_redirect))
@@ -221,7 +230,7 @@ async fn serve_file(
     }
 }
 
-fn login_redirect(next: &str) -> Response {
+pub(crate) fn login_redirect(next: &str) -> Response {
     Redirect::to(&format!("/auth/oidc/login?next={}", urlencode(next))).into_response()
 }
 
@@ -296,7 +305,7 @@ fn has_admin_role(id_token: &str, role: &str) -> bool {
             .any(|k| id_token_claim(id_token, k).is_some_and(|v| matches(&v)))
 }
 
-fn csrf_ok(a: &str, b: &str) -> bool {
+pub(crate) fn csrf_ok(a: &str, b: &str) -> bool {
     use subtle::ConstantTimeEq;
     a.as_bytes().ct_eq(b.as_bytes()).into()
 }
@@ -693,7 +702,6 @@ fn oauth_err(status: StatusCode, code: &str) -> Response {
 
 #[derive(Deserialize, Default)]
 struct TokenReq {
-    grant_type: Option<String>,
     device_code: Option<String>,
 }
 
@@ -702,10 +710,20 @@ async fn device_token(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response> {
-    let req: TokenReq = parse_body(&headers, body).await?;
-    if req.grant_type.as_deref() != Some(DEVICE_GRANT) {
-        return Ok(oauth_err(StatusCode::BAD_REQUEST, "unsupported_grant_type"));
+    // the browser flow (MCP clients): authorization code and refresh token
+    let all: HashMap<String, String> = parse_body::<HashMap<String, Value>>(&headers, body.clone())
+        .await?
+        .into_iter()
+        .filter_map(|(k, v)| match v {
+            Value::String(s) => Some((k, s)),
+            Value::Null => None,
+            other => Some((k, other.to_string())),
+        })
+        .collect();
+    if all.get("grant_type").map(String::as_str) != Some(DEVICE_GRANT) {
+        return crate::oauth::token(&state, &all).await;
     }
+    let req: TokenReq = parse_body(&headers, body).await?;
     let Some(dc) = req.device_code else {
         return Ok(oauth_err(StatusCode::BAD_REQUEST, "invalid_request"));
     };

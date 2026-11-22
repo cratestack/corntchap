@@ -64,6 +64,13 @@ button.primary:active,.btn.primary:active{transform:translate(1px,1px);box-shado
 button:focus-visible,.btn:focus-visible,input:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
 input[type=text],input:not([type]){font:400 28px "Space Mono",ui-monospace,monospace;letter-spacing:.08em;width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:12px;background:var(--card);color:var(--fg);text-transform:uppercase;margin:6px 0 16px}
 code{font:12.5px "Space Mono",ui-monospace,monospace;background:var(--muted);padding:1px 6px;border-radius:5px}
+.choices{display:flex;flex-direction:column;gap:6px;margin:8px 0 16px}
+.choice{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--card);cursor:pointer}
+.choice:has(input:checked){border-color:var(--pri)}
+.choice small{margin-left:auto;text-align:right}
+.newcook{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.newcook input.plain{font:14px "Space Mono",ui-monospace,monospace;letter-spacing:0;text-transform:none;margin:0;padding:6px 10px;flex:1;min-width:10ch;width:auto;border-radius:8px}
+select{font:13px Inter,sans-serif;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--fg)}
 small{color:var(--fg2)}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}

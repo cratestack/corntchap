@@ -956,6 +956,7 @@ async fn agent_setup(
     };
     println!("\nToken (shown once):\n\n  {token}\n");
     print!("{}", setup::mcp_snippet(kind, &api.server, &token));
+    print!("{}", setup::oauth_hint(&api.server));
     if runtime == "local" {
         println!(
             "\nWake it per session: from inside your repo run `corntchap-cli station scan` (registers its sessions as stations, no config needed), then `corntchap-cli fire doctor`.\nOptional fallback for wakes that name no station: paste this into {} (`corntchap-cli fire init` writes the file):\n",
