@@ -27,7 +27,7 @@ pub fn routes() -> Router<AppState> {
         .route("/me", get(me).patch(me_rename))
         .route("/logout", post(logout))
         .route("/users", get(users_list))
-        .route("/users/{name}", patch(users_set_admin))
+        .route("/users/{name}", patch(users_update))
         .route("/teams", get(teams_list).post(teams_add))
         .route("/teams/{team}/members", get(members_list).post(members_add))
         .route("/teams/{team}/members/{name}", delete(members_remove))
@@ -147,19 +147,29 @@ async fn logout(State(st): State<AppState>, Authn(p): Auth) -> J {
 async fn users_list(State(st): State<AppState>, Authn(p): Auth) -> J {
     ok(admin::list_users(&st.db, &p).await?)
 }
-/// Make a person an admin or not: `{"is_admin": true|false}` (admins only).
-async fn users_set_admin(
+/// Change a person (admins only): `{"is_admin": bool}` and/or `{"disabled": bool}`. An admin setting is manual: the
+/// IdP role no longer changes it. A disabled person's tokens and sessions stop working.
+async fn users_update(
     State(st): State<AppState>,
     Authn(p): Auth,
     Path(name): Path<String>,
     Json(b): Json<Value>,
 ) -> J {
-    let Some(on) = b["is_admin"].as_bool() else {
+    let (admin_flag, disabled) = (b["is_admin"].as_bool(), b["disabled"].as_bool());
+    if admin_flag.is_none() && disabled.is_none() {
         return Err(Error::Invalid(
-            "is_admin (true or false) is required".into(),
+            "is_admin and/or disabled (true or false) is required".into(),
         ));
-    };
-    ok(admin::set_admin(&st.db, &p, &name, on).await?)
+    }
+    let mut out = json!({"name": name.trim().trim_start_matches('@').to_lowercase()});
+    if let Some(on) = admin_flag {
+        out = admin::set_admin(&st.db, &p, &name, on).await?;
+    }
+    if let Some(d) = disabled {
+        let v = admin::set_user_disabled(&st.db, &p, &name, d).await?;
+        out["disabled"] = v["disabled"].clone();
+    }
+    ok(out)
 }
 
 async fn teams_list(State(st): State<AppState>, Authn(p): Auth) -> J {

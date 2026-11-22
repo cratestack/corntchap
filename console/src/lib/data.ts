@@ -89,7 +89,7 @@ export function useTeamChefs(team: string | null | undefined, opts: { enabled?: 
       const rows = await client.teamMembers.list({ query: { filters: { "team.name": team ?? "" }, include: ["principal"] } });
       return rows
         .filter((m) => m.principal?.name)
-        .map((m) => ({ name: m.principal!.name!, kind: m.principal!.kind ?? "user", role: m.role ?? "member" }))
+        .map((m) => ({ name: m.principal!.name!, display_name: m.principal!.displayName ?? null, kind: m.principal!.kind ?? "user", role: m.role ?? "member" }))
         .sort((a, b) => a.name.localeCompare(b.name));
     },
     !!team && (opts.enabled ?? true),

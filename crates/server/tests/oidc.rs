@@ -54,25 +54,45 @@ async fn jit_creates_user_and_maps_admin_role() {
     app.browser_login("/").await;
     assert_eq!(row(&app, "sub-dev").await, (false, "oidc".to_string()));
 
-    // an admin made by `init` is never demoted by the IdP (here: a signed-in person the operator promoted)
-    app.sign_in_as("sub-boss", "Boss", false);
+    // an admin made by `init` is never touched by the IdP role (here: a signed-in person the operator marked `init`)
+    app.sign_in_as("sub-boss", "Boss", true);
     app.browser_login("/").await;
-    let boss = app.handle_of("sub-boss").await;
-    admin::init_admin(&app.state.db, Some(&boss)).await.unwrap();
+    sqlx::query("update principals set admin_source = 'init' where oidc_sub = 'sub-boss'")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
     app.sign_in_as("sub-boss", "Boss", false);
     app.browser_login("/").await;
     assert_eq!(row(&app, "sub-boss").await, (true, "init".to_string()));
-    // ... and an admin promoted by hand is not demoted either
+
+    // a manual setting is explicit and sticks, both ways: the IdP role only ever changes admins it made itself
+    let boss = app.handle_of("sub-boss").await;
+    let boss_p = app.principal(&boss).await;
     app.sign_in_as("sub-dev", "Dev", true);
     app.browser_login("/").await;
+    assert_eq!(row(&app, "sub-dev").await, (true, "oidc".to_string()));
     let dev = app.handle_of("sub-dev").await;
-    let boss_p = app.principal(&boss).await;
+    admin::set_admin(&app.state.db, &boss_p, &dev, false)
+        .await
+        .unwrap();
+    assert_eq!(row(&app, "sub-dev").await, (false, "manual".to_string()));
+    app.sign_in_as("sub-dev", "Dev", true);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-dev").await,
+        (false, "manual".to_string()),
+        "a manual demotion sticks"
+    );
     admin::set_admin(&app.state.db, &boss_p, &dev, true)
         .await
         .unwrap();
     app.sign_in_as("sub-dev", "Dev", false);
     app.browser_login("/").await;
-    assert_eq!(row(&app, "sub-dev").await, (true, "manual".to_string()));
+    assert_eq!(
+        row(&app, "sub-dev").await,
+        (true, "manual".to_string()),
+        "a manual promotion is not demoted"
+    );
 }
 
 #[tokio::test]
@@ -363,6 +383,16 @@ async fn display_name_comes_from_the_token_and_is_escaped() {
     });
     app.browser_login("/").await;
     assert_eq!(display(&app, "s2").await.as_deref(), Some("x@y.test"));
+    // an e-mail that is not verified is not a name: none
+    app.sign_in_with(common::Ident {
+        sub: "s2b".into(),
+        name: None,
+        email: "mallory@y.test".into(),
+        email_verified: false,
+        ..Default::default()
+    });
+    app.browser_login("/").await;
+    assert_eq!(display(&app, "s2b").await, None);
     // neither (empty strings): none, and still signs in
     app.sign_in_with(common::Ident {
         sub: "s3".into(),
@@ -441,4 +471,107 @@ async fn a_disabled_person_cannot_sign_in() {
         .await
         .unwrap();
     assert_eq!(n, 1);
+}
+
+/// Identity is (issuer, sub): the same subject under another issuer is another person, and people who signed in
+/// before issuers were recorded are adopted by the configured issuer.
+#[tokio::test]
+async fn the_issuer_is_part_of_the_identity() {
+    let app = common::start(false).await;
+    app.sign_in_as("sub-x", "X", false);
+    app.browser_login("/").await;
+    let first = app.handle_of("sub-x").await;
+    // the same `sub` appears under a different issuer
+    sqlx::query(
+        "update principals set oidc_iss = 'https://other-idp.example' where oidc_sub = 'sub-x'",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    app.browser_login("/").await;
+    let n: i64 = sqlx::query_scalar("select count(*) from principals where oidc_sub = 'sub-x'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 2, "a new account, not the old one");
+    let old_iss: String = sqlx::query_scalar("select oidc_iss from principals where name = $1")
+        .bind(&first)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        old_iss, "https://other-idp.example",
+        "the other issuer's person is untouched"
+    );
+    let iss = app
+        .state
+        .config
+        .oidc
+        .as_ref()
+        .unwrap()
+        .identity_issuer()
+        .to_string();
+    let new_iss: String = sqlx::query_scalar(
+        "select oidc_iss from principals where oidc_sub = 'sub-x' and name <> $1",
+    )
+    .bind(&first)
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(new_iss, iss, "the configured issuer is stored at sign-in");
+
+    // rows from before issuers were recorded: adopted once at startup, then found by (issuer, sub)
+    sqlx::query("alter table principals drop constraint principals_sub_has_issuer")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into principals (kind, name, oidc_sub) values ('user', 'legacy-lou', 'sub-legacy')",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(admin::adopt_issuer(&app.state.db, &iss).await.unwrap(), 1);
+    assert_eq!(
+        admin::adopt_issuer(&app.state.db, &iss).await.unwrap(),
+        0,
+        "one-time"
+    );
+    app.sign_in_as("sub-legacy", "Lou", false);
+    app.browser_login("/").await;
+    assert_eq!(app.handle_of("sub-legacy").await, "legacy-lou");
+    let n: i64 =
+        sqlx::query_scalar("select count(*) from principals where oidc_sub = 'sub-legacy'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(n, 1);
+}
+
+/// A subject held by something that is not a person never signs in as it.
+#[tokio::test]
+async fn a_sign_in_never_becomes_an_agent() {
+    let app = common::start(false).await;
+    let iss = app
+        .state
+        .config
+        .oidc
+        .as_ref()
+        .unwrap()
+        .identity_issuer()
+        .to_string();
+    sqlx::query("insert into principals (kind, name, oidc_iss, oidc_sub) values ('agent', 'cook-z', $1, 'sub-cook')")
+        .bind(&iss)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    app.sign_in_as("sub-cook", "Cook", false);
+    let r = login_raw(&app).await;
+    assert_ne!(r.status().as_u16(), 303, "no session as the agent");
+    assert!(
+        r.headers()
+            .get_all("set-cookie")
+            .iter()
+            .all(|c| !c.to_str().unwrap().contains("ct_session="))
+    );
 }

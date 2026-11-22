@@ -124,7 +124,7 @@ pub async fn session_from_headers(
         Option<String>,
     )> = sqlx::query_as(
         "select id, kind, name, owner_id, is_admin, max_leases, display_name from principals
-         where id = $1 and disabled_at is null",
+         where id = $1 and kind = 'user' and disabled_at is null",
     )
     .bind(uid)
     .fetch_optional(&state.db)
@@ -393,15 +393,26 @@ async fn oidc_callback(
             "The identity provider sent no subject (<code>sub</code>) for you; ask an admin.",
         ));
     }
-    // How the person is shown to people (never used for lookup or mentions): name, else e-mail.
-    let display_name = ["name", "email"]
-        .iter()
-        .find_map(|k| id_token_str(&id_token, k).and_then(|v| admin::clean_display_name(&v)));
+    // How the person is shown to people (never used for lookup or mentions): name, else a *verified* e-mail.
+    let verified = id_token_claim(&id_token, "email_verified")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let display_name = id_token_str(&id_token, "name")
+        .and_then(|v| admin::clean_display_name(&v))
+        .or_else(|| {
+            verified
+                .then(|| id_token_str(&id_token, "email"))
+                .flatten()
+                .and_then(|v| admin::clean_display_name(&v))
+        });
+    let issuer = cfg.identity_issuer();
     let want_admin = has_admin_role(&id_token, &cfg.admin_role);
 
     let found: Option<(Uuid, bool)> = sqlx::query_as(
-        "select id, disabled_at is not null from principals where kind = 'user' and oidc_sub = $1",
+        "select id, disabled_at is not null from principals
+         where kind = 'user' and oidc_iss = $1 and oidc_sub = $2",
     )
+    .bind(issuer)
     .bind(&sub)
     .fetch_optional(&state.db)
     .await?;
@@ -418,7 +429,7 @@ async fn oidc_callback(
         None => {
             admin::provision_user(
                 &state.db,
-                &sub,
+                &admin::OidcIdentity { issuer, sub: &sub },
                 display_name.as_deref(),
                 &mut admin::random_pick,
             )
@@ -434,12 +445,10 @@ async fn oidc_callback(
         .bind(user)
         .fetch_one(&state.db)
         .await?;
-    // Admin flag follows the IdP role, except for admins made by `init` or by hand.
+    // The IdP role decides the admin flag only for admins it made itself (`admin_source = 'oidc'`): `init` and
+    // manual settings (`user admin --on|--off`) are never changed by a sign-in.
     sqlx::query(
-        "update principals set
-           admin_source = case when $2 and not is_admin then 'oidc' else admin_source end,
-           is_admin = case when $2 then true when admin_source = 'oidc' then false else is_admin end
-         where id = $1",
+        "update principals set is_admin = $2 where id = $1 and admin_source = 'oidc' and is_admin <> $2",
     )
     .bind(user)
     .bind(want_admin)
@@ -630,7 +639,7 @@ async fn device_code(
     }
     let name = match (kind.as_str(), req.name.as_deref()) {
         ("user", _) => None,
-        (_, Some(n)) if !n.is_empty() => Some(admin::norm_name(n)?),
+        (_, Some(n)) if !n.is_empty() => Some(admin::norm_handle_syntax(n)?),
         _ => {
             return Err(Error::Invalid(
                 "name is required to enroll an agent or relay".into(),
@@ -957,6 +966,7 @@ async fn device_decision(
                 )));
             }
             None => {
+                admin::ensure_not_a_handle(&mut tx, &name).await?;
                 let pid = Uuid::new_v4();
                 let (ak, rt) = if kind == "agent" {
                     (

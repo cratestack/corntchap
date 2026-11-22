@@ -283,6 +283,10 @@ enum UserCmd {
         #[arg(long)]
         off: bool,
     },
+    /// Disable a person (admin): their tokens and sessions stop working. The last admin who can sign in cannot be disabled.
+    Disable { handle: String },
+    /// Enable a disabled person again (admin). Their old tokens stay revoked: they sign in again.
+    Enable { handle: String },
     /// List users.
     Ls {
         #[arg(long)]
@@ -735,9 +739,21 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
             api.patch(&format!("/users/{handle}"), json!({"is_admin": on}))
                 .await?;
             ok_line(format!(
-                "{handle} is {} an admin",
+                "{handle} is {} an admin (manual admin setting: the IdP role no longer changes it)",
                 if on { "now" } else { "no longer" }
             ));
+        }
+        Cmd::User(UserCmd::Disable { handle }) => {
+            api.patch(&format!("/users/{handle}"), json!({"disabled": true}))
+                .await?;
+            ok_line(format!(
+                "{handle} is disabled: their tokens and sessions no longer work"
+            ));
+        }
+        Cmd::User(UserCmd::Enable { handle }) => {
+            api.patch(&format!("/users/{handle}"), json!({"disabled": false}))
+                .await?;
+            ok_line(format!("{handle} is enabled again (they sign in anew)"));
         }
         Cmd::Me(MeCmd::Rename { handle }) => {
             let v = api.patch("/me", json!({"name": handle})).await?;

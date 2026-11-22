@@ -1,7 +1,14 @@
 //! Handles and identity: random kitchen handles, race-safe just-in-time creation, renaming, admins.
 mod common;
-use corntchap::admin::{self, RESERVED_HANDLES};
+use corntchap::admin::{self, OidcIdentity, RESERVED_HANDLES};
 use serde_json::{Value, json};
+
+fn id_of(sub: &str) -> OidcIdentity<'_> {
+    OidcIdentity {
+        issuer: "https://idp.test",
+        sub,
+    }
+}
 
 /// A seeded source of randomness (xorshift), so a test can force the same draws twice.
 fn seeded(seed: u64) -> impl FnMut(usize) -> usize + Send {
@@ -70,7 +77,7 @@ async fn handle_collisions_retry_with_bounded_attempts() {
     // the first draw of this seed is taken: the second draw is used
     let first = admin::generate_handle(&mut seeded(11), false);
     app.add_user(&first).await;
-    let id = admin::provision_user(db, "sub-a", None, &mut seeded(11))
+    let id = admin::provision_user(db, &id_of("sub-a"), None, &mut seeded(11))
         .await
         .unwrap();
     let got: String = sqlx::query_scalar("select name from principals where id = $1")
@@ -86,7 +93,7 @@ async fn handle_collisions_retry_with_bounded_attempts() {
     let stuck_long = admin::generate_handle(&mut |_| 0, true);
     assert_ne!(stuck_short, stuck_long);
     app.add_user(&stuck_short).await;
-    let id = admin::provision_user(db, "sub-b", None, &mut |_| 0)
+    let id = admin::provision_user(db, &id_of("sub-b"), None, &mut |_| 0)
         .await
         .unwrap();
     let got: String = sqlx::query_scalar("select name from principals where id = $1")
@@ -97,7 +104,7 @@ async fn handle_collisions_retry_with_bounded_attempts() {
     assert_eq!(got, stuck_long, "longer suffix after the short attempts");
 
     // and it gives up (does not loop) when even those are taken (sub-b holds the long one now)
-    let err = admin::provision_user(db, "sub-c", None, &mut |_| 0)
+    let err = admin::provision_user(db, &id_of("sub-c"), None, &mut |_| 0)
         .await
         .unwrap_err();
     assert!(
@@ -120,7 +127,7 @@ async fn concurrent_first_sign_ins_end_in_one_principal_per_sub() {
     for i in 0..16u64 {
         let db = db.clone();
         tasks.push(tokio::spawn(async move {
-            admin::provision_user(&db, "sub-same", Some("Same"), &mut seeded(100 + i))
+            admin::provision_user(&db, &id_of("sub-same"), Some("Same"), &mut seeded(100 + i))
                 .await
                 .unwrap()
         }));
@@ -141,7 +148,7 @@ async fn concurrent_first_sign_ins_end_in_one_principal_per_sub() {
     for i in 0..8 {
         let db = db.clone();
         tasks.push(tokio::spawn(async move {
-            admin::provision_user(&db, &format!("sub-{i}"), None, &mut seeded(5))
+            admin::provision_user(&db, &id_of(&format!("sub-{i}")), None, &mut seeded(5))
                 .await
                 .unwrap()
         }));
@@ -212,7 +219,7 @@ async fn rename_rules() {
     let (st, v) = rename(&app, &ta, json!(b)).await;
     assert_eq!(st, 409, "{v}");
     assert!(
-        v["message"].as_str().unwrap().contains("already taken"),
+        v["message"].as_str().unwrap().contains("not available"),
         "{v}"
     );
     let (st, _) = app
@@ -223,10 +230,32 @@ async fn rename_rules() {
         )
         .await;
     assert_eq!(st, 200);
-    assert_eq!(rename(&app, &ta, json!("c1")).await.0, 409);
+    let (st, v) = rename(&app, &ta, json!("c1")).await;
+    assert_eq!(st, 409, "{v}");
+    assert!(
+        v["message"].as_str().unwrap().contains("already taken"),
+        "a cook's name: {v}"
+    );
 
     // refused: reserved, mention syntax, too long, empty, odd characters, missing
-    for bad in ["all", "ALL", "@x", &"a".repeat(65), "", "  ", "a b", "é"] {
+    for bad in [
+        "all",
+        "ALL",
+        "@x",
+        &"a".repeat(65),
+        "",
+        "  ",
+        "a b",
+        "é",
+        "all.",
+        "--help",
+        "-h",
+        ".",
+        "..",
+        "a.",
+        "_a",
+        "st_x",
+    ] {
         let (st, v) = rename(&app, &ta, json!(bad)).await;
         assert_eq!(st, 400, "{bad:?}: {v}");
     }
@@ -444,4 +473,477 @@ async fn pre_provisioning_is_gone() {
         .mcp(&root, "create_user", json!({"login": "alice"}))
         .await;
     assert!(r.is_null() || r["isError"] == true, "{r}");
+}
+
+#[test]
+fn handle_syntax() {
+    for bad in [
+        ".",
+        "..",
+        "-h",
+        "--help",
+        "all.",
+        "a.",
+        ".a",
+        "_a",
+        "a_",
+        "-a",
+        "a-",
+        "st_x",
+        "ST_Y",
+        "a b",
+        "a/b",
+        "a@b",
+        "",
+        " ",
+        "é",
+        &"a".repeat(65),
+    ] {
+        assert!(admin::norm_handle(bad).is_err(), "{bad:?}");
+        assert!(admin::norm_handle_syntax(bad).is_err(), "{bad:?}");
+    }
+    for good in [
+        "a",
+        "a-b",
+        "a.b_c",
+        "x1",
+        "0",
+        &"a".repeat(64),
+        "stx",
+        "s_t",
+        "Bob ",
+    ] {
+        assert!(admin::norm_handle(good).is_ok(), "{good:?}");
+    }
+    // cooks and fires follow the same syntax, but not the reserved list
+    assert!(admin::norm_handle_syntax("all").is_ok());
+    assert!(admin::norm_handle("all").is_err());
+}
+
+#[tokio::test]
+async fn a_cook_cannot_be_named_like_a_path_segment() {
+    let app = common::start(false).await;
+    let (_, root) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .map(|(n, t)| (n, t.unwrap()))
+        .unwrap();
+    for bad in ["..", ".", "-h", "st_x", "all."] {
+        let (st, v) = app
+            .post(
+                &root,
+                "/agents",
+                json!({"name": bad, "kind": "opencode", "runtime": "local"}),
+            )
+            .await;
+        assert_eq!(st, 400, "{bad}: {v}");
+    }
+    let (st, _) = app
+        .post(
+            &root,
+            "/agents",
+            json!({"name": "ok.cook", "kind": "opencode", "runtime": "local"}),
+        )
+        .await;
+    assert_eq!(st, 200);
+}
+
+#[test]
+fn word_lists_are_disjoint_and_without_duplicates() {
+    let mut seen = std::collections::BTreeSet::new();
+    for w in admin::ADJECTIVES.iter().chain(admin::DISHES) {
+        assert!(seen.insert(*w), "{w} appears twice (in a list or in both)");
+        assert!(w.chars().all(|c| c.is_ascii_lowercase()), "{w}");
+    }
+}
+
+#[tokio::test]
+async fn a_handle_is_never_given_to_a_different_account() {
+    let app = common::start(false).await;
+    let (bob, tb) = person(&app, "sub-bob").await;
+    let (_mallory, tm) = person(&app, "sub-mallory").await;
+    assert_eq!(rename(&app, &tb, json!("bob-2")).await.0, 200);
+    // the vacated handle is refused to another person ...
+    let (st, v) = rename(&app, &tm, json!(bob)).await;
+    assert_eq!(st, 409, "{v}");
+    assert!(
+        v["message"].as_str().unwrap().contains("not available"),
+        "{v}"
+    );
+    // ... to a cook or fire ...
+    let (st, v) = app
+        .post(
+            &tm,
+            "/agents",
+            json!({"name": bob, "kind": "opencode", "runtime": "local"}),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+    // ... to a person named by init ...
+    assert!(admin::init_admin(&app.state.db, Some(&bob)).await.is_err());
+    // but the same account may take its own old handle back
+    let (st, v) = rename(&app, &tb, json!(bob)).await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(rename(&app, &tb, json!("bob-3")).await.0, 200);
+    assert_eq!(rename(&app, &tb, json!(bob)).await.0, 200);
+}
+
+#[tokio::test]
+async fn random_handles_skip_every_handle_ever_claimed() {
+    let app = common::start(false).await;
+    let db = &app.state.db;
+    // a person who once had the handle the seed draws first, and renamed away
+    let first = admin::generate_handle(&mut seeded(21), false);
+    let ghost = uuid::Uuid::new_v4();
+    sqlx::query("insert into handle_claims (name, principal_id) values ($1, $2)")
+        .bind(&first)
+        .bind(ghost)
+        .execute(db)
+        .await
+        .unwrap();
+    let id = admin::provision_user(db, &id_of("sub-gen"), None, &mut seeded(21))
+        .await
+        .unwrap();
+    let got: String = sqlx::query_scalar("select name from principals where id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_ne!(got, first, "a claimed handle is not handed out again");
+    let claim: uuid::Uuid =
+        sqlx::query_scalar("select principal_id from handle_claims where name = $1")
+            .bind(&got)
+            .fetch_one(db)
+            .await
+            .unwrap();
+    assert_eq!(claim, id, "the new handle is claimed by its holder");
+}
+
+/// Admin rows nobody can sign in as do not count as admins who could undo a demotion.
+#[tokio::test]
+async fn the_last_admin_guard_counts_only_admins_who_can_sign_in() {
+    let app = common::start(false).await;
+    let db = &app.state.db;
+    app.sign_in_as("sub-a", "A", true);
+    app.browser_login("/").await;
+    let a = app.handle_of("sub-a").await;
+    let ta = admin::operator_token(db, &a, None).await.unwrap();
+    // a legacy admin that is not linked to any sign-in, and a linked admin that is disabled
+    sqlx::query("insert into principals (kind, name, is_admin, admin_source) values ('user', 'legacy', true, 'manual')")
+        .execute(db)
+        .await
+        .unwrap();
+    app.sign_in_as("sub-d", "D", true);
+    app.browser_login("/").await;
+    let d = app.handle_of("sub-d").await;
+    sqlx::query("update principals set disabled_at = now() where name = $1")
+        .bind(&d)
+        .execute(db)
+        .await
+        .unwrap();
+    let patch = |who: &str, body: Value| {
+        let (app, ta, who) = (&app, ta.clone(), who.to_string());
+        async move {
+            app.rest(
+                &ta,
+                reqwest::Method::PATCH,
+                &format!("/users/{who}"),
+                Some(body),
+            )
+            .await
+        }
+    };
+    let (st, v) = patch(&a, json!({"is_admin": false})).await;
+    assert_eq!(st, 409, "legacy and disabled admins do not count: {v}");
+    let (st, v) = patch(&a, json!({"disabled": true})).await;
+    assert_eq!(st, 409, "{v}");
+    // an `init` admin (no sign-in by design) does count
+    admin::init_admin(db, Some("boot")).await.unwrap();
+    assert_eq!(patch(&a, json!({"is_admin": false})).await.0, 200);
+}
+
+/// Two demotions in flight cannot both pass: the admin rows are locked. (A transaction stands in for the first one.)
+#[tokio::test]
+async fn demotions_are_serialised() {
+    let app = common::start(false).await;
+    let db = app.state.db.clone();
+    for (sub, who) in [("sub-a", "A"), ("sub-b", "B")] {
+        app.sign_in_as(sub, who, true);
+        app.browser_login("/").await;
+    }
+    let (a, b) = (app.handle_of("sub-a").await, app.handle_of("sub-b").await);
+    let pa = app.principal(&a).await;
+    let mut hold = db.begin().await.unwrap();
+    sqlx::query("select id from principals where is_admin for update")
+        .fetch_all(&mut *hold)
+        .await
+        .unwrap();
+    let (db2, pa2, b2) = (db.clone(), pa.clone(), b.clone());
+    let mut demote = tokio::spawn(async move { admin::set_admin(&db2, &pa2, &b2, false).await });
+    let early = tokio::time::timeout(std::time::Duration::from_millis(500), &mut demote).await;
+    assert!(
+        early.is_err(),
+        "the demotion must wait for the lock on the admin rows"
+    );
+    // the other demotion lands first, then the waiting one sees one admin left and is refused
+    sqlx::query("update principals set is_admin = false, admin_source = 'manual' where name = $1")
+        .bind(&a)
+        .execute(&mut *hold)
+        .await
+        .unwrap();
+    hold.commit().await.unwrap();
+    let r = demote.await.unwrap();
+    assert!(r.is_err(), "{r:?}");
+    let left: i64 = sqlx::query_scalar(
+        "select count(*) from principals where is_admin and disabled_at is null",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(left, 1);
+}
+
+#[tokio::test]
+async fn disabling_a_person_ends_their_access() {
+    let app = common::start(false).await;
+    let db = &app.state.db;
+    let (_, root) = admin::init_admin(db, Some("octo"))
+        .await
+        .map(|(n, t)| (n, t.unwrap()))
+        .unwrap();
+    app.sign_in_as("sub-p", "P", false);
+    let cookie = app.browser_login("/").await;
+    let p = app.handle_of("sub-p").await;
+    let tp = admin::operator_token(db, &p, None).await.unwrap();
+    let api = |c: &str, path: &'static str| {
+        let r = app
+            .http
+            .get(format!("{}{path}", app.base))
+            .header("cookie", c)
+            .header("x-corntchap-console", "1");
+        async move { r.send().await.unwrap().status().as_u16() }
+    };
+    assert_eq!(app.get(&tp, "/me").await.0, 200);
+    assert_eq!(api(&cookie, "/api/v1/me").await, 200);
+    // a non-admin cannot; an admin can
+    assert_eq!(
+        app.rest(
+            &tp,
+            reqwest::Method::PATCH,
+            &format!("/users/{p}"),
+            Some(json!({"disabled": true}))
+        )
+        .await
+        .0,
+        403
+    );
+    assert_eq!(
+        app.rest(
+            &root,
+            reqwest::Method::PATCH,
+            &format!("/users/{p}"),
+            Some(json!({"disabled": true}))
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(app.get(&tp, "/me").await.0, 401);
+    assert_eq!(api(&cookie, "/api/v1/me").await, 401);
+    assert_eq!(api(&cookie, "/auth/session").await, 401);
+    // disabling revoked them for good: enabling does not revive the old token or session
+    let revoked: i64 = sqlx::query_scalar("select count(*) from tokens t join principals p on p.id = t.principal_id where p.name = $1 and t.revoked_at is null").bind(&p).fetch_one(db).await.unwrap();
+    let sessions: i64 = sqlx::query_scalar("select count(*) from auth_sessions s join principals p on p.id = s.user_id where p.name = $1").bind(&p).fetch_one(db).await.unwrap();
+    assert_eq!((revoked, sessions), (0, 0));
+    assert_eq!(
+        app.rest(
+            &root,
+            reqwest::Method::PATCH,
+            &format!("/users/{p}"),
+            Some(json!({"disabled": false}))
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(app.get(&tp, "/me").await.0, 401);
+    assert_eq!(api(&cookie, "/api/v1/me").await, 401);
+    // the last admin who can sign in cannot be disabled, not even by themselves
+    let (st, v) = app
+        .rest(
+            &root,
+            reqwest::Method::PATCH,
+            "/users/octo",
+            Some(json!({"disabled": true})),
+        )
+        .await;
+    assert_eq!(st, 409, "{v}");
+}
+
+/// Access guards that do not depend on the revocation: a row disabled behind the server's back is still locked out.
+#[tokio::test]
+async fn a_disabled_row_is_refused_by_every_door() {
+    let app = common::start(false).await;
+    let db = &app.state.db;
+    app.sign_in_as("sub-p", "P", false);
+    let cookie = app.browser_login("/").await;
+    let p = app.handle_of("sub-p").await;
+    let tp = admin::operator_token(db, &p, None).await.unwrap();
+    sqlx::query("update principals set disabled_at = now() where name = $1")
+        .bind(&p)
+        .execute(db)
+        .await
+        .unwrap();
+    assert_eq!(app.get(&tp, "/me").await.0, 401, "bearer token");
+    for path in ["/api/v1/me", "/auth/session"] {
+        let r = app
+            .http
+            .get(format!("{}{path}", app.base))
+            .header("cookie", &cookie)
+            .header("x-corntchap-console", "1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 401, "{path}");
+    }
+}
+
+/// A browser session is only ever for a person: a session row pointing at a cook authenticates nothing.
+#[tokio::test]
+async fn a_session_for_a_cook_authenticates_nothing() {
+    use authkestra::core::auth::SessionStore;
+    let app = common::start(false).await;
+    let db = &app.state.db;
+    let cook: uuid::Uuid = sqlx::query_scalar(
+        "insert into principals (kind, name) values ('agent', 'cook-q') returning id",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap();
+    let store = corntchap::sessions::PgSessionStore { db: db.clone() };
+    store
+        .save_session(&corntchap::sessions::new_session(
+            "tok-cook".into(),
+            cook,
+            "cook-q",
+            "csrf".into(),
+            None,
+            600,
+        ))
+        .await
+        .unwrap();
+    for path in ["/api/v1/me", "/auth/session"] {
+        let r = app
+            .http
+            .get(format!("{}{path}", app.base))
+            .header("cookie", "ct_session=tok-cook")
+            .header("x-corntchap-console", "1")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 401, "{path}");
+    }
+}
+
+#[test]
+fn display_names_drop_invisible_and_lookalike_characters() {
+    // every one of these is removed by category (Cc Cf Co Cs Zl Zp) or by the fillers / separator lists
+    let removed: &[(&str, char)] = &[
+        ("Cc NUL", '\u{0}'),
+        ("Cc BEL", '\u{7}'),
+        ("Cc DEL", '\u{7F}'),
+        ("Cc NEL", '\u{85}'),
+        ("Cf ALM", '\u{61C}'),
+        ("Cf SHY", '\u{AD}'),
+        ("Cf MVS", '\u{180E}'),
+        ("Cf ZWSP", '\u{200B}'),
+        ("Cf LRM", '\u{200E}'),
+        ("Cf RLM", '\u{200F}'),
+        ("Cf LRE", '\u{202A}'),
+        ("Cf RLO", '\u{202E}'),
+        ("Cf WJ", '\u{2060}'),
+        ("Cf 2064", '\u{2064}'),
+        ("Cf LRI", '\u{2066}'),
+        ("Cf RLI", '\u{2067}'),
+        ("Cf FSI", '\u{2068}'),
+        ("Cf PDI", '\u{2069}'),
+        ("Cf 206A", '\u{206A}'),
+        ("Cf 206F", '\u{206F}'),
+        ("Cf BOM", '\u{FEFF}'),
+        ("Cf FFF9", '\u{FFF9}'),
+        ("Cf FFFB", '\u{FFFB}'),
+        ("Cf TAG", '\u{E0001}'),
+        ("Cf TAG A", '\u{E0041}'),
+        ("Co", '\u{E000}'),
+        ("Co plane 15", '\u{F0000}'),
+        ("Zl", '\u{2028}'),
+        ("Zp", '\u{2029}'),
+        ("CGJ", '\u{34F}'),
+        ("Hangul choseong filler", '\u{115F}'),
+        ("Hangul jungseong filler", '\u{1160}'),
+        ("Hangul filler", '\u{3164}'),
+        ("halfwidth Hangul filler", '\u{FFA0}'),
+        ("middle dot", '\u{B7}'),
+        ("bullet", '\u{2022}'),
+        ("hyphenation point", '\u{2027}'),
+        ("katakana middle dot", '\u{30FB}'),
+        ("halfwidth katakana middle dot", '\u{FF65}'),
+    ];
+    for (what, c) in removed {
+        let got = admin::clean_display_name(&format!("A{c}B")).unwrap();
+        assert_eq!(got, "AB", "{what} U+{:04X} survived", *c as u32);
+    }
+    // ordinary text survives: marks, emoji, CJK, ordinary spaces (a zero-width joiner is format, so ZWJ emoji
+    // sequences fall apart into their parts)
+    assert_eq!(
+        admin::clean_display_name("Ada  Ünïcode 山田 太郎 👩‍💻").as_deref(),
+        Some("Ada  Ünïcode 山田 太郎 👩💻")
+    );
+    // a fake "name · @handle" is flattened
+    assert_eq!(
+        admin::clean_display_name("Alice Admin · @alice").as_deref(),
+        Some("Alice Admin  @alice")
+    );
+    // nothing left (or only space) is no name
+    for empty in ["", "   ", "\u{200B}\u{3164}", "\n\t", " \u{B7} "] {
+        assert_eq!(admin::clean_display_name(empty), None, "{empty:?}");
+    }
+}
+
+#[test]
+fn display_names_are_cut_on_a_grapheme_boundary() {
+    // a combining accent at the boundary: the whole cluster goes, never a bare letter
+    let s = format!("{}e\u{301}", "a".repeat(119));
+    let got = admin::clean_display_name(&s).unwrap();
+    assert_eq!(
+        got,
+        "a".repeat(119),
+        "e + combining acute is one cluster of two chars"
+    );
+    // a flag (two regional indicators) at the boundary: not cut in half
+    let s = format!("{}🇫🇷", "a".repeat(119));
+    assert_eq!(admin::clean_display_name(&s).unwrap(), "a".repeat(119));
+    // fits exactly
+    let s = format!("{}🇫🇷", "a".repeat(118));
+    let got = admin::clean_display_name(&s).unwrap();
+    assert_eq!(got.chars().count(), 120);
+    assert!(got.ends_with("🇫🇷"));
+    // many accents on one letter beyond the limit: dropped as a cluster
+    let s = format!("{}a{}", "b".repeat(100), "\u{301}".repeat(50));
+    assert_eq!(admin::clean_display_name(&s).unwrap(), "b".repeat(100));
+}
+
+#[tokio::test]
+async fn init_refuses_a_person_who_signs_in_through_the_idp() {
+    let app = common::start(false).await;
+    let (h, _) = person(&app, "sub-a").await;
+    let err = admin::init_admin(&app.state.db, Some(&h))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, corntchap::error::Error::Conflict(_)), "{err}");
+    let flag: bool = sqlx::query_scalar("select is_admin from principals where name = $1")
+        .bind(&h)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert!(!flag, "nothing changed");
 }

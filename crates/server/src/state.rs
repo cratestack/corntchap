@@ -52,6 +52,17 @@ pub struct OidcConfig {
     pub admin_role: String,
 }
 
+impl OidcConfig {
+    /// The issuer people are identified under: (this, `sub`) is who a person is. The public issuer when set, else the
+    /// discovery issuer, without a trailing slash.
+    pub fn identity_issuer(&self) -> &str {
+        self.public_issuer
+            .as_deref()
+            .unwrap_or(&self.issuer)
+            .trim_end_matches('/')
+    }
+}
+
 pub const DEFAULT_ADMIN_ROLE: &str = "corntchap-admin";
 
 impl Config {

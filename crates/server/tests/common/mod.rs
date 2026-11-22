@@ -284,11 +284,14 @@ impl TestApp {
 
     /// A person who exists already (what a first sign-in would have created), with this handle.
     pub async fn add_user(&self, handle: &str) {
-        sqlx::query("insert into principals (kind, name) values ('user', $1)")
-            .bind(handle)
-            .execute(&self.state.db)
-            .await
-            .unwrap();
+        sqlx::query(
+            "with p as (insert into principals (kind, name) values ('user', $1) returning id, name)
+             insert into handle_claims (name, principal_id) select name, id from p",
+        )
+        .bind(handle)
+        .execute(&self.state.db)
+        .await
+        .unwrap();
     }
 
     pub async fn principal(&self, handle: &str) -> Principal {

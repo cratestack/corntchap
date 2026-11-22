@@ -149,6 +149,15 @@ async fn main() -> anyhow::Result<()> {
                     "OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_CLIENT_SECRET not set: browser sign-in and device approval are disabled"
                 );
             }
+            if let Some(o) = &cfg.oidc {
+                let n = admin::adopt_issuer(&pool, o.identity_issuer()).await?;
+                if n > 0 {
+                    tracing::info!(
+                        "adopted {n} signed-in people under the issuer {}",
+                        o.identity_issuer()
+                    );
+                }
+            }
             let bind = cfg.bind.clone();
             let state = AppState::new(pool, cfg);
             let router = app::build(state.clone())?;

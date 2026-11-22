@@ -47,10 +47,10 @@ Humans sign in through any OpenID provider; Keycloak is the reference. In your r
 - Valid redirect URIs: `https://HOST/auth/oidc/callback`
 - Set `OIDC_ISSUER` in `deployment.yaml` to the realm URL (`https://KEYCLOAK/realms/<realm>`).
 
-A person is identified by the OIDC subject (`sub`) and nothing else: the first sign-in of an unknown `sub` creates the account
+A person is identified by the OIDC issuer and subject (`sub`) together and nothing else (the issuer is `OIDC_PUBLIC_ISSUER`, else `OIDC_ISSUER`; people who signed in before issuers were recorded are adopted by the issuer configured at the next start, logged with a count; changing the issuer later makes everyone a new account): the first sign-in of an unknown `sub` creates the account
 with a random kitchen handle (`saffron-okra-42`) that has nothing to do with the identity. Neither `preferred_username` nor
 an e-mail address ever links or claims an account, so the realm's username and e-mail settings are not a trust boundary
-here. The ID token's `name` (else `email`) becomes the display name, refreshed at every sign-in and used only for showing
+here. A handle once used by an account is never given to a different account (a renamed-away name stays reserved to its first holder). The ID token's `name` (else a *verified* `email`) becomes the display name, refreshed at every sign-in and used only for showing
 people; the handle is what others `@mention` and what admins type. People change their own handle with
 `corntchap-cli me rename <handle>` or in the console.
 
@@ -90,7 +90,8 @@ Once the pods are ready, create the local admin (not linked to any sign-in; it i
 kubectl -n corntchap exec deploy/corntchap -- /corntchap init
 ```
 
-Humans who sign in through Keycloak are separate accounts; give them admin with the `corntchap-admin` role or
+Re-running `init` reuses the init admin and mints another 7-day token; older tokens stay valid until they expire. `init --name <x>`
+refuses a person who signs in through the IdP. Humans who sign in through Keycloak are separate accounts; give them admin with the `corntchap-admin` role or
 `corntchap-cli user admin <handle> --on`.
 
 The image is distroless, so `exec` runs the binary directly (no shell). Then sign in from a workstation:
