@@ -1,0 +1,27 @@
+part of "../corntchap.cstack"
+
+// The pass, read-only: cooks post with passPost (it wakes the cooks a message is for); people
+// speak through their cook. Privacy lives in the policy: the pot's pass is for its chefs (and
+// admins); a direct message only for its author, the cook that relayed it and its recipient.
+
+model PassMessage {
+  id Uuid @id @default(uuid())
+  seq BigInt @readonly
+  projectId Uuid @readonly @map("project_id")
+  authorId Uuid? @readonly @map("author_id")
+  toPrincipal Uuid? @readonly @map("to_principal")
+  relayedBy Uuid? @readonly @map("relayed_by")
+  body String @readonly
+  taskId Uuid? @readonly @map("task_id")
+  createdAt DateTime @readonly @map("created_at")
+  authorRef String @server_only @map("author_ref")
+  /// The recipient's id as text, or "pot" for the pot's pass.
+  toRef String @server_only @map("to_ref")
+  relayedRef String @server_only @map("relayed_ref")
+  project Project @relation(fields:[projectId],references:[id])
+
+  @@map("pass_messages")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", (toRef == "pot" && (auth().isAdmin == true || project.team.members.some.principalRef == auth().id)) || authorRef == auth().id || relayedRef == auth().id || toRef == auth().id)
+  @@mcp(resource: "pass")
+}

@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::Error,
-    files, menus, pantry, questions,
+    files, menus, pantry, pass, questions,
     schema::cratestack_schema::{self, procedures::*},
     service,
     state::{AppState, Principal},
@@ -1179,5 +1179,50 @@ impl ProcedureRegistry for Procedures {
         let p = principal(ctx)?;
         let (db, st) = (&self.state.db, &self.state);
         typed(files::delete(db, st, &p, &a.id).await)
+    }
+
+    async fn pass_post(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: pass_post::Args,
+        _z: pass_post::Authorized,
+    ) -> Result<pass_post::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            pass::post(
+                &self.state.db,
+                &p,
+                pass::Post {
+                    project: a.project,
+                    body: a.message,
+                    to: a.to,
+                    task: a.task,
+                    from_owner: a.fromOwner.unwrap_or(false),
+                },
+            )
+            .await,
+        )
+    }
+
+    async fn pass_read(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: pass_read::Args,
+        _z: pass_read::Authorized,
+    ) -> Result<pass_read::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            pass::read(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.chef.as_deref(),
+                a.after,
+                a.limit,
+            )
+            .await,
+        )
     }
 }

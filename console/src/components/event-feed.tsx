@@ -23,6 +23,7 @@ import {
   CircleX,
   Paperclip,
   FileWarning,
+  MessagesSquare,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
@@ -103,6 +104,13 @@ export function describe(e: ChangeView): Described {
       return { icon: FileWarning, tone: "text-destructive", verb: "upload failed:", detail: p.reason ?? undefined };
     case "file.deleted":
       return { icon: Trash2, tone: "text-destructive", verb: "deleted", detail: undefined };
+    case "pass.posted":
+      return {
+        icon: MessagesSquare,
+        tone: "text-primary",
+        verb: `${p.via ? `(via ${p.via}) ` : ""}${p.to ? `wrote to ${p.to}` : "posted on the pass"}`,
+        detail: p.title ?? undefined,
+      };
     case "task.lease_expired":
       return { icon: Hourglass, tone: "text-corn-text", verb: "lease ran out on" };
     default:

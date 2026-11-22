@@ -133,7 +133,7 @@ async fn view(c: &mut PgConnection, id: Uuid) -> Result<Value> {
 }
 
 /// First line, without markdown decoration, cut to 100 characters (event titles).
-fn short(s: &str) -> String {
+pub(crate) fn short(s: &str) -> String {
     let first = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
     let plain: String = first
         .trim()

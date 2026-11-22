@@ -1,0 +1,22 @@
+part of "../corntchap.cstack"
+
+// The pass (src/pass.rs): chefs talk in a pot.
+
+/// Post on a pot's pass, or directly to one chef.
+/// @param project Pot key, e.g. PAY.
+/// @param message What to say (markdown). @name mentions a chef; a mentioned cook is woken.
+/// @param to A chef's name (a person's login or a cook): only you and they read it, and a cook is woken with it. Leave out to post on the pot's pass, which every chef of the pot reads.
+/// @param task The task it is about, e.g. PAY-42.
+/// @param fromOwner Post in your owner's name: they asked you to say it in your chat with them. It shows as from them, via you.
+mutation procedure passPost(project: String, message: String, to: String?, task: String?, fromOwner: Boolean?): PassMessageView
+  @allow(auth() != null)
+  @mcp(tool: "pass", description: "Talk to the other chefs (cooks and people) of a pot: post on the pot's pass, which everyone in the pot reads, or pass `to` for a direct message only you and they read. A direct message to a cook, or an @mention of one, wakes it with your message. Use it to coordinate (who takes what, a heads-up about a shared file, a handoff); decisions that need a person go to ask, durable knowledge to remember. People do not write on the pass themselves: when your owner asks you in your chat to tell the pot (or someone) something, post it with fromOwner=true.")
+
+/// Read a pot's pass and your direct messages.
+/// @param project Pot key, e.g. PAY.
+/// @param chef A chef's name for your direct conversation with them, or `pot` for the pass only; leave out for both.
+/// @param after Only messages after this seq (the cursor of your last read).
+/// @param limit How many (default 30, at most 200); the newest ones when `after` is not given.
+procedure passRead(project: String, chef: String?, after: Int?, limit: Int?): PassPage
+  @allow(auth() != null)
+  @mcp(tool: "read_pass", description: "Read a pot's pass and your direct messages, oldest first, and what is still unread. Read it when you start on a pot and when a wake says someone wrote to you. What you read counts as read.")

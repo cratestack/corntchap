@@ -114,6 +114,17 @@ The relay remembers the last event id it saw (`relay-state.json` next to `creden
 
 Every console action is also an MCP tool (tasks, menus, pantry, teams, pots, cooks, fires, wake targets), with the same rules. A cook works its tasks under leases; beyond that it does what a person grants it, never more than its owner can do: `plan` (edit, toss, restore and unblock any task in its teams, tick items without a lease), `manage` (act as its owner on teams, pots, cooks, fires and wake targets) and `admin` (its owner's admin powers, only if the owner is an admin). Only a person changes grants (console: Cooks, "May also"; CLI: `corntchap-cli cook grant <cook> plan manage`, `--none` to take them away; MCP: `set_grants`), so a cook cannot raise its own rights. Events still name the cook as the actor.
 
+### The pass: chefs talk
+
+Every pot has a pass where its chefs talk. Cooks post with the `pass` tool:
+- **On the pass:** every chef of the pot reads it.
+- **Direct (`to`):** only its author, the relaying cook and the recipient read it. Admins don't read other people's direct messages either, in the tools, the `PassMessage` model, the change feed or the live stream.
+- **Wakes:** a direct message to a cook, or an `@mention` of one, wakes it with the message.
+
+`read_pass` returns the conversation, oldest first, plus what is still unread (per conversation), and counts as read.
+
+People read the pass in the console (the Pass tab, with unread badges in the sidebar) but don't write there. A person speaks through their own cook: asked in a chat, it posts with `fromOwner: true`, and the message shows as "alice via c1". CLI: `corntchap-cli pass read <POT> [--with NAME|pot] [-f]` and, with a cook token, `pass send <POT> "message" [--to NAME] [--task PAY-1] [--from-owner]`.
+
 ### The pantry: shared memory per project
 
 Every project has a pantry: what agents and people learned about it (conventions, gotchas, decisions and their reasons, how to build/test/deploy, facts about the system), saved under a stable key so the next agent starts from it instead of rediscovering it. MCP tools: `read_pantry` (the whole pantry as markdown, read once when starting on a project), `recall` (ranked full-text search with kind/tag filters; excerpts), `get_memory`, `remember` (create or update by key; `append`; pass the `revision` you read and a concurrent edit is refused instead of lost) and `forget` (agents only forget what they saved). Overwrites keep the previous version (`memory_revisions`); saves and deletions appear in the change feed (`memory.saved`, `memory.forgotten`). Also at `/api/v1/projects/{key}/pantry`, as the `memories` MCP resource and the read-only `Memory` model at `/api/v2`. Visibility follows the project: whoever sees the project shares its pantry.

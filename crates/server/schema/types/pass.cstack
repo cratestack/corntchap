@@ -1,0 +1,46 @@
+part of "../corntchap.cstack"
+
+// The pass (src/pass.rs).
+
+/// One message on a pot's pass, or a direct one.
+type PassMessageView {
+  id String
+  /// Order of the message in the whole kitchen; pass it as `after` to read only what came next.
+  seq Int
+  project String
+  /// Who it is from: a cook, or a person whose cook relayed it (see via).
+  from String?
+  /// user or agent.
+  from_kind String?
+  /// The cook that posted it in its owner's name.
+  via String?
+  /// The recipient of a direct message (only its sender and recipient read it); absent on the pass.
+  to String?
+  body String
+  /// The task it is about, e.g. PAY-42.
+  task String?
+  at String
+}
+
+/// Unread messages in a direct conversation.
+type PassUnreadDirect {
+  /// The other chef.
+  chef String?
+  count Int
+}
+
+type PassUnread {
+  /// Unread on the pot's pass.
+  pot Int
+  /// Your direct conversations in the pot, the most recent first, with their unread count (0 when read).
+  direct PassUnreadDirect[]
+}
+
+/// A page of the pass, oldest first.
+type PassPage {
+  messages PassMessageView[]
+  /// The newest seq returned: pass it as `after` next time.
+  cursor Int
+  /// What is still unread after this read.
+  unread PassUnread
+}

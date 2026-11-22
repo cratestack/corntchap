@@ -10,6 +10,7 @@ pub mod mcp_compat;
 pub mod menus;
 pub mod pages;
 pub mod pantry;
+pub mod pass;
 pub mod procs;
 pub mod questions;
 pub mod rest;

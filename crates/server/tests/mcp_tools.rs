@@ -177,6 +177,15 @@ async fn every_tool_returns_its_typed_output() {
     w.ok("forget", json!({"project": "PAY", "key": "note"}))
         .await;
 
+    // the pass (more in tests/pass.rs)
+    w.ok(
+        "pass",
+        json!({"project": "PAY", "message": "taking PAY-1", "task": "PAY-1"}),
+    )
+    .await;
+    let page = w.ok("read_pass", json!({"project": "PAY"})).await;
+    assert_eq!(page["messages"][0]["body"], "taking PAY-1");
+
     // REST: /changes takes `since` as well as `cursor`
     let (_, by_cursor) = w.app.get(&w.agent, "/changes?cursor=3&project=PAY").await;
     let (_, by_since) = w.app.get(&w.agent, "/changes?since=3&project=PAY").await;

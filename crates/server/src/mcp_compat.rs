@@ -50,7 +50,10 @@ touch only the leases whose station is yours (whoami lists current_leases with t
 max_leases as another session holding the slot, not as a lease of yours to clean up. When you need a human decision, ask it into the \
 pot's question pool with ask (wait=true on the task you hold parks it for you and the answer wakes you \
 with a fresh lease; do not ask and then block, a blocked task waits for a person). When you are chatting with your owner, check list_questions and offer to go \
-through them: pick_question, ask them, then answer_question with their words.";
+through them: pick_question, ask them, then answer_question with their words. \
+The pass is where a pot's chefs (people and cooks) talk: read_pass when you start on a pot, and use \
+pass to coordinate with the others (who takes what, a heads-up, a handoff), with `to` for a direct \
+message only you and they read. A direct message or an @mention wakes the cook it is for.";
 
 pub struct Compat<T> {
     tools: T,

@@ -5,6 +5,7 @@ import {
   ChefHat,
   Command as CommandIcon,
   CircleHelp,
+  MessageCircle,
   Flame,
   FolderKanban,
   LogOut,
@@ -182,6 +183,13 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
                         <CircleHelp className="size-3" aria-hidden="true" />
                         <span aria-hidden="true">{asks[p.key]}</span>
                         <span className="sr-only">{plural(asks[p.key]!, "open question")}</span>
+                      </span>
+                    )}
+                    {p.unread_pass > 0 && (
+                      <span className="inline-flex items-center gap-0.5 rounded-full bg-primary px-1.5 py-px font-mono text-[10.5px] font-bold text-primary-foreground">
+                        <MessageCircle className="size-3" aria-hidden="true" />
+                        <span aria-hidden="true">{p.unread_pass}</span>
+                        <span className="sr-only">{plural(p.unread_pass, "unread message")}</span>
                       </span>
                     )}
                     <span className="font-mono text-[11px] tabular-nums text-sidebar-muted" title={`${live} not served yet`}>
