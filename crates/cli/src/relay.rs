@@ -487,6 +487,10 @@ async fn stream_once(
     let mut s = resp.bytes_stream();
     while let Some(chunk) = s.next().await {
         for ev in parser.feed(&chunk?) {
+            if ev.event == "shutdown" {
+                eprintln!("relay: the server is shutting down; reconnecting");
+                return Ok(());
+            }
             if ev.event == "wake"
                 && !ev.data.is_empty()
                 && let Ok(v) = serde_json::from_str::<Value>(&ev.data)
