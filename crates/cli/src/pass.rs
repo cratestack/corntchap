@@ -152,6 +152,10 @@ fn print_page(page: &Value, json: bool) {
             (Some(f), None) => f.to_string(),
             (None, _) => "someone gone".into(),
         };
+        let from = match m["station_label"].as_str() {
+            Some(l) => format!("{from} · {l}"),
+            None => from,
+        };
         let to = m["to"]
             .as_str()
             .map(|t| format!(" → {t}"))
