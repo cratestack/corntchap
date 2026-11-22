@@ -110,7 +110,7 @@ jobs:
         include:
           - { os: ubuntu-latest,    target: x86_64-unknown-linux-musl,  name: linux-x86_64 }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, name: linux-aarch64 }
-          - { os: macos-14,         target: aarch64-apple-darwin,       name: darwin-arm64 }
+          - { os: macos-15,         target: aarch64-apple-darwin,       name: darwin-arm64 }
           - { os: macos-15-intel,   target: x86_64-apple-darwin,        name: darwin-x86_64 }
           - { os: windows-latest,   target: x86_64-pc-windows-msvc,     name: windows-x86_64 }
     runs-on: ${{ matrix.os }}
@@ -119,6 +119,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@d5e4d57b030548f435d0befec15ff413a2c60eff # 1.100 (branch, not a tag)
         with:
           targets: ${{ matrix.target }}
+      # rust-toolchain.toml pins the toolchain cargo uses in this directory and lists only x86_64 musl as an
+      # extra target; add this job's target to *that* toolchain (aarch64 musl failed with "can't find crate
+      # for `core`" without it).
+      - name: target for the pinned toolchain
+        shell: bash
+        run: rustup target add "${{ matrix.target }}" && rustup show active-toolchain
       - name: musl toolchain
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
