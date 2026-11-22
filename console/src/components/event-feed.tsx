@@ -186,7 +186,7 @@ const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: b
           {e.kind.startsWith("menu.") && (
             <>
               <Link
-                to={`/pots/${e.project}/list?menu=${encodeURIComponent(e.payload.menu ?? "")}`}
+                to={`/pots/${e.project}/board?menu=${encodeURIComponent(e.payload.menu ?? "")}`}
                 className="rounded font-semibold underline-offset-2 hover:underline focus-visible:underline"
               >
                 {e.payload.title ?? e.payload.menu}

@@ -168,9 +168,11 @@ export function TaskCard({ task, selected, onOpen, menus }: { task: TaskView; se
   );
 }
 
-export function groupTasks(tasks: TaskView[]): Record<Bucket, TaskView[]> {
+/** Bucket the tasks; `keepOrder` leaves them as given (a saved view's own order) instead of best-first. */
+export function groupTasks(tasks: TaskView[], keepOrder = false): Record<Bucket, TaskView[]> {
   const g: Record<Bucket, TaskView[]> = { claimed: [], ready: [], waiting: [], done: [], cancelled: [] };
   for (const t of tasks) g[bucketOf(t)].push(t);
+  if (keepOrder) return g;
   // best first: priority, then oldest; served: most recent first
   const best = (a: TaskView, b: TaskView) => b.priority - a.priority || a.number - b.number;
   g.claimed.sort(best);
