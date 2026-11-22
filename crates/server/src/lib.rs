@@ -22,6 +22,7 @@ pub mod sessions;
 pub mod state;
 pub mod stations;
 pub mod stream;
+pub mod usage;
 pub mod views;
 pub mod web;
 

@@ -228,6 +228,7 @@ pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
     .bind(state.config.pass_retention_days as i32)
     .execute(&state.db)
     .await?;
+    crate::usage::prune(state).await?;
     Ok(())
 }
 
@@ -458,7 +459,17 @@ impl Dispatcher {
                     self.cloud_wait.insert(target, Instant::now() + wait);
                     keep.extend(wakes.iter().map(|w| (agent, project, w.clone())));
                 }
-                record_delivery(&mut conn, project, &name, &key, &typ, wakes.len(), res).await;
+                record_delivery(
+                    &mut conn,
+                    agent,
+                    project,
+                    &name,
+                    &key,
+                    &typ,
+                    wakes.len(),
+                    res,
+                )
+                .await;
             }
         }
         self.cloud.extend(keep);
@@ -524,7 +535,8 @@ impl Dispatcher {
                         crate::cloud::work_text(&mut conn, agent_id, &agent, project, &key2).await;
                     let res =
                         crate::cloud::deliver(&state, &typ, &config, &agent, &key2, &text).await;
-                    record_delivery(&mut conn, project, &agent, &key2, &typ, 0, res).await;
+                    record_delivery(&mut conn, agent_id, project, &agent, &key2, &typ, 0, res)
+                        .await;
                 });
             }
             _ => {}
@@ -535,6 +547,7 @@ impl Dispatcher {
 /// Note a cloud delivery in the feed (with the session a Claude routine started).
 async fn record_delivery(
     c: &mut PgConnection,
+    agent_id: Uuid,
     project: Uuid,
     agent: &str,
     key: &str,
@@ -543,11 +556,22 @@ async fn record_delivery(
     res: Result<crate::cloud::Delivered, crate::cloud::Failed>,
 ) {
     let (kind, payload) = match res {
-        Ok(d) => (
-            "wake.delivered",
-            json!({"agent": agent, "project": key, "type": typ, "status": d.status,
+        Ok(d) => {
+            crate::usage::record_in(
+                c,
+                agent_id,
+                Some(project),
+                crate::usage::WAKE,
+                &format!("cloud:{typ}"),
+                d.chars,
+            )
+            .await;
+            (
+                "wake.delivered",
+                json!({"agent": agent, "project": key, "type": typ, "status": d.status,
                    "session_url": d.session_url, "messages": messages}),
-        ),
+            )
+        }
         Err(f) => {
             tracing::warn!("cloud wake for {agent} ({typ}) failed: {}", f.error);
             (

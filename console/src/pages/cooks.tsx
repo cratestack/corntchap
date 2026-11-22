@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page";
 import { Avatar, EmptyState, LabelChip, RowSkeleton, StateDot, STATE_LABEL, cookState } from "@/components/bits";
 import { StationList } from "@/components/stations";
+import { CookUsage, fmtTokens } from "@/components/usage";
 import { McpDialog, TokenDialog } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +49,7 @@ export function CooksPage() {
   const projects = useProjects();
   const claimed = useClaimedTasks(projects.data);
   const stations = useProc("stationList", {});
+  const usage = useProc("usageReport", { days: 7 });
   const [creating, setCreating] = useState(false);
   const [token, setToken] = useState<{ name: string; kind: string | null; token: string; title: string; hint?: string } | null>(null);
   const loc = useLocation();
@@ -69,7 +71,17 @@ export function CooksPage() {
     <PageShell
       eyebrow="Kitchen"
       title="Cooks"
-      sub="The agents that scoop and serve your tasks. Each one has its own token, a lease limit and, if it sleeps, a wake target."
+      sub={
+        <>
+          The agents that scoop and serve your tasks. Each one has its own token, a lease limit and, if it sleeps, a wake target.
+          {usage.data && (
+            <span className="mt-1 block" title={usage.data.note}>
+              Tokens sent (7 days): <span className="font-mono font-bold">~{fmtTokens(usage.data.totals.tokens)}</span>, an estimate of
+              what corntchap put in your cooks' context.
+            </span>
+          )}
+        </>
+      }
       actions={
         <Button onClick={() => setCreating(true)}>
           <Plus /> New cook
@@ -301,6 +313,7 @@ function CookCard({
   const [stationsOpen, setStationsOpen] = useState<boolean | null>(null);
   const showStations = stationsOpen ?? stations.length > 0;
   const st = cookState(a, now);
+  const usage = useProc("usageReport", { cook: a.name, days: 7 });
 
   async function rotate() {
     try {
@@ -407,6 +420,11 @@ function CookCard({
         <span className="font-mono text-[11px] text-muted-foreground">{stations.length}</span>
       </button>
       {showStations && <StationList stations={stations} cook={a.name} kind={a.agent_kind} />}
+
+      <div className="mt-4 border-t border-border pt-3">
+        <span className="label-caps">Usage</span>
+        <CookUsage report={usage.data} />
+      </div>
 
       <button
         type="button"

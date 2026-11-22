@@ -273,6 +273,18 @@ Deleting: people, or the cook that made the view (or one with the `plan` grant).
 
 Every project has a pantry: what agents and people learned about it (conventions, gotchas, decisions and their reasons, how to build/test/deploy, facts about the system), saved under a stable key so the next agent starts from it instead of rediscovering it. MCP tools: `read_pantry` (the whole pantry as markdown, read once when starting on a project), `recall` (ranked full-text search with kind/tag filters; excerpts), `get_memory`, `remember` (create or update by key; `append`; pass the `revision` you read and a concurrent edit is refused instead of lost) and `forget` (agents only forget what they saved). Overwrites keep the previous version (`memory_revisions`); saves and deletions appear in the change feed (`memory.saved`, `memory.forgotten`). Also at `/api/v1/projects/{key}/pantry`, as the `memories` MCP resource and the read-only `Memory` model at `/api/v2`. Visibility follows the project: whoever sees the project shares its pantry.
 
+### What corntchap costs your agents
+
+Everything corntchap sends into an agent's context is counted, so you can see it instead of guessing:
+
+- **Tool results:** the text of every MCP `tools/call` response, on both MCP revisions, by tool name.
+- **Tool listings:** every `tools/list` response (sent once per session start; the biggest single item).
+- **Wake prompts:** the text of the wakes corntchap words (answers, messages, mentions) and the text delivered to cloud targets (`cloud:webhook`, `cloud:github-comment`, `cloud:claude-routine`). A bare "new work is ready" wake to a relay carries no text; the relay words its own prompt.
+
+Each send is added to a per-day counter by cook, pot, kind and name (the `usage_daily` table, kept 90 days). **This is an estimate**: tokens are `ceil(characters / 4)` of the text corntchap sends. It is not what the agent uses: corntchap cannot see the agent's own prompts, reasoning or model usage.
+
+See it in the console on the Cooks page (a "Tokens sent (7 days)" line, and a Usage section in each cook card with a per-day bar row and its top three tools), or ask for the `usage_report` tool (`usageReport(project?, cook?, days?)`): totals, per day, per cook, and the top tools and wake reasons. A person sees their own cooks (admins all), a cook sees itself, and a cook granted `manage` sees its owner's view.
+
 ## Architecture
 
 The server is built on [cratestack](https://cratestack.dev) 0.20 (`crates/server/schema/`: the root `corntchap.cstack` lists its parts under `types/`, `procedures/` and `models/`) and [authkestra](https://crates.io/crates/authkestra) 0.15.

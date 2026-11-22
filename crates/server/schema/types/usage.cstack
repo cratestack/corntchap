@@ -1,0 +1,47 @@
+part of "../corntchap.cstack"
+
+// What corntchap sends to agents (src/usage.rs): an estimate, tokens ~ chars / 4.
+
+type UsageTotals {
+  calls Int
+  chars Int
+  /// Estimated tokens: ceil(chars / 4).
+  tokens Int
+}
+
+type UsageDay {
+  /// YYYY-MM-DD (UTC).
+  day String
+  calls Int
+  chars Int
+  tokens Int
+}
+
+type UsageCook {
+  cook String
+  calls Int
+  chars Int
+  tokens Int
+}
+
+type UsageTop {
+  /// tool (a tool result), list (the tool listing) or wake (a wake prompt).
+  kind String
+  /// The tool name, tools/list, the wake reason, or cloud:<type>.
+  name String
+  calls Int
+  chars Int
+  tokens Int
+}
+
+type UsageReport {
+  /// The period: the last N days, today included.
+  days Int
+  /// How the figures are made.
+  note String
+  totals UsageTotals
+  by_day UsageDay[]
+  by_cook UsageCook[]
+  /// The tools and wake reasons that sent the most, by estimated tokens.
+  top UsageTop[]
+}
