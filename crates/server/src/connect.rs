@@ -154,7 +154,7 @@ fn field(
            "placeholder": placeholder, "help": help})
 }
 
-fn guide(s: &Setup) -> (Vec<String>, Vec<Value>) {
+fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
     let cook = &s.cook;
     match s.kind.as_str() {
         "claude-routine" => (
@@ -172,7 +172,7 @@ fn guide(s: &Setup) -> (Vec<String>, Vec<Value>) {
         ),
         "github-comment" => (
             vec![
-                "Connect the repository to Codex cloud (or the bot you use) so that a comment mentioning it starts a task.".into(),
+                "Connect the repository to the cloud agent you use (Codex cloud, Copilot, …) so that a comment mentioning it starts a task.".into(),
                 "Pick an issue or pull request for corntchap to comment on: each wake is one comment there, mentioning the bot.".into(),
                 "Create a GitHub token that may comment on that repository (fine-grained: Issues and Pull requests, read and write).".into(),
                 "Enter the repository, the issue number and the token here.".into(),
@@ -180,7 +180,7 @@ fn guide(s: &Setup) -> (Vec<String>, Vec<Value>) {
             vec![
                 field("repo", "Repository", false, true, "owner/name", "Where the comments go."),
                 field("issue", "Issue or PR number", false, true, "42", "The thread corntchap comments on."),
-                field("mention", "Mention", false, false, "@codex", "Who each comment mentions (default @codex)."),
+                field("mention", "Mention", false, false, default_mention, &format!("Who each comment mentions, e.g. @codex or @copilot (default {default_mention}).")),
                 field("token", "GitHub token", true, true, "github_pat_…", "Allowed to comment on that repository."),
             ],
         ),
@@ -210,7 +210,7 @@ fn view(state: &AppState, s: &Setup) -> Value {
     } else {
         "waiting"
     };
-    let (steps, fields) = guide(s);
+    let (steps, fields) = guide(s, &state.config.github_mention);
     let next = match status {
         "connected" => format!(
             "{} is connected: {} wakes it from now on. Call connect_cloud with code {} and test=true to send a test wake.",
@@ -343,13 +343,12 @@ pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Resul
             let token = opt(&a.token).ok_or_else(|| {
                 Error::Invalid("token is required: a GitHub token allowed to comment".into())
             })?;
-            let mention = opt(&a.mention).unwrap_or("@codex");
-            let mention = if mention.starts_with('@') {
-                mention.to_string()
-            } else {
-                format!("@{mention}")
-            };
-            json!({"repo": repo, "issue": issue, "token": token, "mention": mention})
+            let mut c = json!({"repo": repo, "issue": issue, "token": token});
+            // without one, the server's GITHUB_MENTION applies (and follows it if it changes)
+            if let Some(m) = opt(&a.mention) {
+                c["mention"] = json!(crate::state::mention(m));
+            }
+            c
         }
         _ => {
             if !is_admin {

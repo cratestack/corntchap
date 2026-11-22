@@ -4,14 +4,14 @@ part of "../corntchap.cstack"
 // connect_cloud; the secret entered there goes to connect_cloud_save without the model.
 
 /// Start connecting a cook to a cloud wake, or check (and test) a setup.
-/// @param kind claude-routine (a Claude Code routine on the web), github-comment (e.g. @codex for Codex cloud) or webhook.
+/// @param kind claude-routine (a Claude Code routine on the web), github-comment (a mention in a GitHub comment: Codex cloud, Copilot, …) or webhook.
 /// @param cook The cook to connect (default: you, when a cook connects itself).
 /// @param projects Comma-separated pot keys it wakes for (default all).
 /// @param code An existing setup: show its state instead of opening one.
 /// @param test With code: send a test wake through the connected target.
 mutation procedure cloudConnect(kind: String?, cook: String?, projects: String?, code: String?, test: Boolean?): CloudSetup
   @allow(auth() != null)
-  @mcp(tool: "connect_cloud", description: "Connect a cook to a cloud wake (a Claude Code routine, @codex comments on GitHub, or a webhook) in steps: returns the steps, the values needed and a setup code. Clients that show MCP Apps display a form where the user enters the secret; otherwise give the user the setup's link to enter it on corntchap, or, if they prefer, take the values and call connect_cloud_save (the secret then stays in the conversation: say so). Call again with code to check, and with test=true to send a test wake. Use it when the user asks to set up a cloud agent, a routine or Codex cloud for corntchap.")
+  @mcp(tool: "connect_cloud", description: "Connect a cook to a cloud wake (a Claude Code routine, mentions in GitHub comments for Codex cloud, Copilot and the like, or a webhook) in steps: returns the steps, the values needed and a setup code. Clients that show MCP Apps display a form where the user enters the secret; otherwise give the user the setup's link to enter it on corntchap, or, if they prefer, take the values and call connect_cloud_save (the secret then stays in the conversation: say so). Call again with code to check, and with test=true to send a test wake. Use it when the user asks to set up a cloud agent, a routine, Codex cloud or Copilot for corntchap.")
 
 /// Finish a cloud setup with its values. The answer never repeats the secret.
 /// @param code The setup code from connect_cloud.
@@ -20,7 +20,7 @@ mutation procedure cloudConnect(kind: String?, cook: String?, projects: String?,
 /// @param secret webhook: the HMAC-SHA256 signing secret.
 /// @param repo github-comment: owner/name.
 /// @param issue github-comment: the issue or PR number.
-/// @param mention github-comment: who each comment mentions (default @codex).
+/// @param mention github-comment: who each comment mentions, e.g. @codex or @copilot (default: the server's GITHUB_MENTION, @cook).
 mutation procedure cloudConnectSave(code: String, url: String?, token: String?, secret: String?, repo: String?, issue: Int?, mention: String?): CloudSetup
   @allow(auth() != null)
   @mcp(tool: "connect_cloud_save", description: "Finish a cloud setup from connect_cloud with its values (trigger URL and token, GitHub repo, issue and token, or webhook URL and secret) and make the wake target. The corntchap form calls it itself; call it only when the user chose to give you the values.")

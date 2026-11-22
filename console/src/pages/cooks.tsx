@@ -391,7 +391,7 @@ function WakeTargets({ agent, runtime }: { agent: string; runtime: string | null
                 : w.type === "claude-routine"
                   ? `Claude routine ${String(w.config.url ?? "").match(/trig_[A-Za-z0-9]+/)?.[0] ?? ""}`
                   : w.type === "github-comment"
-                    ? `${String(w.config.mention ?? "@codex")} on ${String(w.config.repo ?? "")}#${String(w.config.issue ?? "")}`
+                    ? `${String(w.config.mention ?? "the default mention")} on ${String(w.config.repo ?? "")}#${String(w.config.issue ?? "")}`
                     : "via the fire"}
             </p>
             {(w.projects.length > 0 || w.labels.length > 0) && (
@@ -434,7 +434,7 @@ function AddWake({ open, onOpenChange, agent, admin }: { open: boolean; onOpenCh
   const [secret, setSecret] = useState("");
   const [repo, setRepo] = useState("");
   const [issue, setIssue] = useState("");
-  const [mention, setMention] = useState("@codex");
+  const [mention, setMention] = useState("");
   const [busy, setBusy] = useState(false);
   const [routinePrompt, setRoutinePrompt] = useState<string | null>(null);
   const reset = () => {
@@ -452,7 +452,7 @@ function AddWake({ open, onOpenChange, agent, admin }: { open: boolean; onOpenCh
       case "webhook":
         return { url, ...(token ? { token } : {}), ...(secret ? { secret } : {}) };
       case "github-comment":
-        return { repo, issue: Number(issue), token, mention: mention || "@codex" };
+        return { repo, issue: Number(issue), token, ...(mention.trim() ? { mention: mention.trim() } : {}) };
       default:
         return {};
     }
@@ -526,7 +526,7 @@ function AddWake({ open, onOpenChange, agent, admin }: { open: boolean; onOpenCh
                 <SelectContent>
                   <SelectItem value="relay">Relay: a fire on your laptop</SelectItem>
                   {admin && <SelectItem value="claude-routine">Claude Code on the web (a routine)</SelectItem>}
-                  {admin && <SelectItem value="github-comment">Codex cloud (an @codex comment)</SelectItem>}
+                  {admin && <SelectItem value="github-comment">GitHub comment (Codex cloud, Copilot, …)</SelectItem>}
                   {admin && <SelectItem value="webhook">Webhook (your own endpoint)</SelectItem>}
                 </SelectContent>
               </Select>
@@ -590,7 +590,7 @@ function AddWake({ open, onOpenChange, agent, admin }: { open: boolean; onOpenCh
             {type === "github-comment" && (
               <div className="space-y-1.5">
                 <Label htmlFor="wt-mention">Mention</Label>
-                <Input id="wt-mention" value={mention} onChange={(e) => setMention(e.target.value)} />
+                <Input id="wt-mention" value={mention} placeholder="@cook (the server's default), @codex, @copilot" onChange={(e) => setMention(e.target.value)} />
                 <p className="text-[12px] text-muted-foreground">Comments can be public: they point at the messages, never carry them.</p>
               </div>
             )}

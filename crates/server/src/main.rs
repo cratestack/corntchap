@@ -74,6 +74,9 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
     if let Some(m) = env("COMMENT_NUDGE_MINUTES").and_then(|v| v.parse::<i64>().ok()) {
         c.comment_nudge_minutes = m.max(1);
     }
+    if let Some(m) = env("GITHUB_MENTION").filter(|m| !m.trim().is_empty()) {
+        c.github_mention = corntchap::state::mention(&m);
+    }
     if let Some(d) = env("PASS_RETENTION_DAYS").and_then(|v| v.parse::<i64>().ok()) {
         c.pass_retention_days = d.max(1);
     }

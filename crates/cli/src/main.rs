@@ -427,7 +427,7 @@ enum WakeCmd {
         repo: Option<String>,
         #[arg(long)]
         issue: Option<i64>,
-        /// github-comment: who the comment mentions (default @codex)
+        /// github-comment: who the comment mentions, e.g. @codex or @copilot (default: the server's GITHUB_MENTION, @cook)
         #[arg(long)]
         mention: Option<String>,
     },
@@ -986,7 +986,15 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                     "webhook" => config = json!({"url": url, "token": token, "secret": secret}),
                     "claude-routine" => config = json!({"url": url, "token": token}),
                     "github-comment" => {
-                        config = json!({"repo": repo, "issue": issue, "token": token, "mention": mention.unwrap_or_else(|| "@codex".into())})
+                        config = json!({"repo": repo, "issue": issue, "token": token});
+                        if let Some(m) = mention.filter(|m| !m.trim().is_empty()) {
+                            let m = m.trim();
+                            config["mention"] = json!(if m.starts_with('@') {
+                                m.to_string()
+                            } else {
+                                format!("@{m}")
+                            });
+                        }
                     }
                     _ => {}
                 }
