@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
-import type { FileRef, FileView } from "@corntchap/api";
+import type { FileRef } from "@corntchap/api";
 import { FileIcon, Loader2, Paperclip, Search, Trash2, Upload as UploadIcon, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/api";
-import { useInvalidateAll, useV1, useV1Call } from "@/lib/data";
+import { useInvalidateAll, usePotFiles, useV1Call } from "@/lib/data";
 import { dismissUpload, fileHref, fmtBytes, isImage, onUploadsSettled, uploadFiles, useUploads } from "@/lib/files";
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -328,7 +328,7 @@ export function FilesView({ potKey }: { potKey: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
 
-  const res = useV1<FileView[]>(`/projects/${encodeURIComponent(potKey)}/files`);
+  const res = usePotFiles(potKey);
   const del = useDeleteFile();
   const now = useNow();
   const all = useMemo(() => (res.data ?? []).filter((f) => f.status !== "deleted"), [res.data]);

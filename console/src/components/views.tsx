@@ -3,7 +3,7 @@ import type { TaskView, ViewOut } from "@corntchap/api";
 import { ChevronRight, Loader2, Play } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useProc, useProcCall } from "@/lib/data";
+import { usePotViews, useProcCall } from "@/lib/data";
 import { client, errorMessage } from "@/lib/api";
 import { plural } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,7 @@ export const layoutOf = (v: ViewOut): ViewLayout => (v.layout === "list" ? "list
 
 /** A pot's saved views, in `position` order. */
 export function useViews(potKey: string, enabled: boolean) {
-  const q = useProc("viewList", { project: potKey }, { enabled });
+  const q = usePotViews(potKey, { enabled });
   const views = [...(q.data ?? [])].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
   return { views, isLoading: q.isLoading, error: q.error };
 }

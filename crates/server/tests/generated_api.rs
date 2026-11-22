@@ -600,3 +600,45 @@ async fn cook_lease_limits_are_changed_through_the_model() {
         .await;
     assert_eq!((st, &v["maxLeases"]), (200, &json!(4)), "{v}");
 }
+
+#[tokio::test]
+async fn files_and_questions_models_follow_the_pot() {
+    let w = world().await;
+    let db = &w.app.state.db;
+    let pid: uuid::Uuid = sqlx::query_scalar("select id from projects where key = 'AAA'")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    for (n, status) in [(1i64, "ready"), (2, "deleted")] {
+        sqlx::query(
+            "insert into files (id, project_id, number, name, content_type, storage_key, status, upload_expires_at)
+             values (gen_random_uuid(), $1, $2, 'shot.png', 'image/png', 'pots/x/' || $2, $3, now())",
+        )
+        .bind(pid)
+        .bind(n)
+        .bind(status)
+        .execute(db)
+        .await
+        .unwrap();
+    }
+    sqlx::query("insert into questions (project_id, number, body) values ($1, 1, 'which logo?')")
+        .bind(pid)
+        .execute(db)
+        .await
+        .unwrap();
+    let (st, v) = w
+        .v2(&w.alice, Method::GET, "/files?project.key=AAA", None)
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(rows(&v).len(), 1, "deleted files are not listed: {v}");
+    assert!(
+        !v.to_string().contains("storage"),
+        "storage keys stay on the server: {v}"
+    );
+    let (_, v) = w.v2(&w.bob, Method::GET, "/files", None).await;
+    assert!(rows(&v).is_empty(), "another team's files: {v}");
+    let (_, v) = w.v2(&w.alice, Method::GET, "/questions", None).await;
+    assert_eq!(rows(&v).len(), 1);
+    let (_, v) = w.v2(&w.bob, Method::GET, "/questions", None).await;
+    assert!(rows(&v).is_empty());
+}

@@ -1,0 +1,48 @@
+part of "../corntchap.cstack"
+
+// Files and the question pool, read-only here: files are uploaded with fileCreateUpload /
+// fileUploadInline, questions asked with questionAsk (they wake and park tasks). Both are
+// visible to the chefs of the pot (and admins).
+
+model File {
+  id Uuid @id
+  projectId Uuid @readonly @map("project_id")
+  number BigInt @readonly
+  name String @readonly
+  contentType String @readonly @map("content_type")
+  sizeExpected BigInt? @readonly @map("size_expected")
+  size BigInt? @readonly
+  status String @readonly
+  error String? @readonly
+  createdBy Uuid? @readonly @map("created_by")
+  taskId Uuid? @readonly @map("task_id")
+  questionId Uuid? @readonly @map("question_id")
+  createdAt DateTime @readonly @map("created_at")
+  readyAt DateTime? @readonly @map("ready_at")
+  storageKey String @server_only @map("storage_key")
+  project Project @relation(fields:[projectId],references:[id])
+  task Task? @relation(fields:[taskId],references:[id])
+  question Question? @relation(fields:[questionId],references:[id])
+  creator Principal? @relation(fields:[createdBy],references:[id])
+
+  @@map("files")
+  @@deny("read", auth().kind == "relay")
+  @@deny("read", status == "deleted")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "files")
+}
+
+model Question {
+  id Uuid @id
+  projectId Uuid @readonly @map("project_id")
+  number BigInt @readonly
+  body String @readonly
+  status String @readonly
+  createdAt DateTime @readonly @map("created_at")
+  project Project @relation(fields:[projectId],references:[id])
+
+  @@map("questions")
+  @@deny("read", auth().kind == "relay")
+  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@mcp(resource: "questions")
+}

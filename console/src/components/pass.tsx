@@ -6,7 +6,7 @@ import { Hash, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { client, errorMessage } from "@/lib/api";
-import { useInvalidateAll, useProjects, useV1, type MemberRow } from "@/lib/data";
+import { useInvalidateAll, useProjects, useTeamChefs, type MemberRow } from "@/lib/data";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useOpenTask } from "@/lib/nav";
 import { useSession } from "@/lib/session";
@@ -46,7 +46,7 @@ export function PassView({ potKey }: { potKey: string }) {
   const [params, setParams] = useSearchParams();
   const projects = useProjects();
   const team = projects.data?.find((p) => p.key === potKey)?.team ?? null;
-  const members = useV1<MemberRow[]>(`/teams/${encodeURIComponent(team ?? "")}/members`, { enabled: !!team });
+  const members = useTeamChefs(team);
   const chefs = useMemo(() => (members.data ?? []).filter((m) => m.name !== me.name), [members.data, me.name]);
 
   const withWho = params.get("with") || POT;

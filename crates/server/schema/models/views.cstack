@@ -16,6 +16,7 @@ model PotView {
   createdAt DateTime @readonly @map("created_at")
   updatedAt DateTime @readonly @map("updated_at")
   project Project @relation(fields:[projectId],references:[id])
+  creator Principal? @relation(fields:[createdBy],references:[id])
 
   @@map("pot_views")
   @@deny("read", auth().kind == "relay")

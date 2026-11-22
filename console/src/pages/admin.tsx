@@ -24,7 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useAgents, useProjects, useV1, useV1Call, type AgentRow, type MemberRow, type TeamRow, type UserRow } from "@/lib/data";
+import { useAgents, useProjects, useTeamChefs, useV1, useV1Call, type AgentRow, type TeamRow, type UserRow } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useSession } from "@/lib/session";
@@ -399,7 +399,7 @@ export function TeamsAdminPage() {
 }
 
 function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
-  const members = useV1<MemberRow[]>(`/teams/${team.name}/members`);
+  const members = useTeamChefs(team.name);
   const call = useV1Call();
   return (
     <section className="rounded-[14px] border border-border bg-card" aria-label={`Team ${team.name}`}>
@@ -455,7 +455,7 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
   const open = !!team;
   const users = useV1<UserRow[]>("/users", { enabled: open });
   const cooks = useAgents();
-  const members = useV1<MemberRow[]>(`/teams/${team}/members`, { enabled: open });
+  const members = useTeamChefs(team, { enabled: open });
   const [who, setWho] = useState<Candidate | null>(null);
   const [pick, setPick] = useState(false);
   const [role, setRole] = useState("member");

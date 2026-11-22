@@ -1,8 +1,8 @@
 import { useCallback } from "react";
 import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
-import type { CorntchapApiClient, ProjectSummary, QuestionView, TaskView } from "@corntchap/api";
-import { v1 } from "./api";
+import type { CorntchapApiClient, FileView, ProjectSummary, QuestionView, TaskView, ViewOut } from "@corntchap/api";
+import { client, v1 } from "./api";
 
 type Procs = CorntchapApiClient["procedures"];
 export type ProcName = keyof Procs;
@@ -68,6 +68,83 @@ export function useV1<T>(path: string, opts: { enabled?: boolean } = {}) {
     staleTime: 1500,
   });
   return { data: q.data, isLoading: q.isLoading, error: q.error as unknown, refetch: q.refetch };
+}
+
+/**
+ * Read a generated model (`/api/v2/<model>`): the server applies the model's read policy, so these
+ * lists hold only what the signed-in person may see. Lives under ["data"] like every other query.
+ */
+function useModel<T>(key: unknown[], fn: () => Promise<T>, enabled = true) {
+  const q = useQuery({ queryKey: ["data", "model", ...key], queryFn: fn, enabled, staleTime: 1500 });
+  return { data: q.data, isLoading: q.isLoading, error: q.error as unknown, refetch: q.refetch };
+}
+
+const num = (v: bigint | number | null | undefined) => (v === null || v === undefined ? null : Number(v));
+
+/** A team's chefs (people and cooks) with their role, from the TeamMember model. */
+export function useTeamChefs(team: string | null | undefined, opts: { enabled?: boolean } = {}) {
+  return useModel(
+    ["team-members", team],
+    async (): Promise<MemberRow[]> => {
+      const rows = await client.teamMembers.list({ query: { filters: { "team.name": team ?? "" }, include: ["principal"] } });
+      return rows
+        .filter((m) => m.principal?.name)
+        .map((m) => ({ name: m.principal!.name!, kind: m.principal!.kind ?? "user", role: m.role ?? "member" }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    },
+    !!team && (opts.enabled ?? true),
+  );
+}
+
+/** A pot's files (newest first), from the File model. */
+export function usePotFiles(pot: string) {
+  return useModel(["files", pot], async (): Promise<FileView[]> => {
+    const rows = await client.files.list({
+      query: { filters: { "project.key": pot }, include: ["project", "task", "question", "creator"], sort: ["-createdAt"] },
+    });
+    return rows.map((f) => {
+      const key = f.project?.key ?? pot;
+      const id = `${key}-F${num(f.number)}`;
+      return {
+        id,
+        project: key,
+        name: f.name ?? "",
+        content_type: f.contentType ?? "application/octet-stream",
+        size: num(f.size),
+        size_expected: num(f.sizeExpected),
+        status: f.status ?? "uploading",
+        url: `/files/${id}/${encodeURIComponent(f.name ?? "")}`,
+        task: f.task ? `${key}-${num(f.task.number)}` : null,
+        question: f.question ? `${key}-Q${num(f.question.number)}` : null,
+        created_by: f.creator?.name ?? null,
+        created_at: f.createdAt ?? "",
+        ready_at: f.readyAt ?? null,
+        error: f.error ?? null,
+      };
+    });
+  });
+}
+
+/** A pot's saved views in tab order, from the PotView model. */
+export function usePotViews(pot: string, opts: { enabled?: boolean } = {}) {
+  return useModel(
+    ["views", pot],
+    async (): Promise<ViewOut[]> => {
+      const rows = await client.potViews.list({ query: { filters: { "project.key": pot }, include: ["creator"], sort: ["position"] } });
+      return rows.map((v) => ({
+        key: v.key ?? "",
+        name: v.name ?? "",
+        description: v.description ?? null,
+        layout: v.layout ?? "list",
+        where: v.whereSql ?? "true",
+        order: v.orderSql ?? null,
+        position: num(v.position) ?? 0,
+        created_by: v.creator?.name ?? null,
+        updated_at: v.updatedAt ?? "",
+      }));
+    },
+    opts.enabled ?? true,
+  );
 }
 
 /** POST/DELETE/... on /api/v1, then refresh everything. */
