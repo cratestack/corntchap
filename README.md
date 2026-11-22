@@ -129,6 +129,7 @@ A comment on a task reaches the cook responsible for it, without anyone having t
 - **Where:** it's woken on the session holding the task, else its main station.
 - **Mentions:** `@mention`s in a comment wake those cooks too.
 - **Never:** the commenter itself, or anyone on a tossed task.
+- **Unanswered:** a person's comment that gets no answer on the task (a comment, or completing, releasing or blocking it) within `COMMENT_NUDGE_MINUTES` (default 10) wakes the cook's **main station** once more. That's the orchestrating session, not the one that stayed silent.
 
 ### The pass: chefs talk
 

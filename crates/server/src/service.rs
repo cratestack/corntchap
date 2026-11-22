@@ -656,8 +656,8 @@ pub async fn comment(
         // A live lease is extended; a stale epoch still lets the note through.
         let _ = touch_lease(&mut tx, p, &t, e, None).await;
     }
-    add_comment(&mut tx, &t, p.id, body).await?;
-    emit(
+    let comment_id = add_comment(&mut tx, &t, p.id, body).await?;
+    let seq = emit(
         &mut tx,
         Some(t.project_id),
         Some(t.id),
@@ -666,7 +666,7 @@ pub async fn comment(
         json!({}),
     )
     .await?;
-    let woken = notify_comment(&mut tx, p, &t, body).await?;
+    let woken = notify_comment(&mut tx, p, &t, body, comment_id, seq).await?;
     tx.commit().await?;
     Ok(json!({"ok": true, "woken": woken}))
 }
@@ -679,6 +679,8 @@ async fn notify_comment(
     p: &Principal,
     t: &TaskRef,
     body: &str,
+    comment_id: Uuid,
+    seq: i64,
 ) -> Result<Vec<String>> {
     if t.status == "cancelled" {
         return Ok(vec![]);
@@ -747,20 +749,36 @@ async fn notify_comment(
             "comment",
         )
         .await?;
+        // A person's comment waits for an answer; unanswered, the cook's main station hears again.
+        if p.is_user() {
+            sqlx::query(
+                "insert into comment_replies (comment_id, agent_id, task_id, project_id, author_id, since_seq)
+                 values ($1,$2,$3,$4,$5,$6) on conflict do nothing",
+            )
+            .bind(comment_id)
+            .bind(agent)
+            .bind(t.id)
+            .bind(t.project_id)
+            .bind(p.id)
+            .bind(seq)
+            .execute(&mut *c)
+            .await?;
+        }
         woken.push(name);
     }
     Ok(woken)
 }
 
-async fn add_comment(c: &mut PgConnection, t: &TaskRef, author: Uuid, body: &str) -> Result<()> {
+async fn add_comment(c: &mut PgConnection, t: &TaskRef, author: Uuid, body: &str) -> Result<Uuid> {
+    let id = Uuid::new_v4();
     sqlx::query("insert into comments (id, task_id, author_id, body) values ($1,$2,$3,$4)")
-        .bind(Uuid::new_v4())
+        .bind(id)
         .bind(t.id)
         .bind(author)
         .bind(body)
         .execute(c)
         .await?;
-    Ok(())
+    Ok(id)
 }
 
 pub async fn complete(

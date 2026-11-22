@@ -89,6 +89,9 @@ async fn run_jobs(state: AppState) {
             if let Err(e) = reap(&s).await {
                 tracing::warn!("reaper: {e}");
             }
+            if let Err(e) = nudge_unanswered(&s).await {
+                tracing::warn!("comment nudges: {e}");
+            }
             n += 1;
             if n % 240 == 1
                 && let Err(e) = retain(&s).await
@@ -137,6 +140,76 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
     .execute(&state.db)
     .await?
     .rows_affected();
+    Ok(n)
+}
+
+/// People's comments a cook has not answered in time (no comment, completion, release or block
+/// by it on the task since): wake its main station once more with the comment. Returns how many.
+pub async fn nudge_unanswered(state: &AppState) -> Result<u64, crate::error::Error> {
+    let mut tx = state.db.begin().await?;
+    // answered (or moot: the task was tossed) since the comment
+    sqlx::query(
+        "update comment_replies r set answered_at = now()
+         where r.answered_at is null and r.nudged_at is null and (
+           exists (select 1 from events e where e.task_id = r.task_id and e.actor_id = r.agent_id
+                     and e.seq > r.since_seq
+                     and e.kind in ('task.commented', 'task.completed', 'task.released', 'task.blocked'))
+           or exists (select 1 from tasks t where t.id = r.task_id and t.status = 'cancelled'))",
+    )
+    .execute(&mut *tx)
+    .await?;
+    let due: Vec<(Uuid, Uuid, Uuid, Uuid, String, i64, String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(
+            "select r.comment_id, r.agent_id, r.task_id, r.project_id, pr.key, t.number, t.title, cm.body,
+                    (select name from principals where id = r.author_id), r.created_at
+             from comment_replies r
+             join tasks t on t.id = r.task_id join projects pr on pr.id = r.project_id
+             join comments cm on cm.id = r.comment_id
+             where r.answered_at is null and r.nudged_at is null
+               and r.created_at < now() - make_interval(mins => $1::int)
+             for update of r skip locked",
+        )
+        .bind(state.config.comment_nudge_minutes as i32)
+        .fetch_all(&mut *tx)
+        .await?;
+    let n = due.len() as u64;
+    for (comment, agent, task, project, key, number, title, body, author, at) in due {
+        let main: Option<Uuid> = sqlx::query_scalar(
+            "select id from stations where agent_id = $1 and project_id = $2 and main",
+        )
+        .bind(agent)
+        .bind(project)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let minutes = (chrono::Utc::now() - at).num_minutes().max(1);
+        let tref = format!("{key}-{number}");
+        let prompt = format!(
+            "Still unanswered after {minutes} min: {} commented on {tref} \"{}\":\n\n{body}\n\n\
+             The session that was woken did not reply. Answer with the `comment` tool on {tref} \
+             (or hand it to the session that can).",
+            author.as_deref().unwrap_or("someone"),
+            crate::questions::short(&title),
+        );
+        crate::questions::wake(
+            &mut tx,
+            project,
+            &key,
+            agent,
+            main,
+            Some(task),
+            &prompt,
+            "comment-nudge",
+        )
+        .await?;
+        sqlx::query(
+            "update comment_replies set nudged_at = now() where comment_id = $1 and agent_id = $2",
+        )
+        .bind(comment)
+        .bind(agent)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(n)
 }
 

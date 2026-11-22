@@ -19,6 +19,8 @@ pub struct Config {
     pub storage: Option<crate::files::StorageConfig>,
     /// Days the pass (chat) is kept; durable knowledge belongs in the pantry.
     pub pass_retention_days: i64,
+    /// Minutes a cook has to answer a person's comment before its main station is woken again.
+    pub comment_nudge_minutes: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +53,7 @@ impl Config {
             run_background: true,
             storage: None,
             pass_retention_days: 7,
+            comment_nudge_minutes: 10,
         }
     }
 }
