@@ -174,3 +174,34 @@ jobs:
           files: |
             dist/*
             install.sh
+
+  # Tell the Homebrew tap and the Scoop bucket a release exists, so `brew`/`scoop` get it within minutes
+  # instead of at their next hourly poll (which stays as the safety net). The token comes from the
+  # cratestack release GitHub App (org secrets RELEASE_PLEASE_APP_CLIENT_ID / _PRIVATE_KEY), lives one
+  # hour, and can only start workflows in those two repositories: they still verify the release (asset
+  # digests, version gate, install test) and publish with their own GITHUB_TOKEN.
+  packagers:
+    needs: github-release
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Mint a dispatch-only token for the tap and the bucket
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          owner: cratestack
+          repositories: homebrew-tap,scoop-bucket
+          permission-actions: write
+      - name: Start both updaters for this tag
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "not a release tag: $TAG" >&2; exit 1 ;; esac
+          for repo in cratestack/homebrew-tap cratestack/scoop-bucket; do
+            gh workflow run update.yml --repo "$repo" --ref main -f tag="$TAG"
+            echo "dispatched $repo update.yml for $TAG"
+          done
