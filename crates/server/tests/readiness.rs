@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 #[tokio::test]
 async fn parent_is_not_claimable_until_subtasks_are_terminal() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let t = tok.unwrap();
     app.post(&t, "/teams", json!({"name": "acme"})).await;
     app.post(
@@ -111,7 +113,9 @@ async fn parent_is_not_claimable_until_subtasks_are_terminal() {
 #[tokio::test]
 async fn cancelled_subtask_unblocks_the_parent() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let t = tok.unwrap();
     app.post(&t, "/teams", json!({"name": "acme"})).await;
     app.post(

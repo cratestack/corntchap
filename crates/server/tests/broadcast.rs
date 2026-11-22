@@ -40,9 +40,11 @@ async fn cursor(app: &common::TestApp) -> i64 {
 #[tokio::test]
 async fn broadcast_reaches_every_session() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
-    app.post(&root, "/users", json!({"login": "alice"})).await;
+    app.add_user("alice").await;
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(&root, "/teams/acme/members", json!({"principal": "alice"}))
         .await;
@@ -228,7 +230,9 @@ async fn broadcast_reaches_every_session() {
 #[tokio::test]
 async fn sessions_sign_what_they_write() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(
@@ -351,7 +355,9 @@ async fn sessions_sign_what_they_write() {
 #[tokio::test]
 async fn one_session_writes_to_another() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(

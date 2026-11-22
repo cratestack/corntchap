@@ -24,10 +24,12 @@ fn ids(v: &Value) -> Vec<String> {
 #[tokio::test]
 async fn sql_views() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     for u in ["alice", "eve"] {
-        app.post(&root, "/users", json!({"login": u})).await;
+        app.add_user(u).await;
     }
     for (team, who) in [("acme", "alice"), ("other", "eve")] {
         app.post(&root, "/teams", json!({"name": team})).await;

@@ -48,7 +48,9 @@ impl Legacy<'_> {
 #[tokio::test]
 async fn legacy_handshake_list_and_call() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin_tok = tok.unwrap();
     app.post(&admin_tok, "/teams", json!({"name": "acme"}))
         .await;
@@ -253,7 +255,9 @@ async fn legacy_handshake_list_and_call() {
 #[tokio::test]
 async fn models_are_resources_under_policies() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin_tok = tok.unwrap();
     for (team, key) in [("acme", "PAY"), ("other", "OPS")] {
         app.post(&admin_tok, "/teams", json!({"name": team})).await;

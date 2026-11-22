@@ -23,6 +23,346 @@ pub fn norm_name(s: &str) -> Result<String> {
     Ok(n)
 }
 
+/// Names the pass gives a meaning to (`@all` reaches everyone) or that read as an address to a
+/// crowd; no person's handle may be one of them.
+pub const RESERVED_HANDLES: &[&str] = &["all", "everyone", "here", "channel", "me", "system"];
+
+/// A person's handle: a valid name that is not reserved. Letters are lowercased.
+pub fn norm_handle(s: &str) -> Result<String> {
+    let n = norm_name(s)?;
+    if RESERVED_HANDLES.contains(&n.as_str()) {
+        return invalid(format!("{n} is reserved: pick another handle"));
+    }
+    Ok(n)
+}
+
+const ADJECTIVES: &[&str] = &[
+    "saffron",
+    "golden",
+    "smoky",
+    "spicy",
+    "sweet",
+    "salty",
+    "crispy",
+    "creamy",
+    "tender",
+    "zesty",
+    "peppery",
+    "toasted",
+    "roasted",
+    "braised",
+    "grilled",
+    "steamy",
+    "juicy",
+    "fragrant",
+    "tangy",
+    "mellow",
+    "bold",
+    "rustic",
+    "humble",
+    "merry",
+    "ripe",
+    "fresh",
+    "wild",
+    "amber",
+    "ochre",
+    "scarlet",
+    "crimson",
+    "emerald",
+    "indigo",
+    "copper",
+    "velvet",
+    "sunny",
+    "cosy",
+    "lively",
+    "nimble",
+    "gentle",
+    "bright",
+    "hearty",
+    "savory",
+    "buttery",
+    "nutty",
+    "honeyed",
+    "charred",
+    "simmering",
+    "sizzling",
+    "pickled",
+    "cured",
+    "fermented",
+    "whipped",
+    "folded",
+    "stuffed",
+    "glazed",
+    "dusted",
+    "candied",
+    "minted",
+    "herbal",
+    "citrus",
+    "cassava",
+];
+
+const DISHES: &[&str] = &[
+    "okra",
+    "plantain",
+    "cassava",
+    "yam",
+    "jollof",
+    "ndole",
+    "fufu",
+    "suya",
+    "egusi",
+    "kelewele",
+    "injera",
+    "berbere",
+    "tagine",
+    "couscous",
+    "harissa",
+    "peanut",
+    "millet",
+    "sorghum",
+    "taro",
+    "mango",
+    "papaya",
+    "guava",
+    "baobab",
+    "hibiscus",
+    "ginger",
+    "turmeric",
+    "cumin",
+    "cardamom",
+    "pepper",
+    "tomato",
+    "onion",
+    "garlic",
+    "lentil",
+    "chickpea",
+    "bean",
+    "rice",
+    "maize",
+    "corn",
+    "stew",
+    "broth",
+    "soup",
+    "skillet",
+    "ladle",
+    "whisk",
+    "cleaver",
+    "mortar",
+    "pestle",
+    "colander",
+    "griddle",
+    "kettle",
+    "casserole",
+    "wok",
+    "cauldron",
+    "spatula",
+    "tongs",
+    "apron",
+    "sieve",
+    "ramekin",
+    "pantry",
+    "hearth",
+    "oven",
+];
+
+/// A random kitchen handle such as `saffron-okra-42`: two words and a 2-3 digit number (a 6 digit one
+/// when `long`). `pick(n)` returns a number below `n`; it is injectable so tests can force collisions.
+/// A source of randomness: `pick(n)` returns a number below `n`.
+pub type Pick<'a> = &'a mut (dyn FnMut(usize) -> usize + Send);
+
+pub fn generate_handle(pick: Pick<'_>, long: bool) -> String {
+    let adjective = ADJECTIVES[pick(ADJECTIVES.len()) % ADJECTIVES.len()];
+    let dish = DISHES[pick(DISHES.len()) % DISHES.len()];
+    let number = if long {
+        100_000 + pick(900_000) % 900_000
+    } else {
+        10 + pick(990) % 990
+    };
+    format!("{adjective}-{dish}-{number}")
+}
+
+/// Production randomness for [`generate_handle`].
+pub fn random_pick(n: usize) -> usize {
+    rand::random_range(0..n)
+}
+
+/// Draws before the suffix grows from 2-3 to 6 digits, and draws overall.
+const SHORT_ATTEMPTS: usize = 8;
+const MAX_ATTEMPTS: usize = 16;
+
+/// Insert a user. With `wanted` that exact handle (taken: 409); without, random kitchen handles until one is
+/// free. When `sub` is set and its row appears meanwhile (a concurrent first sign-in of the same person) that
+/// row is returned instead, so one `sub` is always one principal. `on conflict do nothing` keeps a collision
+/// from aborting the surrounding transaction.
+async fn insert_user(
+    c: &mut PgConnection,
+    wanted: Option<String>,
+    sub: Option<&str>,
+    display_name: Option<&str>,
+    is_admin: bool,
+    source: &str,
+    pick: Pick<'_>,
+) -> Result<(Uuid, String)> {
+    for attempt in 0..MAX_ATTEMPTS {
+        let handle = match &wanted {
+            Some(w) => w.clone(),
+            None => generate_handle(pick, attempt >= SHORT_ATTEMPTS),
+        };
+        let id: Option<Uuid> = sqlx::query_scalar(
+            "insert into principals (id, kind, name, oidc_sub, display_name, is_admin, admin_source)
+             values ($1,'user',$2,$3,$4,$5,$6) on conflict do nothing returning id",
+        )
+        .bind(Uuid::new_v4())
+        .bind(&handle)
+        .bind(sub)
+        .bind(display_name)
+        .bind(is_admin)
+        .bind(source)
+        .fetch_optional(&mut *c)
+        .await?;
+        if let Some(id) = id {
+            return Ok((id, handle));
+        }
+        if let Some(sub) = sub
+            && let Some(row) = sqlx::query_as::<_, (Uuid, String)>(
+                "select id, name from principals where oidc_sub = $1",
+            )
+            .bind(sub)
+            .fetch_optional(&mut *c)
+            .await?
+        {
+            return Ok(row);
+        }
+        if wanted.is_some() {
+            return Err(Error::Conflict(format!(
+                "the handle {handle} is already taken"
+            )));
+        }
+    }
+    Err(Error::Internal(
+        "could not find a free handle: too many collisions".into(),
+    ))
+}
+
+/// First sign-in of an unknown `sub`: create the person (just-in-time) with a random kitchen handle.
+pub async fn provision_user(
+    db: &PgPool,
+    sub: &str,
+    display_name: Option<&str>,
+    pick: Pick<'_>,
+) -> Result<Uuid> {
+    let mut c = db.acquire().await?;
+    let (id, _) = insert_user(&mut c, None, Some(sub), display_name, false, "oidc", pick).await?;
+    Ok(id)
+}
+
+/// Longest display name kept, in characters.
+pub const MAX_DISPLAY_NAME: usize = 120;
+
+/// A claim from the ID token made safe to store and show: control and invisible direction characters
+/// removed, surrounding space trimmed, cut to [`MAX_DISPLAY_NAME`] characters. Empty becomes `None`.
+pub fn clean_display_name(raw: &str) -> Option<String> {
+    let kept: String = raw
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(*c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+        })
+        .collect();
+    let cut: String = kept.trim().chars().take(MAX_DISPLAY_NAME).collect();
+    let cut = cut.trim();
+    (!cut.is_empty()).then(|| cut.to_string())
+}
+
+/// Change your own handle. Only a person can (agents and relays are named by their owner), and a
+/// disabled person cannot. Same rules as any handle; a taken one is a 409.
+pub async fn rename_self(db: &PgPool, p: &Principal, new_name: &str) -> Result<Value> {
+    if !p.is_user() {
+        return Err(Error::Forbidden(
+            "only a person can rename themselves; a cook or a fire keeps the name its owner gave it".into(),
+        ));
+    }
+    let new = norm_handle(new_name)?;
+    let mut tx = db.begin().await?;
+    let old: Option<String> = sqlx::query_scalar(
+        "select name from principals where id = $1 and kind = 'user' and disabled_at is null for update",
+    )
+    .bind(p.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(old) = old else {
+        return Err(Error::Forbidden("this account is disabled".into()));
+    };
+    if old == new {
+        return Ok(json!({"name": new, "previous": old}));
+    }
+    let taken = || Error::Conflict(format!("the handle {new} is already taken"));
+    let done = sqlx::query("update principals set name = $2 where id = $1")
+        .bind(p.id)
+        .bind(&new)
+        .execute(&mut *tx)
+        .await;
+    match done {
+        Ok(_) => {}
+        Err(e) if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("23505") => {
+            return Err(taken());
+        }
+        Err(e) => return Err(e.into()),
+    }
+    crate::service::emit(
+        &mut tx,
+        None,
+        None,
+        "principal.renamed",
+        Some(p.id),
+        json!({"from": old, "to": new}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(json!({"name": new, "previous": old}))
+}
+
+/// Make a person an admin, or not (admins only). A hand-made admin is never demoted by the IdP's role
+/// sync (`manual`); the last admin cannot be demoted.
+pub async fn set_admin(db: &PgPool, p: &Principal, handle: &str, on: bool) -> Result<Value> {
+    if !p.is_user() || !p.is_admin {
+        return Err(Error::Forbidden(
+            "only an admin can change who is an admin".into(),
+        ));
+    }
+    let handle = handle.trim().trim_start_matches('@').to_lowercase();
+    let mut tx = db.begin().await?;
+    // Lock every current admin row so two concurrent demotions cannot leave none.
+    let admins: Vec<Uuid> = sqlx::query_scalar(
+        "select id from principals where kind = 'user' and is_admin and disabled_at is null for update",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let target: Option<Uuid> = sqlx::query_scalar(
+        "select id from principals where name = $1 and kind = 'user' and disabled_at is null",
+    )
+    .bind(&handle)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(target) = target else {
+        return Err(Error::NotFound(format!("no user with the handle {handle}")));
+    };
+    if !on && admins.iter().all(|a| *a == target) {
+        return Err(Error::Conflict(
+            "that is the last admin: make someone else an admin first".into(),
+        ));
+    }
+    sqlx::query(
+        "update principals set is_admin = $2, admin_source = case when $2 then 'manual' else admin_source end where id = $1",
+    )
+    .bind(target)
+    .bind(on)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(json!({"name": handle, "is_admin": on}))
+}
+
 pub async fn mint_token(
     c: &mut PgConnection,
     principal: Uuid,
@@ -131,31 +471,13 @@ pub async fn set_grants(
     Ok(json!({"name": name.to_lowercase(), "grants": g}))
 }
 
-pub async fn create_user(db: &PgPool, p: &Principal, login: &str, is_admin: bool) -> Result<Value> {
-    let p = &acting(db, p).await?;
-    if !p.is_admin {
-        return Err(Error::Forbidden("only an admin can add users".into()));
-    }
-    let login = norm_name(login)?;
-    let id = Uuid::new_v4();
-    sqlx::query(
-        "insert into principals (id, kind, name, oidc_login, is_admin) values ($1,'user',$2,$2,$3)",
-    )
-    .bind(id)
-    .bind(&login)
-    .bind(is_admin)
-    .execute(db)
-    .await?;
-    Ok(json!({"id": id, "name": login, "login": login, "is_admin": is_admin}))
-}
-
 pub async fn list_users(db: &PgPool, p: &Principal) -> Result<Value> {
     let p = &acting_or_self(db, p).await?;
     if !p.is_admin {
         return Err(Error::Forbidden("only an admin can list users".into()));
     }
     let rows: Vec<Value> = sqlx::query_scalar(
-        "select jsonb_build_object('name', name, 'login', oidc_login, 'is_admin', is_admin,
+        "select jsonb_build_object('name', name, 'display_name', display_name, 'is_admin', is_admin,
             'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals where kind = 'user' order by name",
     )
     .fetch_all(db)
@@ -306,7 +628,7 @@ pub async fn list_members(db: &PgPool, p: &Principal, team: &str) -> Result<Valu
     .await?;
     let tid = row.ok_or_else(|| Error::NotFound(format!("team {team} not found")))?;
     let rows: Vec<Value> = sqlx::query_scalar(
-        "select jsonb_build_object('name', pr.name, 'kind', pr.kind, 'role', m.role) from team_members m
+        "select jsonb_build_object('name', pr.name, 'display_name', pr.display_name, 'kind', pr.kind, 'role', m.role) from team_members m
          join principals pr on pr.id = m.principal_id where m.team_id = $1 order by pr.name",
     )
     .bind(tid)
@@ -540,38 +862,50 @@ pub async fn delete_wake_target(db: &PgPool, p: &Principal, id: Uuid) -> Result<
     Ok(json!({"ok": true}))
 }
 
-/// `corntchap init --admin <login>`: the first admin plus a short-lived bootstrap token.
-pub async fn init_admin(db: &PgPool, login: &str) -> Result<(String, Option<String>)> {
-    let login = norm_name(login)?;
+/// `corntchap init [--name <handle>]`: a local admin (no OIDC link: it is the CLI's bootstrap identity) plus a
+/// short-lived bootstrap token. Without a name an existing `init` admin is reused (so `just init` can be
+/// re-run), else a random handle is drawn. A name that already belongs to a user makes that user an `init`
+/// admin (never demoted by the IdP).
+pub async fn init_admin(db: &PgPool, name: Option<&str>) -> Result<(String, Option<String>)> {
     let mut tx = db.begin().await?;
-    let existing: Option<Uuid> =
-        sqlx::query_scalar("select id from principals where name = $1 and kind = 'user'")
-            .bind(&login)
+    let existing: Option<(Uuid, String)> = match name {
+        Some(n) => {
+            let n = norm_handle(n)?;
+            sqlx::query_as("select id, name from principals where name = $1 and kind = 'user'")
+                .bind(n)
+                .fetch_optional(&mut *tx)
+                .await?
+        }
+        None => {
+            sqlx::query_as(
+                "select id, name from principals
+                 where kind = 'user' and admin_source = 'init' and is_admin and disabled_at is null
+                 order by created_at limit 1",
+            )
             .fetch_optional(&mut *tx)
-            .await?;
-    let id = match existing {
-        Some(id) => {
+            .await?
+        }
+    };
+    let (id, handle) = match existing {
+        Some((id, handle)) => {
             sqlx::query(
                 "update principals set is_admin = true, admin_source = 'init' where id = $1",
             )
             .bind(id)
             .execute(&mut *tx)
             .await?;
-            id
+            (id, handle)
         }
         None => {
-            let id = Uuid::new_v4();
-            sqlx::query("insert into principals (id, kind, name, oidc_login, is_admin, admin_source) values ($1,'user',$2,$2,true,'init')")
-                .bind(id)
-                .bind(&login)
-                .execute(&mut *tx)
-                .await?;
-            id
+            let wanted = name.map(norm_handle).transpose()?;
+            let (id, handle) =
+                insert_user(&mut tx, wanted, None, None, true, "init", &mut random_pick).await?;
+            (id, handle)
         }
     };
     let token = mint_token(&mut tx, id, "bootstrap", Some(7 * 86_400)).await?;
     tx.commit().await?;
-    Ok((login, Some(token)))
+    Ok((handle, Some(token)))
 }
 
 /// `corntchap token --name <principal>`: operator escape hatch (needs database access).

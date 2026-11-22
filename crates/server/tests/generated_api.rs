@@ -57,7 +57,9 @@ async fn world() -> World {
         .with_test_writer()
         .try_init();
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin = tok.unwrap();
     for (team, key) in [("ta", "AAA"), ("tb", "BBB")] {
         app.post(&admin, "/teams", json!({"name": team})).await;
@@ -69,7 +71,7 @@ async fn world() -> World {
         .await;
     }
     for u in ["alice", "bob"] {
-        app.post(&admin, "/users", json!({"login": u})).await;
+        app.add_user(u).await;
     }
     let mut toks = vec![];
     for u in ["alice", "bob"] {
@@ -465,7 +467,6 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "create_task",
             "create_team",
             "create_upload",
-            "create_user",
             "delete_file",
             "delete_view",
             "delete_wake_target",

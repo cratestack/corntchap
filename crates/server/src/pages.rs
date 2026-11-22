@@ -72,8 +72,17 @@ small{color:var(--fg2)}
 pub struct Left<'a> {
     pub headline: &'a str,
     pub sub: &'a str,
-    /// (name, csrf) of the signed-in user, for "Signed in as X . Log out".
-    pub who: Option<(&'a str, &'a str)>,
+    /// (who as escaped HTML, see [`person`]; csrf) of the signed-in user, for "Signed in as X . Log out".
+    pub who: Option<(String, &'a str)>,
+}
+
+/// A person for humans, as escaped HTML: "Display Name · @handle", or just "@handle" without a display name.
+/// The display name comes from the identity provider and is untrusted: it is escaped here, like everything else.
+pub fn person(handle: &str, display_name: Option<&str>) -> String {
+    match display_name.filter(|d| !d.is_empty()) {
+        Some(d) => format!("{} &middot; @{}", esc(d), esc(handle)),
+        None => format!("@{}", esc(handle)),
+    }
 }
 
 pub fn render(title: &str, left: Left<'_>, right: &str) -> Html<String> {
@@ -82,7 +91,7 @@ pub fn render(title: &str, left: Left<'_>, right: &str) -> Html<String> {
         .map(|(name, csrf)| {
             format!(
                 "<div class=who>Signed in as <b>{}</b> &middot; <form method=post action=/logout><input type=hidden name=csrf value=\"{}\"><button>Log out</button></form></div>",
-                esc(name),
+                name,
                 esc(csrf)
             )
         })

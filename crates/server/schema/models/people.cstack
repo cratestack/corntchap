@@ -19,7 +19,7 @@ model Principal {
   kind String @readonly
   name String @readonly
   ownerId Uuid? @readonly @map("owner_id")
-  oidcLogin String? @readonly @map("oidc_login")
+  displayName String? @readonly @map("display_name")
   agentKind String? @readonly @map("agent_kind")
   runtime String? @readonly
   /// Tasks a cook may hold at once (its stations share them). Admins and the cook's owner may change it.

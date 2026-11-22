@@ -4,7 +4,7 @@ use authkestra::axum::Auth as Authn;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -24,9 +24,10 @@ type J = Result<Json<Value>>;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/me", get(me))
+        .route("/me", get(me).patch(me_rename))
         .route("/logout", post(logout))
-        .route("/users", get(users_list).post(users_add))
+        .route("/users", get(users_list))
+        .route("/users/{name}", patch(users_set_admin))
         .route("/teams", get(teams_list).post(teams_add))
         .route("/teams/{team}/members", get(members_list).post(members_add))
         .route("/teams/{team}/members/{name}", delete(members_remove))
@@ -36,10 +37,7 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/{key}/digest", get(digest))
         .route("/projects/{key}/board", get(board))
         .route("/projects/{key}/menus", get(menus_list).post(menus_add))
-        .route(
-            "/projects/{key}/menus/{mkey}",
-            axum::routing::patch(menus_edit),
-        )
+        .route("/projects/{key}/menus/{mkey}", patch(menus_edit))
         .route("/projects/{key}/pantry", get(pantry_list).post(pantry_save))
         .route(
             "/projects/{key}/pantry/{mkey}",
@@ -129,6 +127,11 @@ async fn me(State(st): State<AppState>, Authn(p): Auth) -> J {
     ok(service::whoami(&st.db, &p).await?)
 }
 
+/// Change your own handle: `{"name": "<new handle>"}`. People only.
+async fn me_rename(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Value>) -> J {
+    ok(admin::rename_self(&st.db, &p, &req_s(&b, "name")?).await?)
+}
+
 /// Revoke exactly the bearer token this request used (the CLI's `logout`).
 async fn logout(State(st): State<AppState>, Authn(p): Auth) -> J {
     let Some(tid) = p.token_id else {
@@ -144,14 +147,19 @@ async fn logout(State(st): State<AppState>, Authn(p): Auth) -> J {
 async fn users_list(State(st): State<AppState>, Authn(p): Auth) -> J {
     ok(admin::list_users(&st.db, &p).await?)
 }
-async fn users_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Value>) -> J {
-    ok(admin::create_user(
-        &st.db,
-        &p,
-        &req_s(&b, "login")?,
-        b["is_admin"].as_bool().unwrap_or(false),
-    )
-    .await?)
+/// Make a person an admin or not: `{"is_admin": true|false}` (admins only).
+async fn users_set_admin(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(name): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    let Some(on) = b["is_admin"].as_bool() else {
+        return Err(Error::Invalid(
+            "is_admin (true or false) is required".into(),
+        ));
+    };
+    ok(admin::set_admin(&st.db, &p, &name, on).await?)
 }
 
 async fn teams_list(State(st): State<AppState>, Authn(p): Auth) -> J {

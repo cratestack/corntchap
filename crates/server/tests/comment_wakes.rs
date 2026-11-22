@@ -27,9 +27,11 @@ async fn cursor(app: &common::TestApp) -> i64 {
 #[tokio::test]
 async fn comments_wake_the_responsible_cook() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
-    app.post(&root, "/users", json!({"login": "alice"})).await;
+    app.add_user("alice").await;
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(&root, "/teams/acme/members", json!({"principal": "alice"}))
         .await;
@@ -203,9 +205,11 @@ async fn comments_wake_the_responsible_cook() {
 #[tokio::test]
 async fn unanswered_comments_reach_the_main_station() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
-    app.post(&root, "/users", json!({"login": "alice"})).await;
+    app.add_user("alice").await;
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(&root, "/teams/acme/members", json!({"principal": "alice"}))
         .await;

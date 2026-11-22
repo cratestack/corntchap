@@ -28,6 +28,8 @@ type TeamRole {
 
 type WhoamiView {
   name String
+  /// How a person is shown (from the identity provider); absent for cooks and fires.
+  display_name String?
   kind String
   agent_kind String?
   runtime String?

@@ -994,6 +994,12 @@ pub async fn whoami(db: &PgPool, p: &Principal) -> Result<Value> {
     .fetch_all(db)
     .await?;
     let projects = list_projects(db, p).await?;
+    let display_name: Option<String> =
+        sqlx::query_scalar("select display_name from principals where id = $1")
+            .bind(p.id)
+            .fetch_optional(db)
+            .await?
+            .flatten();
     let sql = format!(
         "select {TASK_JSON} from tasks t join projects pr on pr.id = t.project_id
          where t.claimed_by = $1 and t.status = 'claimed' and t.lease_expires_at > now()"
@@ -1003,7 +1009,7 @@ pub async fn whoami(db: &PgPool, p: &Principal) -> Result<Value> {
         .fetch_all(db)
         .await?;
     Ok(json!({
-        "name": p.name, "kind": p.kind, "agent_kind": p.agent_kind, "runtime": p.runtime,
+        "name": p.name, "display_name": display_name, "kind": p.kind, "agent_kind": p.agent_kind, "runtime": p.runtime,
         "is_admin": p.is_admin, "max_leases": p.max_leases, "grants": p.grants,
         "teams": teams,
         "projects": projects.as_array().map(|a| a.iter().map(|x| x["key"].clone()).collect::<Vec<_>>()).unwrap_or_default(),

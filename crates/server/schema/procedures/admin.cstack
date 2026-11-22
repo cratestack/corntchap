@@ -10,13 +10,6 @@ procedure adminUsers(): UserView[]
   @allow(auth() != null)
   @mcp(tool: "list_users", description: "People who can sign in (admins only).")
 
-/// Add a person by their identity-provider login (admins only).
-/// @param login Their OIDC username, e.g. dev.
-/// @param isAdmin Make them an admin.
-mutation procedure adminAddUser(login: String, isAdmin: Boolean?): UserView
-  @allow(auth() != null)
-  @mcp(tool: "create_user", description: "Add a person by their identity-provider login (admins only). They are also created on first sign-in.")
-
 /// Teams you belong to (admins: all), with their pots.
 procedure adminTeams(): TeamView[]
   @allow(auth() != null)
@@ -36,7 +29,7 @@ procedure adminTeamMembers(team: String): MemberView[]
 
 /// Add a person or a cook to a team (team owners and admins; a cook only with its owner's say-so).
 /// @param team Team name.
-/// @param principal A person's login or a cook's name.
+/// @param principal A person's handle or a cook's name.
 /// @param role chef (default; also accepted as member) or owner (people only).
 mutation procedure adminAddMember(team: String, principal: String, role: String?): MemberAdded
   @allow(auth() != null)
@@ -44,7 +37,7 @@ mutation procedure adminAddMember(team: String, principal: String, role: String?
 
 /// Remove a chef from a team (team owners and admins).
 /// @param team Team name.
-/// @param principal A person's login or a cook's name.
+/// @param principal A person's handle or a cook's name.
 mutation procedure adminRemoveMember(team: String, principal: String): OkResult
   @allow(auth() != null)
   @mcp(tool: "remove_team_member", description: "Remove a person or a cook from a team (team owners and admins).")

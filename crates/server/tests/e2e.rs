@@ -8,8 +8,8 @@ use std::time::Duration;
 #[tokio::test]
 async fn sso_device_flow_rest_and_mcp() {
     let app = common::start(false).await;
-    // The first admin is provisioned by login; SSO links it by OIDC subject on first sign-in.
-    admin::init_admin(&app.state.db, "octo").await.unwrap();
+    // The first person to sign in is created on the spot with a random handle; the IdP role makes them admin.
+    app.sign_in_as("sub-4242", "Octo", true);
 
     // 1. device authorization request
     let r: Value = app
@@ -96,7 +96,7 @@ async fn sso_device_flow_rest_and_mcp() {
     let (st, v) = poll(dc.clone()).await;
     assert_eq!(st, 200, "{v}");
     let admin_token = v["access_token"].as_str().unwrap().to_string();
-    assert_eq!(v["principal"]["name"], "octo");
+    assert_eq!(v["principal"]["name"], app.handle_of("sub-4242").await);
     let (st, _) = poll(dc).await;
     assert_eq!(st, 400, "a device code is single-use");
 
@@ -124,11 +124,15 @@ async fn sso_device_flow_rest_and_mcp() {
     let c = app.browser_login("/%09/evil.example").await;
     let _ = c;
 
-    // 4. bearer works; garbage does not; unprovisioned OIDC users are refused
+    // 4. bearer works; garbage does not; a new OIDC subject is provisioned
     let (st, me) = app.get(&admin_token, "/me").await;
     assert_eq!(
-        (st, me["name"].as_str(), me["is_admin"].as_bool()),
-        (200, Some("octo"), Some(true))
+        (st, me["display_name"].as_str(), me["is_admin"].as_bool()),
+        (200, Some("Octo Cat"), Some(true))
+    );
+    assert_ne!(
+        me["name"], "octo",
+        "the handle is random, not the IdP username"
     );
     assert_eq!(app.get("ct_garbage", "/me").await.0, 401);
     // A new subject is provisioned just-in-time, as a non-admin user.
@@ -145,13 +149,13 @@ async fn sso_device_flow_rest_and_mcp() {
         .json()
         .await
         .unwrap();
-    assert_eq!(who["name"], "newbie", "{who}");
-    let (is_admin, src): (bool, String) = sqlx::query_as(
-        "select is_admin, admin_source from principals where name = 'newbie' and oidc_sub = 'sub-new'",
-    )
-    .fetch_one(&app.state.db)
-    .await
-    .unwrap();
+    assert_eq!(who["name"], app.handle_of("sub-new").await, "{who}");
+    assert_eq!(who["display_name"], "Octo Cat", "{who}");
+    let (is_admin, src): (bool, String) =
+        sqlx::query_as("select is_admin, admin_source from principals where oidc_sub = 'sub-new'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
     assert!(!is_admin);
     assert_eq!(src, "oidc");
 
@@ -308,7 +312,9 @@ async fn sso_device_flow_rest_and_mcp() {
 #[tokio::test]
 async fn relay_stream_receives_wakes() {
     let app = common::start(true).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let t = tok.unwrap();
     app.post(&t, "/teams", json!({"name": "acme"})).await;
     app.post(

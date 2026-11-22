@@ -25,10 +25,12 @@ enum Cmd {
     Serve,
     /// Apply the database schema.
     Migrate,
-    /// Create the first admin (an OIDC username, e.g. Keycloak's preferred_username) and print a 7-day bootstrap token.
+    /// Create a local admin (no OIDC link: the CLI's bootstrap identity) and print its handle and a 7-day bootstrap token.
+    /// People signing in through OIDC get their own account; they are admins through the IdP role or when an admin promotes them.
     Init {
+        /// The admin's handle (default: a random kitchen handle, or the existing init admin).
         #[arg(long)]
-        admin: String,
+        name: Option<String>,
     },
     /// Mint a token for an existing user/agent/relay (needs database access).
     Token {
@@ -121,8 +123,8 @@ async fn main() -> anyhow::Result<()> {
             app::migrate(&pool).await?;
             println!("schema is up to date");
         }
-        Cmd::Init { admin: login } => {
-            let (name, token) = admin::init_admin(&pool, &login).await?;
+        Cmd::Init { name } => {
+            let (name, token) = admin::init_admin(&pool, name.as_deref()).await?;
             println!("admin: {name}");
             if let Some(t) = token {
                 println!("bootstrap token (shown once, valid 7 days): {t}");
