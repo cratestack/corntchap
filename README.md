@@ -92,9 +92,10 @@ corntchap-cli cook wake add hooked --type webhook --url https://… [--token …
 You normally need **no `[[target]]` and no `directory` at all.** A *station* is one agent session (the runtime's own session id plus the folder it works in) registered for a cook in a pot. When work lands, the server wakes an idle station and the fire resumes that very session, so any number of repos, worktrees and runtimes work side by side:
 
 ```sh
-cd ~/code/payments                      # anywhere inside the repo; all its worktrees are covered
+cd ~/code/payments                      # the folder you run the agent in; in a git checkout, all its worktrees are covered
 corntchap-cli station scan --dry-run    # what would be registered
-corntchap-cli station scan              # register it (pot found by matching `origin` with the pots' repo_url)
+corntchap-cli station scan --pot PAY    # register it in pot PAY (any folder, git or not; a pot can span many repos)
+corntchap-cli station scan              # in a git checkout: the pot whose repo_url matches `origin`
 corntchap-cli station ls                # id, cook, pot, runtime, label, holding/waiting, last woken
 corntchap-cli station rm st_ab12cd34ef
 corntchap-cli station main st_ab12cd34ef  # this session answers the cook's messages in its pot (★)
