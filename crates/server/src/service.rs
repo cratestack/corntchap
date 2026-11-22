@@ -1034,7 +1034,7 @@ pub async fn changes_since(
             'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
             'actor', (select name from principals where id = e.actor_id), 'at', e.at, 'payload', e.payload)
          from events e join projects pr on pr.id = e.project_id
-         where e.seq > $1 and ($2::uuid is null or e.project_id = $2) and e.kind not like 'wake%'
+         where e.seq > $1 and ($2::uuid is null or e.project_id = $2) and e.kind not like 'wake%' and e.kind <> 'activity'
            and (e.audience is null or $5 = any(e.audience)) and {}
          order by e.seq limit $3",
         access_sql("$4", "$5")
@@ -1209,7 +1209,7 @@ pub async fn digest(db: &PgPool, p: &Principal, key: &str, since: i64) -> Result
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, key).await?;
     let counts: Vec<(String, i64)> = sqlx::query_as(
-        "select kind, count(*) from events where project_id = $1 and seq > $2 and kind not like 'wake%' and audience is null group by kind order by kind",
+        "select kind, count(*) from events where project_id = $1 and seq > $2 and kind not like 'wake%' and kind <> 'activity' and audience is null group by kind order by kind",
     )
     .bind(pr.id)
     .bind(since)

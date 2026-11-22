@@ -479,6 +479,7 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "get_task",
             "get_task_markdown",
             "heartbeat",
+            "list_activity",
             "list_cooks",
             "list_files",
             "list_fires",

@@ -211,8 +211,12 @@ pub async fn nudge_unanswered(state: &AppState) -> Result<u64, crate::error::Err
     Ok(n)
 }
 
-/// Keep 90 days of events, rolling older ones into per-day counts, and a week of the pass.
+/// Keep 90 days of events (activity: 14), rolling older ones into per-day counts, and a week of the pass.
 pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
+    // Agent activity is monitoring chatter: kept two weeks, never rolled into the daily counts.
+    sqlx::query("delete from events where kind = 'activity' and at < now() - interval '14 days'")
+        .execute(&state.db)
+        .await?;
     sqlx::query(
         "with old as (delete from events where at < now() - interval '90 days' and project_id is not null returning project_id, kind, at::date as day),
               agg as (select day, project_id, kind, count(*) as n from old group by 1,2,3)

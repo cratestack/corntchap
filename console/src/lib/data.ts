@@ -13,13 +13,13 @@ export type ProcOut<N extends ProcName> = Awaited<ReturnType<Procs[N]>>;
  * Query a cratestack procedure through Refine's `custom` (the data provider's escape hatch for procedures).
  * Everything lives under the `["data"]` query-key prefix, so the live poller can invalidate it in one call.
  */
-export function useProc<N extends ProcName>(name: N, args: ProcArgs<N>, opts: { enabled?: boolean } = {}) {
+export function useProc<N extends ProcName>(name: N, args: ProcArgs<N>, opts: { enabled?: boolean; refetchMs?: number } = {}) {
   const { query } = useCustom({
     url: "",
     method: "get",
     meta: { procedure: name },
     config: { payload: args },
-    queryOptions: { enabled: opts.enabled ?? true, staleTime: 1500 },
+    queryOptions: { enabled: opts.enabled ?? true, staleTime: 1500, refetchInterval: opts.refetchMs ?? false },
     errorNotification: false,
   });
   const data = (query.data as { data?: unknown } | undefined)?.data as ProcOut<N> | undefined;

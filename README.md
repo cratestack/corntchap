@@ -188,6 +188,37 @@ The relay remembers the last event id it saw (`relay-state.json` next to `creden
 
 Every console action is also an MCP tool (tasks, menus, pantry, teams, pots, cooks, fires, wake targets), with the same rules. A cook works its tasks under leases; beyond that it does what a person grants it, never more than its owner can do: `plan` (edit, toss, restore and unblock any task in its teams, tick items without a lease), `manage` (act as its owner on teams, pots, cooks, fires and wake targets) and `admin` (its owner's admin powers, only if the owner is an admin). Only a person changes grants (console: Cooks, "May also"; CLI: `corntchap-cli cook grant <cook> plan manage`, `--none` to take them away; MCP: `set_grants`), so a cook cannot raise its own rights. Events still name the cook as the actor.
 
+### Agent activity and checkpoints
+
+Claude Code and OpenCode can run a hook after every tool use. `corntchap-cli hook` uses it for two things: it
+snapshots your work tree into a hidden git ref after each edit or command (a fine-grained, revertable history that
+never touches your branch, index or HEAD), and it tells corntchap what happened, so the console shows what each
+station is doing (last tool, files, checkpoint) on the cook's page.
+
+```bash
+corntchap-cli hook install claude-code            # merges a PostToolUse hook into .claude/settings.json (use --global for ~/.claude)
+corntchap-cli hook install opencode               # writes .opencode/plugins/corntchap.js (--global: ~/.config/opencode/plugins)
+```
+
+Install is idempotent and keeps your existing hooks. The session must be a registered station
+(`corntchap-cli station scan`); activity of unregistered sessions is dropped by the server, after the checkpoint is taken locally.
+
+- **What is sent:** the runtime, session id, tool name, the changed paths (relative to the repo), the checkpoint sha and a
+  short summary (the command, cut at 200 characters, for Bash; the paths for edits). Never file contents. Calls within two
+  seconds of each other are merged into one entry; the server keeps 14 days of activity. It never wakes anyone.
+  A Bash command is sent as typed, so keep secrets out of command lines.
+- **Where checkpoints live:** `refs/corntchap/checkpoints/<session>`, a chain of commits made in a temporary index
+  (untracked files that are not ignored are included; nothing is committed when the tree did not change). They are local
+  to your clone and are not pushed; `git gc` keeps them while the ref exists.
+- **Restore:** `corntchap-cli checkpoints` lists the sessions with checkpoints, `--session <id>` lists one session's commits.
+  Then `git restore --source <sha> -- <path>` brings back one file, `git checkout <sha> -- .` everything (files created
+  later stay). `corntchap-cli checkpoints --restore <sha>` does the latter and refuses while the tree has uncommitted
+  changes, unless `--force`.
+- **Turn it off:** `corntchap-cli hook uninstall claude-code|opencode` (same `--global`), or set `CORNTCHAP_HOOKS=off` in the
+  environment. Delete the checkpoints with `git for-each-ref --format='delete %(refname)' refs/corntchap | git update-ref --stdin`.
+- **Failures:** a hook never blocks the agent and prints nothing; errors go to `hook.log` in the config dir
+  (`~/.config/corntchap/`), and the server call times out after 3 seconds.
+
 ### Comments wake the cook responsible
 
 A comment on a task reaches the cook responsible for it, without anyone having to point it there:
