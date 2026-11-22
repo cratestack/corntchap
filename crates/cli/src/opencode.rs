@@ -338,7 +338,7 @@ pub fn parse_password(out: &str) -> Option<String> {
 }
 
 async fn run_capture(program: &str, args: &[&str]) -> Option<String> {
-    let fut = Command::new(program)
+    let fut = Command::new(crate::relay::program(program))
         .args(args)
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

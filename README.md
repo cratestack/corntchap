@@ -12,9 +12,13 @@ The CLI (`corntchap-cli`) comes from the GitHub releases; the server runs from t
 
 ```bash
 brew install cratestack/tap/corntchap-cli                                  # macOS and Linux (Homebrew)
+curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | sh   # macOS and Linux, no package manager
+curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | VERSION=v0.1.0 sh   # pin a version
+```
+
+```powershell
 scoop bucket add cratestack https://github.com/cratestack/scoop-bucket     # Windows (Scoop)
 scoop install corntchap-cli
-curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | sh   # macOS and Linux, no package manager (VERSION=v0.1.0 to pin)
 ```
 
 On Windows `fire install` / `fire uninstall` (a login service) are not available: run `corntchap-cli fire` in a terminal or as a scheduled task.

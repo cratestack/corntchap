@@ -927,7 +927,7 @@ async fn start_here(api: &Api, a: StartArgs) -> Result<()> {
         .and_then(|m| m["name"].as_str().map(String::from))
         .unwrap_or_else(|| "Your chef".into());
     let text = start_text(&who, &pot, &id, task.as_deref(), a.prompt.as_deref());
-    let mut c = tokio::process::Command::new("claude");
+    let mut c = tokio::process::Command::new(relay::program("claude"));
     c.args(["-p", "--session-id", &session])
         .current_dir(&root)
         .stdin(std::process::Stdio::piped());
@@ -1026,7 +1026,7 @@ fn open_in(dir: &str, cmd: &[&str]) -> Result<()> {
     if !relay::which(cmd[0]) {
         bail!("`{}` is not on PATH on this machine", cmd[0]);
     }
-    let status = Command::new(cmd[0])
+    let status = Command::new(relay::program(cmd[0]))
         .args(&cmd[1..])
         .current_dir(dir)
         .status()
