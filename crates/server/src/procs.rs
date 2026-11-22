@@ -5,7 +5,7 @@ use cratestack::{CratestackContext, CratestackError, Value};
 use uuid::Uuid;
 
 use crate::{
-    admin,
+    admin, connect,
     error::Error,
     files, menus, pantry, pass, questions,
     schema::cratestack_schema::{self, procedures::*},
@@ -1323,6 +1323,58 @@ impl ProcedureRegistry for Procedures {
             )
             .await
             .map(serde_json::Value::Array),
+        )
+    }
+
+    async fn cloud_connect(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: cloud_connect::Args,
+        _z: cloud_connect::Authorized,
+    ) -> Result<cloud_connect::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let st = &self.state;
+        let r = match (
+            a.code.as_deref().map(str::trim).filter(|c| !c.is_empty()),
+            a.test.unwrap_or(false),
+        ) {
+            (Some(code), true) => connect::test(st, &p, code).await,
+            (Some(code), false) => connect::status(st, &p, code).await,
+            (None, _) => match a.kind.as_deref() {
+                Some(k) => connect::open(st, &p, a.cook.as_deref(), k, a.projects.as_deref()).await,
+                None => Err(Error::Invalid(
+                    "kind is required to open a setup: claude-routine, github-comment or webhook"
+                        .into(),
+                )),
+            },
+        };
+        typed(r)
+    }
+
+    async fn cloud_connect_save(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: cloud_connect_save::Args,
+        _z: cloud_connect_save::Authorized,
+    ) -> Result<cloud_connect_save::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            connect::save(
+                &self.state,
+                &p,
+                &a.code,
+                connect::Save {
+                    url: a.url,
+                    token: a.token,
+                    secret: a.secret,
+                    repo: a.repo,
+                    issue: a.issue,
+                    mention: a.mention,
+                },
+            )
+            .await,
         )
     }
 

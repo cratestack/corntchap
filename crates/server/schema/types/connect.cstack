@@ -1,0 +1,60 @@
+part of "../corntchap.cstack"
+
+// Connecting a cloud cook in steps (src/connect.rs).
+
+/// One value the setup needs.
+type CloudSetupField {
+  name String
+  label String
+  /// A secret: entered in the corntchap form or on the console link, never shown again.
+  secret Boolean
+  required Boolean
+  placeholder String
+  help String
+}
+
+type CloudSetupTarget {
+  id String
+  type String?
+}
+
+type CloudTestOutcome {
+  ok Boolean
+  status Int?
+  /// The cloud session a Claude routine started.
+  session_url String?
+  error String?
+}
+
+type CloudTest {
+  at String
+  result CloudTestOutcome
+}
+
+/// A cloud setup: how to connect a cook to a Claude routine, GitHub comments or a webhook.
+type CloudSetup {
+  /// Setup code, e.g. cs_1a2b…: pass it to connect_cloud_save and connect_cloud.
+  code String
+  cook String
+  /// claude-routine, github-comment or webhook.
+  kind String
+  /// Pots it wakes for (empty: all).
+  projects String[]
+  /// waiting, connected, expired or removed.
+  status String
+  expires_at String
+  /// The console page where a person enters the values, signed in.
+  link String
+  /// What to do, in order.
+  steps String[]
+  /// The values to enter.
+  fields CloudSetupField[]
+  /// What to tell the user next.
+  next String
+  /// The wake target made, once connected.
+  target CloudSetupTarget?
+  /// The last test wake.
+  test CloudTest?
+  /// claude-routine: the text to put in the routine's prompt.
+  routine_prompt String?
+}

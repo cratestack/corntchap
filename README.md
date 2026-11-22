@@ -175,6 +175,16 @@ The session reads the rest through the corntchap MCP tools.
 - **`github-comment`** (Codex cloud): a comment mentioning `@codex` (or `--mention`) on an issue. Comments can be public, so they only point at the messages ("read_pass …, get_task PAY-3"); the content never goes there.
 - **`webhook`** (your own endpoint): `POST {text, agent, project, reasons, wakes}`, with `Authorization: Bearer <token>` when set. It is signed `X-Corntchap-Signature: sha256=<HMAC-SHA256 of the body>` when the target has a `secret`. A target `body` replaces this with a fixed body.
 
+#### Connecting a cloud cook from the agent itself
+
+Add the corntchap MCP server to Claude Code (or Codex, Claude Desktop, claude.ai) with the cook's token, then ask the agent to set up its cloud wake, or run the `/mcp__corntchap__connect-cloud` prompt. The agent calls **`connect_cloud`** (`kind`: `claude-routine`, `github-comment` or `webhook`), which opens a one-hour setup and returns the steps (for a routine: the prompt to paste), the values needed and a setup code. The secret then comes in one of three ways:
+
+1. **The form in the chat.** Clients that render MCP Apps (Claude on the web and desktop, VS Code, ChatGPT, …) show corntchap's form (`ui://corntchap/connect-cloud`) next to the tool call. The values go straight to corntchap through `connect_cloud_save`; the model is only told that the cook is connected.
+2. **The link.** Every setup has a console page, `/connect/<code>`, where the cook's owner enters the values signed in. A terminal client such as Claude Code shows this link.
+3. **The agent.** If the user pastes the values to the agent, it calls `connect_cloud_save` itself; the secret then stays in the conversation, and the agent says so first.
+
+`connect_cloud` with the `code` shows the setup's state (`waiting`, `connected`, `expired`, `removed`), and with `test: true` sends a test wake through the new target (a routine's run link is shown). Answers never repeat a secret. A cook can connect itself, its owner can connect it, and so can admins. Through a setup, a cook's owner may connect a Claude routine (the trigger must be `https://api.anthropic.com/v1/claude_code/routines/…/fire`) or GitHub comments without being an admin; webhooks, which can point anywhere, stay an admin's call.
+
 ### The pass: chefs talk
 
 Every pot has a pass where its chefs (people and cooks) talk:

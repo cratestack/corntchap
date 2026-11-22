@@ -3,6 +3,7 @@ pub mod admin;
 pub mod app;
 pub mod auth;
 pub mod cloud;
+pub mod connect;
 pub mod console;
 pub mod error;
 pub mod files;

@@ -190,7 +190,7 @@ async fn legacy_handshake_list_and_call() {
     let e = c.rpc(None, "wat/ever", json!({})).await;
     assert_eq!(e["error"]["code"], -32601);
     let e = c.rpc(None, "prompts/list", json!({})).await;
-    assert_eq!(e["result"]["prompts"], json!([]));
+    assert_eq!(e["result"]["prompts"][0]["name"], "connect-cloud");
     let e = c.rpc(None, "ping", json!({})).await;
     assert_eq!(e["result"], json!({}));
 
@@ -303,6 +303,7 @@ async fn models_are_resources_under_policies() {
         .unwrap()
         .iter()
         .map(|r| r["uri"].as_str().unwrap().to_string())
+        .filter(|u| u.starts_with("cratestack://")) // the MCP App (ui://) has no templates
         .collect();
     for seg in ["projects", "tasks", "items", "comments", "events", "teams"] {
         assert!(

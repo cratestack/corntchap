@@ -25,7 +25,7 @@ use cratestack::{
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use serde_json::{Value, json};
 
-use crate::{auth, error::Error, procs, state::AppState};
+use crate::{auth, connect, error::Error, procs, state::AppState};
 
 /// Revisions answered by this module, newest first (the first is the fallback on negotiation).
 pub const LEGACY_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -253,7 +253,11 @@ impl<T: McpTools> Compat<T> {
                 Ok(r) => rpc_result(id, r),
                 Err((code, m)) => rpc_error(id, code, m),
             },
-            "prompts/list" => rpc_result(id, json!({"prompts": []})),
+            "prompts/list" => rpc_result(id, prompts_list()),
+            "prompts/get" => match prompt_get(&params) {
+                Ok(r) => rpc_result(id, r),
+                Err(m) => rpc_error(id, -32602, m),
+            },
             m => rpc_error(id, -32601, format!("method not found: {m}")),
         })
     }
@@ -266,7 +270,8 @@ impl<T: McpTools> Compat<T> {
             .unwrap_or(LEGACY_VERSIONS[0]);
         json!({
             "protocolVersion": version,
-            "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}},
+            "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false},
+                             "prompts": {"listChanged": false}},
             "serverInfo": {"name": "corntchap", "version": env!("CARGO_PKG_VERSION")},
             "instructions": INSTRUCTIONS,
         })
@@ -287,6 +292,13 @@ impl<T: McpTools> Compat<T> {
                 })
             })
             .collect();
+        let mut resources = resources;
+        resources.push(json!({
+            "uri": connect::UI_URI,
+            "name": "connect_cloud",
+            "description": "The form to connect a cook to a cloud wake (MCP App for connect_cloud).",
+            "mimeType": UI_MIME,
+        }));
         json!({"resources": resources})
     }
 
@@ -319,6 +331,14 @@ impl<T: McpTools> Compat<T> {
             .get("uri")
             .and_then(Value::as_str)
             .ok_or((-32602, "missing uri".to_string()))?;
+        if uri == connect::UI_URI {
+            return Ok(json!({"contents": [{
+                "uri": connect::UI_URI,
+                "mimeType": UI_MIME,
+                "text": connect::UI_HTML,
+                "_meta": {"ui": {"prefersBorder": true}},
+            }]}));
+        }
         let (path, query) = uri.split_once('?').unwrap_or((uri, ""));
         let resource = self
             .tools
@@ -433,7 +453,57 @@ fn tool_json(d: &ToolDescriptor) -> Value {
     if let Some(Ok(schema)) = d.output_schema.map(serde_json::from_str::<Value>) {
         t["outputSchema"] = schema;
     }
+    // MCP Apps: hosts that render them show the connect form next to these tools
+    if UI_TOOLS.contains(&d.name) {
+        t["_meta"] =
+            json!({"ui": {"resourceUri": connect::UI_URI, "visibility": ["model", "app"]}});
+    }
     t
+}
+
+/// The MCP Apps (`io.modelcontextprotocol/ui`) HTML profile.
+pub const UI_MIME: &str = "text/html;profile=mcp-app";
+const UI_TOOLS: &[&str] = &["connect_cloud", "connect_cloud_save"];
+
+/// Slash commands in clients that list prompts (Claude Code: `/mcp__corntchap__connect-cloud`).
+fn prompts_list() -> Value {
+    json!({"prompts": [{
+        "name": "connect-cloud",
+        "title": "Connect a cloud cook",
+        "description": "Connect a cook to a Claude Code routine, @codex comments on GitHub or a webhook, so corntchap wakes it in the cloud.",
+        "arguments": [
+            {"name": "kind", "description": "claude-routine, github-comment or webhook (default claude-routine)", "required": false},
+            {"name": "cook", "description": "The cook to connect (default: this one)", "required": false},
+        ],
+    }]})
+}
+
+fn prompt_get(params: &Value) -> Result<Value, String> {
+    if params.get("name").and_then(Value::as_str) != Some("connect-cloud") {
+        return Err("unknown prompt".into());
+    }
+    let arg = |k: &str| {
+        params["arguments"][k]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    let kind = arg("kind").unwrap_or_else(|| "claude-routine".into());
+    let cook = arg("cook")
+        .map(|c| format!(" for the cook {c}"))
+        .unwrap_or_else(|| " for this cook (you)".into());
+    let text = format!(
+        "Connect a cloud wake ({kind}){cook} with corntchap: call connect_cloud with kind \"{kind}\". \
+Then walk me through its steps. If my client shows the corntchap form, I enter the values there. \
+Otherwise give me the setup's link so I can enter them on corntchap; only if I paste the values to you, \
+call connect_cloud_save, and tell me first that the secret then stays in this conversation. \
+Finish by calling connect_cloud with the code to check, and offer a test wake (test=true)."
+    );
+    Ok(json!({
+        "description": "Connect a cloud cook",
+        "messages": [{"role": "user", "content": {"type": "text", "text": text}}],
+    }))
 }
 
 fn success(v: Value) -> Value {
