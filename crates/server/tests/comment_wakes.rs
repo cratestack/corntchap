@@ -319,9 +319,26 @@ async fn unanswered_comments_reach_the_main_station() {
 #[tokio::test]
 async fn a_comment_on_a_parked_task_wakes_its_station() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
-    app.post(&root, "/users", json!({"login": "alice"})).await;
+    // A person exists once they sign in (no pre-provisioning); she then takes the handle `alice`.
+    app.sign_in_as("sub-alice", "alice", false);
+    app.browser_login("/").await;
+    let first = app.handle_of("sub-alice").await;
+    let first_token = admin::operator_token(&app.state.db, &first, None)
+        .await
+        .unwrap();
+    let (st, v) = app
+        .rest(
+            &first_token,
+            reqwest::Method::PATCH,
+            "/me",
+            Some(json!({"name": "alice"})),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(&root, "/teams/acme/members", json!({"principal": "alice"}))
         .await;

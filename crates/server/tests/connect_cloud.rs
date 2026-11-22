@@ -506,7 +506,9 @@ async fn modern(
 #[tokio::test]
 async fn the_agent_is_told_whether_its_client_shows_the_form() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     let (_, c) = app
         .post(
