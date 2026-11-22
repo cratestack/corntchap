@@ -422,3 +422,23 @@ async fn display_name_comes_from_the_token_and_is_escaped() {
         .unwrap();
     assert_eq!(who["display_name"], json!(stored));
 }
+
+/// A disabled person cannot sign in again, and is not re-created under a new handle.
+#[tokio::test]
+async fn a_disabled_person_cannot_sign_in() {
+    let app = common::start(false).await;
+    app.sign_in_as("sub-d", "D", false);
+    app.browser_login("/").await;
+    sqlx::query("update principals set disabled_at = now() where oidc_sub = 'sub-d'")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let r = login_raw(&app).await;
+    assert_eq!(r.status().as_u16(), 403);
+    assert!(r.text().await.unwrap().contains("disabled"));
+    let n: i64 = sqlx::query_scalar("select count(*) from principals where oidc_sub = 'sub-d'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+}
