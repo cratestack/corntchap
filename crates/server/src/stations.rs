@@ -32,7 +32,7 @@ fn new_ref() -> String {
 
 /// The cook a station is registered for: the caller itself (a cook registering its own session),
 /// or a cook the caller manages (people; cooks granted `manage` act as their owner).
-async fn cook_for(db: &PgPool, p: &Principal, cook: Option<&str>) -> Result<Principal> {
+pub(crate) async fn cook_for(db: &PgPool, p: &Principal, cook: Option<&str>) -> Result<Principal> {
     let name = cook
         .map(|c| c.trim().to_lowercase())
         .filter(|c| !c.is_empty());

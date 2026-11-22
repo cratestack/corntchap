@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect a cloud cook</title>
+<style>
+  :root {
+    --bg: #fbf7ef; --fg: #1f1a14; --muted: #6f6556; --line: #e3d9c8; --card: #fffdf8;
+    --accent: #c2410c; --accent-fg: #fff; --ok: #3f6212; --err: #b91c1c; --field: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17140f; --fg: #f3ede2; --muted: #a89c8a; --line: #3a3328; --card: #1f1b15;
+      --accent: #f97316; --accent-fg: #1a1208; --ok: #a3e635; --err: #f87171; --field: #26211a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17140f; --fg: #f3ede2; --muted: #a89c8a; --line: #3a3328; --card: #1f1b15;
+    --accent: #f97316; --accent-fg: #1a1208; --ok: #a3e635; --err: #f87171; --field: #26211a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { font-size: 16px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+  ol { margin: 0 0 12px; padding-left: 18px; font-size: 13px; }
+  ol li { margin: 2px 0; }
+  details { margin: 0 0 12px; font-size: 12.5px; }
+  details pre { white-space: pre-wrap; background: var(--card); border: 1px solid var(--line);
+                border-radius: 8px; padding: 8px; margin: 6px 0 0; font-size: 12px; }
+  label { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+          color: var(--muted); margin: 10px 0 4px; }
+  input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--field); color: var(--fg); font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+  .help { color: var(--muted); font-size: 11.5px; margin-top: 3px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  button { border: 1px solid var(--line); background: var(--card); color: var(--fg); border-radius: 8px;
+           padding: 7px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight: 600; }
+  button:disabled { opacity: .55; cursor: default; }
+  .msg { margin-top: 12px; font-size: 13px; }
+  .msg.ok { color: var(--ok); } .msg.err { color: var(--err); }
+  .note { color: var(--muted); font-size: 11.5px; margin-top: 10px; }
+  a { color: var(--accent); }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<h1 id="title">Connect a cloud cook</h1>
+<p class="sub" id="sub">Waiting for the setup…</p>
+<ol id="steps"></ol>
+<details id="prompt-box" class="hidden"><summary>Routine prompt</summary><pre id="prompt"></pre>
+  <div class="row"><button type="button" id="copy-prompt">Copy the prompt</button></div></details>
+<form id="form" class="hidden" autocomplete="off">
+  <div id="fields"></div>
+  <div class="row">
+    <button type="submit" class="primary" id="save">Connect</button>
+    <button type="button" id="open-link">Open in corntchap instead</button>
+  </div>
+  <p class="note">The values go straight to corntchap. They are not shown to the model.</p>
+</form>
+<div id="done" class="hidden">
+  <div class="row"><button type="button" id="test">Send a test wake</button></div>
+</div>
+<p class="msg" id="msg" role="status" aria-live="polite"></p>
+
+<script>
+(() => {
+  let nextId = 1;
+  const pending = new Map();
+  let setup = null;
+  const $ = (id) => document.getElementById(id);
+
+  function send(msg) { window.parent.postMessage(msg, "*"); }
+  function request(method, params) {
+    const id = nextId++;
+    send({ jsonrpc: "2.0", id, method, params });
+    return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+  }
+  function notify(method, params) { send({ jsonrpc: "2.0", method, params: params || {} }); }
+
+  function say(text, kind) { const m = $("msg"); m.textContent = text || ""; m.className = "msg " + (kind || ""); }
+
+  function resultValue(r) {
+    if (!r) return null;
+    if (r.isError) {
+      const t = (r.content || []).map((c) => c.text || "").join(" ");
+      let msg = t;
+      try { const e = JSON.parse(t); msg = (e.error && (e.error.message || e.error)) || e.message || t; } catch (_) {}
+      throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    }
+    if (r.structuredContent) return r.structuredContent;
+    try { return JSON.parse((r.content || [])[0].text); } catch (_) { return null; }
+  }
+
+  function render(s) {
+    setup = s;
+    const kinds = { "claude-routine": "a Claude Code routine", "github-comment": "GitHub comments", webhook: "a webhook" };
+    $("title").textContent = "Connect " + s.cook + " to " + (kinds[s.kind] || s.kind);
+    const sub = { waiting: "Expires " + new Date(s.expires_at).toLocaleTimeString() + ".",
+                  connected: "Connected: corntchap wakes " + s.cook + " this way from now on.",
+                  expired: "This setup expired. Ask the agent for a new one.",
+                  removed: "The wake target was deleted. Ask the agent for a new setup." }[s.status] || s.status;
+    $("sub").textContent = sub;
+    const ol = $("steps"); ol.innerHTML = "";
+    if (s.status === "waiting") for (const step of s.steps || []) { const li = document.createElement("li"); li.textContent = step; ol.appendChild(li); }
+    $("prompt-box").classList.toggle("hidden", !(s.routine_prompt && s.status === "waiting"));
+    if (s.routine_prompt) $("prompt").textContent = s.routine_prompt;
+    $("form").classList.toggle("hidden", s.status !== "waiting");
+    $("done").classList.toggle("hidden", s.status !== "connected");
+    if (s.status === "waiting" && !$("fields").childElementCount) {
+      for (const f of s.fields || []) {
+        const id = "f-" + f.name;
+        const l = document.createElement("label"); l.htmlFor = id; l.textContent = f.label + (f.required ? "" : " (optional)");
+        const i = document.createElement("input"); i.id = id; i.name = f.name; i.placeholder = f.placeholder || "";
+        i.type = f.secret ? "password" : (f.name === "issue" ? "number" : "text"); i.required = !!f.required; i.spellcheck = false;
+        const h = document.createElement("div"); h.className = "help"; h.textContent = f.help || "";
+        $("fields").append(l, i, h);
+        if (s.kind === "webhook" && f.name === "secret") {
+          const b = new Uint8Array(24); crypto.getRandomValues(b);
+          i.value = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(""); i.type = "text";
+          h.textContent = (f.help || "") + " Generated here: copy it to your endpoint before you connect.";
+        }
+      }
+    }
+    if (s.test && s.test.result) {
+      const r = s.test.result;
+      if (r.ok) say("Test wake sent (HTTP " + r.status + ")." + (r.session_url ? " Session: " + r.session_url : ""), "ok");
+      else say("The test wake failed: " + r.error, "err");
+    }
+    notify("ui/notifications/size-changed", { width: document.body.scrollWidth, height: document.body.scrollHeight });
+  }
+
+  async function call(name, args) { return resultValue(await request("tools/call", { name, arguments: args })); }
+
+  $("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const args = { code: setup.code };
+    for (const i of $("fields").querySelectorAll("input")) {
+      if (!i.value.trim()) continue;
+      args[i.name] = i.name === "issue" ? Number(i.value) : i.value.trim();
+    }
+    $("save").disabled = true; say("Connecting…");
+    try {
+      const s = await call("connect_cloud_save", args);
+      for (const i of $("fields").querySelectorAll("input")) i.value = "";
+      say("Connected.", "ok");
+      render(s);
+      request("ui/update-model-context", { content: [{ type: "text",
+        text: "The user connected " + s.cook + " to " + s.kind + " in the corntchap form (setup " + s.code + "). Do not ask for the secret." }] }).catch(() => {});
+    } catch (err) { say(err.message, "err"); }
+    finally { $("save").disabled = false; }
+  });
+  $("test").addEventListener("click", async () => {
+    $("test").disabled = true; say("Sending a test wake…");
+    try { render(await call("connect_cloud", { code: setup.code, test: true })); }
+    catch (err) { say(err.message, "err"); }
+    finally { $("test").disabled = false; }
+  });
+  $("open-link").addEventListener("click", () => {
+    request("ui/open-link", { url: setup.link }).catch(() => say("Open this link: " + setup.link));
+  });
+  $("copy-prompt").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(setup.routine_prompt); say("Prompt copied.", "ok"); }
+    catch (_) { say("Select the prompt above and copy it."); }
+  });
+
+  window.addEventListener("message", (ev) => {
+    const m = ev.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id !== undefined && pending.has(m.id) && !m.method) {
+      const p = pending.get(m.id); pending.delete(m.id);
+      if (m.error) p.reject(new Error(m.error.message || "error")); else p.resolve(m.result);
+      return;
+    }
+    if (m.method === "ui/notifications/tool-result") {
+      try { const s = resultValue(m.params); if (s && s.code) render(s); }
+      catch (err) { say(err.message, "err"); }
+    } else if (m.method === "ui/notifications/host-context-changed" && m.params && m.params.theme) {
+      document.documentElement.dataset.theme = m.params.theme;
+    } else if (m.method === "ui/resource-teardown" && m.id !== undefined) {
+      send({ jsonrpc: "2.0", id: m.id, result: {} });
+    }
+  });
+
+  request("ui/initialize", {
+    protocolVersion: "2026-01-26",
+    appCapabilities: { availableDisplayModes: ["inline"] },
+    clientInfo: { name: "corntchap connect", version: "1" },
+  }).then((r) => {
+    const theme = r && r.hostContext && r.hostContext.theme;
+    if (theme) document.documentElement.dataset.theme = theme;
+    notify("ui/notifications/initialized");
+  }).catch(() => notify("ui/notifications/initialized"));
+})();
+</script>
+</body>
+</html>

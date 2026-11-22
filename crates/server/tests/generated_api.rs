@@ -456,6 +456,8 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "comment",
             "comment_question",
             "complete",
+            "connect_cloud",
+            "connect_cloud_save",
             "create_cook",
             "create_fire",
             "create_menu",

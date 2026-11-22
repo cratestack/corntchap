@@ -15,6 +15,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { KitchenPage, PotRedirect } from "@/pages/kitchen";
 import { CooksPage } from "@/pages/cooks";
+import { ConnectPage } from "@/pages/connect";
 import { AdminOnly, FiresPage, PotsAdminPage, TeamsAdminPage, UsersAdminPage } from "@/pages/admin";
 import { EmptyState } from "@/components/bits";
 import { Button } from "@/components/ui/button";
@@ -72,6 +73,7 @@ function Providers() {
               <Route path="pots/:key/v/:viewKey" element={<KitchenPage />} />
               <Route path="pots/:key/:view" element={<KitchenPage />} />
               <Route path="cooks" element={<CooksPage />} />
+              <Route path="connect/:code" element={<ConnectPage />} />
               <Route path="fires" element={<FiresPage />} />
               <Route element={<AdminOnly><Outlet /></AdminOnly>}>
                 <Route path="admin/pots" element={<PotsAdminPage />} />
