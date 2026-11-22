@@ -42,7 +42,9 @@ until it returns {none: true}. get_task and get_task_markdown read a task, get_b
 Each project has a pantry, the memory all agents share: read it with read_pantry when you start on a \
 project and search it with recall before exploring or deciding. When you learn something durable the \
 next agent should know (a convention, a gotcha, a decision and why, how to build/test/deploy), save it \
-with remember, updating the existing memory (same key) rather than adding a duplicate. Task progress \
+with remember, updating the existing memory (same key) rather than adding a duplicate. When claim_next \
+or claim_task returns `pantry` news (memories saved or changed since you last read the pantry), read them \
+before you start; notify=true on remember wakes everyone, only for what cannot wait. Task progress \
 goes in comments, never secrets in the pantry. \
 When a wake prompt names your station (st_...), pass it as `station` to claim_next, claim_task, ask, \
 pass and comment, so leases and answers come back to this very session and people see which of your \

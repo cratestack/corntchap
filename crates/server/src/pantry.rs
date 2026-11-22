@@ -108,6 +108,45 @@ pub struct Remember {
     pub append: bool,
     /// Optimistic concurrency: fail with a conflict unless the memory is at this revision.
     pub revision: Option<i64>,
+    /// Tell everyone now: a broadcast on the pass wakes every session of every cook in the pot.
+    pub notify: bool,
+    /// The saver's own station, so the broadcast reaches its other sessions too.
+    pub station: Option<String>,
+}
+
+/// Note that a chef has just read the pot's pantry: what changes after this is its news.
+async fn mark_read(c: &mut PgConnection, principal: Uuid, project: Uuid) -> Result<()> {
+    sqlx::query(
+        "insert into pantry_reads (principal_id, project_id) values ($1, $2)
+         on conflict (principal_id, project_id) do update set last_read_at = now()",
+    )
+    .bind(principal)
+    .bind(project)
+    .execute(c)
+    .await?;
+    Ok(())
+}
+
+/// What was saved or changed in a pot's pantry, by someone else, since this chef last read it:
+/// `{count, items: [{key, title, kind, by, updated_at}]}` (the 10 most recent).
+pub async fn news(c: &mut PgConnection, principal: Uuid, project: Uuid) -> Result<Value> {
+    let rows: Vec<Value> = sqlx::query_scalar(
+        "select jsonb_build_object('key', m.key, 'title', m.title, 'kind', m.kind,
+                  'by', (select name from principals where id = coalesce(m.updated_by, m.created_by)),
+                  'updated_at', m.updated_at)
+         from memories m
+         where m.project_id = $2
+           and coalesce(m.updated_by, m.created_by) is distinct from $1
+           and m.updated_at > coalesce((select last_read_at from pantry_reads
+                                        where principal_id = $1 and project_id = $2), '-infinity')
+         order by m.updated_at desc",
+    )
+    .bind(principal)
+    .bind(project)
+    .fetch_all(&mut *c)
+    .await?;
+    let count = rows.len();
+    Ok(json!({"count": count, "items": rows.into_iter().take(10).collect::<Vec<_>>()}))
 }
 
 /// Save a memory under `key` (derived from the title when omitted): creates it, or updates it,
@@ -262,7 +301,34 @@ pub async fn remember(db: &PgPool, p: &Principal, r: Remember) -> Result<Value> 
     )
     .await?;
     tx.commit().await?;
+    if r.notify {
+        let what = if created { "new" } else { "updated" };
+        let first = crate::questions::short(&body_for_notice(&out));
+        crate::pass::post(
+            db,
+            p,
+            crate::pass::Post {
+                project: pr.key.clone(),
+                body: format!(
+                    "Pantry, {what} {}: **{}** (`{key}`)\n\n{first}\n\nRead it with `get_memory` (project {}, key {key}).",
+                    out["kind"].as_str().unwrap_or("note"),
+                    out["title"].as_str().unwrap_or(""),
+                    pr.key
+                ),
+                to: None,
+                task: None,
+                from_owner: false,
+                broadcast: true,
+                station: r.station.clone(),
+            },
+        )
+        .await?;
+    }
     Ok(out)
+}
+
+fn body_for_notice(m: &Value) -> String {
+    m["body"].as_str().unwrap_or("").to_string()
 }
 
 /// One memory, in full.
@@ -270,6 +336,7 @@ pub async fn get(db: &PgPool, p: &Principal, project: &str, key: &str) -> Result
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, &project.to_uppercase()).await?;
     let key = key_of(key)?;
+    mark_read(&mut c, p.id, pr.id).await?;
     let sql = format!(
         "select {MEMORY_JSON} from memories m join projects pr on pr.id = m.project_id
          where m.project_id = $1 and m.key = $2"
@@ -300,6 +367,7 @@ pub async fn recall(db: &PgPool, p: &Principal, r: Recall) -> Result<Value> {
     let query = r.query.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, &r.project.to_uppercase()).await?;
+    mark_read(&mut c, p.id, pr.id).await?;
 
     let run = |tsq: &'static str| {
         format!(
@@ -402,6 +470,7 @@ pub async fn forget(db: &PgPool, p: &Principal, project: &str, key: &str) -> Res
 pub async fn digest(db: &PgPool, p: &Principal, project: &str) -> Result<String> {
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, &project.to_uppercase()).await?;
+    mark_read(&mut c, p.id, pr.id).await?;
     let rows: Vec<(String, String, String, String, Vec<String>)> = sqlx::query_as(
         "select key, title, body, kind, tags from memories where project_id = $1
          order by array_position(array['convention','gotcha','decision','howto','fact','note'], kind),

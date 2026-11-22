@@ -497,8 +497,17 @@ pub async fn claim_next(
     )
     .await?;
     let t = task_full(&mut tx, id).await?;
+    let news = crate::pantry::news(&mut tx, p.id, pr.id).await?;
     tx.commit().await?;
-    Ok(lease_view(t, epoch, exp))
+    Ok(with_news(lease_view(t, epoch, exp), news))
+}
+
+/// The pantry news a cook gets with each claim: read it before starting.
+fn with_news(mut v: Value, news: Value) -> Value {
+    if news["count"].as_u64().unwrap_or(0) > 0 {
+        v["pantry"] = news;
+    }
+    v
 }
 
 pub async fn claim_task(
@@ -556,8 +565,9 @@ pub async fn claim_task(
     )
     .await?;
     let out = task_full(&mut tx, t.id).await?;
+    let news = crate::pantry::news(&mut tx, p.id, t.project_id).await?;
     tx.commit().await?;
-    Ok(lease_view(out, epoch, exp))
+    Ok(with_news(lease_view(out, epoch, exp), news))
 }
 
 /// Fenced lease extension. Returns the new expiry, or lease_lost.
