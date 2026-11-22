@@ -66,7 +66,7 @@ mutation procedure checkItem(id: String, epoch: Int?, position: Int, done: Boole
 /// @param epoch Your lease epoch, if you hold the task: also extends the lease.
 mutation procedure comment(id: String, body: String, epoch: Int?): OkResult
   @allow(auth() != null)
-  @mcp(tool: "comment", description: "Add a note or handoff to a task. No lease needed; pass epoch to also extend yours.")
+  @mcp(tool: "comment", description: "Add a note or handoff to a task. No lease needed; pass epoch to also extend yours. The cook responsible for the task (holding it, parked on it, or the one that last held it) is woken with the comment, and so are cooks you @mention; you never wake yourself.")
 
 /// Finish a task.
 /// @param id Task id, e.g. PAY-42.
