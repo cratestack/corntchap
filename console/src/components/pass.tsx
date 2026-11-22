@@ -6,7 +6,7 @@ import { Hash, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { client, errorMessage } from "@/lib/api";
-import { useInvalidateAll, useProjects, useTeamChefs, type MemberRow } from "@/lib/data";
+import { useInvalidateAll, useProc, useProjects, useTeamChefs, type MemberRow } from "@/lib/data";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useOpenTask } from "@/lib/nav";
 import { useSession } from "@/lib/session";
@@ -228,6 +228,11 @@ function Thread({
                       · {m.station_label}
                     </span>
                   )}
+                  {m.to_station_label && (
+                    <span className="max-w-[14rem] truncate font-mono text-[11px] text-muted-foreground" title={`To session ${m.to_station}`}>
+                      → {m.to_station_label}
+                    </span>
+                  )}
                   {m.via && (
                     <span className="max-w-full truncate text-[12px] text-muted-foreground" title={`${m.via} posted it for ${m.from ?? "its owner"}`}>
                       via {m.via}
@@ -274,8 +279,12 @@ function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string;
   const [caret, setCaret] = useState(0);
   const [pick, setPick] = useState(0);
   const [everyone, setEveryone] = useState(false);
+  const [session, setSession] = useState("");
   const ta = useRef<HTMLTextAreaElement>(null);
   const channel = withWho === POT;
+  // a direct message to a cook can go to one of its sessions (stations) rather than its main one
+  const toCook = !channel && chefs.find((c) => c.name === withWho)?.kind === "agent";
+  const stations = useProc("stationList", { project: potKey, cook: withWho }, { enabled: toCook });
 
   const mention = useMemo(() => {
     const m = /(^|\s)@([\w.-]*)$/.exec(text.slice(0, caret));
@@ -308,7 +317,7 @@ function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string;
       const sent = await client.procedures.passPost({
         project: potKey,
         message: body,
-        to: channel ? null : withWho,
+        to: channel ? null : session || withWho,
         task: null,
         fromOwner: null,
         broadcast: channel && everyone ? true : null,
@@ -384,6 +393,23 @@ function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string;
           <span className="max-sm:sr-only">Send</span>
         </Button>
       </div>
+      {toCook && (stations.data ?? []).length > 1 && (
+        <label className="mb-1.5 flex items-center gap-2 text-[12px] text-muted-foreground">
+          To session
+          <select
+            value={session}
+            onChange={(e) => setSession(e.target.value)}
+            className="h-7 max-w-[16rem] truncate rounded-md border border-input bg-card px-2 text-[12px] text-foreground"
+          >
+            <option value="">its main session</option>
+            {(stations.data ?? []).map((st) => (
+              <option key={st.id} value={st.id}>
+                {(st.label ?? st.directory ?? st.session) + (st.main ? " (main)" : "")}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
         {channel && (
           <label className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground" title="Wake every session of every cook in this pot (same as writing @all)">
