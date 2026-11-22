@@ -1,4 +1,4 @@
-use std::{future::IntoFuture, time::Duration};
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use corntchap::{
