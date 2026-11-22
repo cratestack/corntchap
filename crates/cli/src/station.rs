@@ -63,6 +63,45 @@ pub enum StationCmd {
     /// Stop a station being the main one (same as `main <id> --off`).
     #[command(name = "unpin")]
     Unpin { id: String },
+    /// Start a new Claude Code session in this repo (`claude -p`, in the background) and register
+    /// it as a station, so the fire can wake it later. With --fire, the cook's relay starts it
+    /// instead, in a folder where the cook already has a station (works from any machine).
+    Start {
+        /// What to tell the session, on top of the task.
+        prompt: Vec<String>,
+        /// A task it should take, e.g. PAY-12.
+        #[arg(long)]
+        task: Option<String>,
+        /// The pot; default: the pot whose repo_url matches this repo's `origin`.
+        #[arg(long)]
+        pot: Option<String>,
+        /// The cook it works as (default: your Claude Code cook).
+        #[arg(long)]
+        cook: Option<String>,
+        #[arg(long)]
+        label: Option<String>,
+        /// Wait for the first run to finish, showing its output.
+        #[arg(long)]
+        wait: bool,
+        /// Wait for the first run, then open the session in Claude Desktop.
+        #[arg(long, conflicts_with = "fire")]
+        desktop: bool,
+        /// Let the cook's relay start it (needs --pot and --cook outside a repo; --dir picks one of its station folders).
+        #[arg(long, conflicts_with = "wait")]
+        fire: bool,
+        /// With --fire: the folder, one of the cook's station folders in the pot.
+        #[arg(long, requires = "fire")]
+        dir: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open a station's session on this machine: in Claude Desktop (Claude Code), or with
+    /// --terminal in a terminal (`claude --resume`, `codex resume`).
+    Open {
+        id: String,
+        #[arg(long)]
+        terminal: bool,
+    },
 }
 
 pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
@@ -99,6 +138,36 @@ pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
         }
         StationCmd::Main { id, off } => set_main(api, &id, !off).await,
         StationCmd::Unpin { id } => set_main(api, &id, false).await,
+        StationCmd::Start {
+            prompt,
+            task,
+            pot,
+            cook,
+            label,
+            wait,
+            desktop,
+            fire,
+            dir,
+            json,
+        } => {
+            let prompt = Some(prompt.join(" ")).filter(|p| !p.trim().is_empty());
+            let s = StartArgs {
+                prompt,
+                task,
+                pot,
+                cook,
+                label,
+                wait: wait || desktop,
+                desktop,
+                json,
+            };
+            if fire {
+                start_by_fire(api, s, dir).await
+            } else {
+                start_here(api, s).await
+            }
+        }
+        StationCmd::Open { id, terminal } => open(api, &id, terminal).await,
     }
 }
 
@@ -212,7 +281,7 @@ fn mtime_ms(p: &Path) -> i64 {
         .unwrap_or(0)
 }
 
-fn claude_root() -> Option<PathBuf> {
+pub fn claude_root() -> Option<PathBuf> {
     match std::env::var_os("CLAUDE_CONFIG_DIR") {
         Some(d) if !d.is_empty() => Some(PathBuf::from(d).join("projects")),
         _ => dirs::home_dir().map(|h| h.join(".claude/projects")),
@@ -442,12 +511,24 @@ async fn scan(
             }
         }
     }
-    // the pot
+    let pot = resolve_pot(api, &root, pot).await?;
+    if !json {
+        eprintln!(
+            "scanning {} folder(s) of {} for pot {pot}",
+            dirs.len(),
+            root
+        );
+    }
+    scan_found(api, &dirs, pot, cook, all, dry_run, json).await
+}
+
+/// The pot of a checkout: the one given, else the pot whose repo_url matches its `origin`.
+async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<String> {
     let pots = api.get("/projects").await?;
-    let pot = match pot {
+    Ok(match pot {
         Some(p) => p.to_uppercase(),
         None => {
-            let origin = git(Path::new(&root), &["remote", "get-url", "origin"]).map_err(|_| {
+            let origin = git(Path::new(root), &["remote", "get-url", "origin"]).map_err(|_| {
                 anyhow!(
                     "this repo has no `origin` remote to match against the pots' repo_url: pass --pot KEY\n{}",
                     pot_list(&pots)
@@ -466,14 +547,19 @@ async fn scan(
                 ),
             }
         }
-    };
-    if !json {
-        eprintln!(
-            "scanning {} folder(s) of {} for pot {pot}",
-            dirs.len(),
-            root
-        );
-    }
+    })
+}
+
+async fn scan_found(
+    api: &Api,
+    dirs: &[String],
+    pot: String,
+    cook: Option<String>,
+    all: bool,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    let dirs = dirs.to_vec();
 
     // sessions
     let mut found: Vec<Found> = vec![];
@@ -729,6 +815,251 @@ pub async fn doctor(server: &str) {
             dir.unwrap_or("-")
         );
     }
+}
+
+// ---- start / open ----
+
+pub struct StartArgs {
+    prompt: Option<String>,
+    task: Option<String>,
+    pot: Option<String>,
+    cook: Option<String>,
+    label: Option<String>,
+    wait: bool,
+    desktop: bool,
+    json: bool,
+}
+
+/// The first prompt of a session started here (the server words it the same way for --fire).
+pub fn start_text(
+    who: &str,
+    pot: &str,
+    station: &str,
+    task: Option<&str>,
+    prompt: Option<&str>,
+) -> String {
+    let mut t = format!(
+        "{who} started this session for you in corntchap pot {pot}. Use the corntchap MCP tools."
+    );
+    match task {
+        Some(r) => t.push_str(&format!(
+            " Your task is {r}: read it (get_task), claim it (claim_task with your station), work it, tick its items and complete it. If it is taken, say so on the pass and take the next ready one (claim_next)."
+        )),
+        None if prompt.is_none() => t.push_str(
+            " Take the next ready task (claim_next with your station), work it and complete it; when none is ready, stop.",
+        ),
+        None => {}
+    }
+    if let Some(p) = prompt {
+        t.push_str(&format!("\n\n{p}"));
+    }
+    t.push_str(&format!(
+        "\n\n(You are station {station}: pass `station: \"{station}\"` to pass, comment, ask and claim_next, so people see which session answers.)"
+    ));
+    t
+}
+
+/// Your Claude Code cook: the one given, else the only one (or a choice on a terminal).
+async fn claude_cook(api: &Api, cook: Option<String>) -> Result<String> {
+    if let Some(c) = cook {
+        return Ok(c);
+    }
+    let agents = api.get("/agents").await?;
+    let names: Vec<String> = agents
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|a| a["agent_kind"].as_str() == Some("claude-code") && a["disabled"] != true)
+        .filter_map(|a| a["name"].as_str().map(String::from))
+        .collect();
+    pick_cook("claude-code", &names, std::io::stdin().is_terminal())?.ok_or_else(|| {
+        anyhow!("no Claude Code cook: create one with `corntchap-cli cook setup <name> --kind claude-code`, or pass --cook")
+    })
+}
+
+fn log_dir() -> PathBuf {
+    dirs::state_dir()
+        .or_else(dirs::cache_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("corntchap/sessions")
+}
+
+async fn start_here(api: &Api, a: StartArgs) -> Result<()> {
+    if !relay::which("claude") {
+        bail!(
+            "`claude` is not on PATH: install Claude Code first (or use --fire to start it on the cook's machine)"
+        );
+    }
+    let cwd = std::env::current_dir()?;
+    let root = git(&cwd, &["rev-parse", "--show-toplevel"]).map_err(|_| {
+        anyhow!(
+            "not inside a git repository: run `station start` from your checkout (or use --fire)"
+        )
+    })?;
+    let pot = resolve_pot(api, &root, a.pot).await?;
+    let cook = claude_cook(api, a.cook).await?;
+    let session = uuid::Uuid::new_v4().to_string();
+    let base = Path::new(&root)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| root.clone());
+    let task = a
+        .task
+        .map(|t| t.trim().to_uppercase())
+        .filter(|t| !t.is_empty());
+    let label = a.label.unwrap_or_else(|| match &task {
+        Some(t) => format!("{base} ({t})"),
+        None => format!("{base} (new)"),
+    });
+    let st = api
+        .post(
+            "/stations",
+            json!({"cook": cook, "project": pot, "runtime": "claude-code", "session": session,
+                   "directory": root, "label": label}),
+        )
+        .await
+        .context("registering the new session")?;
+    let id = st["id"].as_str().unwrap_or("?").to_string();
+    let who = api
+        .get("/me")
+        .await
+        .ok()
+        .and_then(|m| m["name"].as_str().map(String::from))
+        .unwrap_or_else(|| "Your chef".into());
+    let text = start_text(&who, &pot, &id, task.as_deref(), a.prompt.as_deref());
+    let mut c = tokio::process::Command::new("claude");
+    c.args(["-p", "--session-id", &session])
+        .current_dir(&root)
+        .stdin(std::process::Stdio::piped());
+    let log = log_dir().join(format!("{session}.log"));
+    if !a.wait {
+        #[cfg(unix)]
+        c.process_group(0);
+        std::fs::create_dir_all(log_dir())?;
+        let f = std::fs::File::create(&log)?;
+        c.stdout(f.try_clone()?).stderr(f);
+    }
+    let mut child = c.spawn().context("starting claude")?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(text.as_bytes()).await?;
+    }
+    if a.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"station": st, "session": session,
+                "log": (!a.wait).then(|| log.display().to_string())}))?
+        );
+    } else {
+        ok_line(format!(
+            "{id}: Claude Code session {session} started for {cook} in {pot} ({})",
+            root
+        ));
+    }
+    if !a.wait {
+        if !a.json {
+            println!(
+                "  running in the background; output: {}\n  open it: corntchap-cli station open {id}   (Claude Desktop, once this first run is done)",
+                log.display()
+            );
+        }
+        // the child keeps running after we exit (its own process group: closing the terminal does not stop it)
+        drop(child);
+        return Ok(());
+    }
+    let status = child.wait().await?;
+    if !status.success() {
+        bail!("claude exited with {status}");
+    }
+    if a.desktop {
+        open_in(&root, &["claude", "--desktop", "--resume", &session])?;
+    }
+    Ok(())
+}
+
+async fn start_by_fire(api: &Api, a: StartArgs, dir: Option<String>) -> Result<()> {
+    let pot = match a.pot {
+        Some(p) => p.to_uppercase(),
+        None => {
+            let cwd = std::env::current_dir()?;
+            let root = git(&cwd, &["rev-parse", "--show-toplevel"])
+                .map_err(|_| anyhow!("pass --pot KEY (not inside a repo to match it from)"))?;
+            resolve_pot(api, &root, None).await?
+        }
+    };
+    let cook = claude_cook(api, a.cook).await?;
+    let v = api
+        .procedure(
+            "stationStart",
+            json!({"project": pot, "cook": cook, "task": a.task, "prompt": a.prompt,
+                   "directory": dir, "label": a.label}),
+        )
+        .await?;
+    if a.json {
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    } else {
+        ok_line(format!(
+            "{}: a new session for {cook} in {pot} ({}); its relay starts it when it is running (`corntchap-cli fire`)",
+            v["id"].as_str().unwrap_or("?"),
+            v["directory"].as_str().unwrap_or("?")
+        ));
+    }
+    Ok(())
+}
+
+/// The command that opens a station's session on this machine.
+pub fn open_command(runtime: &str, session: &str, terminal: bool) -> Result<Vec<String>> {
+    let v: Vec<&str> = match (runtime, terminal) {
+        ("claude-code", false) => vec!["claude", "--desktop", "--resume", session],
+        ("claude-code", true) => vec!["claude", "--resume", session],
+        ("codex", true) => vec!["codex", "resume", session],
+        ("codex", false) => bail!("Codex sessions open in a terminal: add --terminal"),
+        ("opencode", _) => {
+            bail!("open OpenCode in the station's folder and pick session {session}")
+        }
+        (other, _) => bail!("a {other} station cannot be opened from here"),
+    };
+    Ok(v.into_iter().map(String::from).collect())
+}
+
+fn open_in(dir: &str, cmd: &[&str]) -> Result<()> {
+    if !relay::which(cmd[0]) {
+        bail!("`{}` is not on PATH on this machine", cmd[0]);
+    }
+    let status = Command::new(cmd[0])
+        .args(&cmd[1..])
+        .current_dir(dir)
+        .status()
+        .with_context(|| format!("running {}", cmd.join(" ")))?;
+    if !status.success() {
+        bail!("{} exited with {status}", cmd.join(" "));
+    }
+    Ok(())
+}
+
+async fn open(api: &Api, id: &str, terminal: bool) -> Result<()> {
+    let all = api.get("/stations").await?;
+    let st = all
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|s| s["id"].as_str() == Some(id.trim()))
+        .ok_or_else(|| anyhow!("no station {id} that you can see (`corntchap-cli station ls`)"))?;
+    let runtime = st["runtime"].as_str().unwrap_or("other");
+    let session = st["session"].as_str().unwrap_or_default();
+    let cmd = open_command(runtime, session, terminal)?;
+    let dir = st["directory"]
+        .as_str()
+        .map(relay::expand)
+        .filter(|d| Path::new(d).is_dir())
+        .ok_or_else(|| {
+            anyhow!(
+                "the station's folder ({}) is not on this machine: open it where the session runs",
+                st["directory"].as_str().unwrap_or("none")
+            )
+        })?;
+    let cmd: Vec<&str> = cmd.iter().map(String::as_str).collect();
+    open_in(&dir, &cmd)
 }
 
 async fn set_main(api: &Api, id: &str, main: bool) -> Result<()> {

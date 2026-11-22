@@ -508,6 +508,7 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "set_enabled",
             "set_grants",
             "set_main_station",
+            "start_station",
             "toss_task",
             "unblock_task",
             "update_menu",

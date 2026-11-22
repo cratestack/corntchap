@@ -1326,6 +1326,31 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn station_start(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: station_start::Args,
+        _z: station_start::Authorized,
+    ) -> Result<station_start::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            stations::start(
+                &self.state.db,
+                &p,
+                stations::Start {
+                    cook: a.cook,
+                    project: a.project,
+                    task: a.task,
+                    prompt: a.prompt,
+                    directory: a.directory,
+                    label: a.label,
+                },
+            )
+            .await,
+        )
+    }
+
     async fn station_set_main(
         &self,
         _db: &Db,

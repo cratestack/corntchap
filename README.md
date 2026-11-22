@@ -93,6 +93,21 @@ A cook has at most one main station per pot. `station scan` keeps it, and moving
 
 `scan` looks for OpenCode sessions (v2 API; the 1.x API as a fallback), Claude Code sessions (`~/.claude/projects/<dir>/<id>.jsonl`) and Codex sessions (`~/.codex/sessions/**/rollout-*.jsonl`), and registers the most recent one per runtime and folder (`--all`: every session). The cook of each runtime is your cook of that `kind` (`--cook` to choose, `--pot` to override the pot). The fire then resumes the session with built-in defaults: OpenCode through its server API, Claude Code with `claude -p --resume <session>` and Codex with `codex exec resume <session> -`, prompt on stdin and the station's folder as the working directory. A `[[target]]` for the cook is only a fallback (wakes that name no station; `adapter = "webhook"`) and may refine a station's runtime (an OpenCode `password_env`, a custom `command` containing `{session}`).
 
+#### Starting new sessions, and opening them in Claude Desktop
+
+Claude Code sessions can also be started for a cook, on that person's subscription, by their own `claude`:
+
+```sh
+cd ~/code/payments
+corntchap-cli station start --task PAY-12 "Keep the diff small"   # claude -p in the background; becomes a station
+corntchap-cli station start --desktop                             # wait for the first run, then open it in Claude Desktop
+corntchap-cli station start --fire --pot PAY --cook clara          # from anywhere: clara's relay starts it on its machine
+corntchap-cli station open st_ab12cd34ef                          # claude --desktop --resume <session> in its folder
+corntchap-cli station open st_ab12cd34ef --terminal               # claude --resume (codex resume for Codex stations)
+```
+
+The console's Cooks page has the same "Start a session" button on Claude Code cooks (the `start_station` tool for agents): the server creates a station with a new session id in a folder where the cook already has one (never another folder) and wakes it at once; the cook's fire sees a session with no transcript on disk yet and starts it with `claude -p --session-id <id>` instead of resuming it. Without a task or prompt the session takes the next ready task. Claude Desktop has no link that sends a prompt on its own, so the dialog's "Draft it in Claude Desktop" link (`claude://code/new?folder=…&q=…`) only prefills one: you confirm the folder and press Send, then `station scan` registers the session. Only Claude Code can be started for now (OpenCode and Codex choose their own session ids).
+
 Config and credentials live in `~/.config/corntchap/` on Linux and `~/Library/Application Support/corntchap/` on macOS; set `CORNTCHAP_CONFIG_DIR` to use another directory. Example `config.toml` (everything in it is optional; the top-level `server = "https://…"` overrides the login's server; `timeout` takes `90`, `90s`, `45m`, `1h30m`):
 
 ```toml
