@@ -74,12 +74,15 @@ setup: deps infra
     {{load}} cargo run -q -p corntchap -- migrate
     @{{load}} echo "Postgres: 127.0.0.1:$PG_PORT   Keycloak: http://localhost:$KC_PORT (users admin/admin, dev/dev)   server: $PUBLIC_URL"
 
-# Create the first admin (an OIDC username; the dev realm has `admin`) and sign the CLI in with its 7-day bootstrap token.
-init admin="admin": env-init
+# Create the local admin (no OIDC link; a random kitchen handle unless you pass one: `just init chef-one`) and sign the CLI in
+# with its 7-day bootstrap token. People who sign in through the browser are separate accounts (the dev realm's `admin` user
+# gets the admin flag from the corntchap-admin realm role).
+init name="": env-init
     #!/usr/bin/env bash
     set -euo pipefail
+    NAME="{{name}}"
     set -a; if [ -f .env.dev ]; then . ./.env.dev; fi; if [ -f .env ]; then . ./.env; fi; set +a
-    out=$(cargo run -q -p corntchap -- init --admin "{{admin}}")
+    out=$(cargo run -q -p corntchap -- init ${NAME:+--name "$NAME"})
     # the bootstrap token is a secret: show it once, never echo the login command
     echo "$out"
     tok=$(printf '%s\n' "$out" | sed -n 's/^bootstrap token[^:]*: //p')

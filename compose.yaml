@@ -5,7 +5,7 @@
 # COMPOSE_ENV_FILES=.env.dev, or pass `--env-file .env.dev`.
 # The compose project name defaults to this directory's name, so two checkouts get separate containers and volumes;
 # set COMPOSE_PROJECT_NAME to override.
-#   just up && docker compose exec corntchap /corntchap init --admin admin   # or simply: just init
+#   just up && docker compose exec corntchap /corntchap init   # or simply: just init
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:latest

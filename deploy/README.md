@@ -47,15 +47,17 @@ Humans sign in through any OpenID provider; Keycloak is the reference. In your r
 - Valid redirect URIs: `https://HOST/auth/oidc/callback`
 - Set `OIDC_ISSUER` in `deployment.yaml` to the realm URL (`https://KEYCLOAK/realms/<realm>`).
 
-Users are created on first sign-in (just-in-time) with the name from `preferred_username` (or the local part of a
-*verified* e-mail). A user pre-provisioned with `corntchap-cli user add <username>` is linked to the OIDC subject on
-first sign-in. Because the username is trusted for that link, **disable "Edit username"** in the realm (Realm settings,
-Login) so users cannot rename themselves to someone else's login.
+A person is identified by the OIDC subject (`sub`) and nothing else: the first sign-in of an unknown `sub` creates the account
+with a random kitchen handle (`saffron-okra-42`) that has nothing to do with the identity. Neither `preferred_username` nor
+an e-mail address ever links or claims an account, so the realm's username and e-mail settings are not a trust boundary
+here. The ID token's `name` (else `email`) becomes the display name, refreshed at every sign-in and used only for showing
+people; the handle is what others `@mention` and what admins type. People change their own handle with
+`corntchap-cli me rename <handle>` or in the console.
 
 Admins come from the IdP: add a realm role named `corntchap-admin` (override with `OIDC_ADMIN_ROLE`) and a client mapper
 "User Realm Role" that puts roles into the ID token (claim `realm_access.roles`, add to ID token). The flag is synced on
-every sign-in; a top-level `roles` or `groups` array also works. Admins made with `corntchap init --admin` or
-`user add --admin` are never demoted by the IdP. Set `OIDC_PUBLIC_ISSUER` when browsers reach Keycloak under a different
+every sign-in; a top-level `roles` or `groups` array also works. Admins made with `corntchap init` or by an
+admin (`corntchap-cli user admin <handle> --on`) are never demoted by the IdP. Set `OIDC_PUBLIC_ISSUER` when browsers reach Keycloak under a different
 URL than the server does (it is used for the IdP logout redirect). Browser logout (`POST /logout`) also ends the
 Keycloak session.
 
@@ -81,11 +83,15 @@ The Deployment reads `DATABASE_URL` from the `corntchap-db-app` secret (key `uri
 
 ## First run: create the admin
 
-Once the pods are ready, create the first admin (a Keycloak username) and a 7-day bootstrap token:
+Once the pods are ready, create the local admin (not linked to any sign-in; it is the CLI's bootstrap identity) and a
+7-day bootstrap token. It prints the admin's handle (random, or `--name <handle>`):
 
 ```sh
-kubectl -n corntchap exec deploy/corntchap -- /corntchap init --admin <keycloak-username>
+kubectl -n corntchap exec deploy/corntchap -- /corntchap init
 ```
+
+Humans who sign in through Keycloak are separate accounts; give them admin with the `corntchap-admin` role or
+`corntchap-cli user admin <handle> --on`.
 
 The image is distroless, so `exec` runs the binary directly (no shell). Then sign in from a workstation:
 
