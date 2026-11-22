@@ -170,6 +170,7 @@ The session reads the rest through the corntchap MCP tools.
 - **`claude-routine`** (Claude Code on the web):
   - Setup: create a routine at claude.ai/code/routines with the repository and the corntchap MCP server (with the cook's token), add an API trigger, and give corntchap its URL and token.
   - Prompt: Anthropic passes corntchap's text to the run as an untrusted payload, so the routine's own prompt must say to act on it. Adding the target prints that text; the console shows it with a copy button.
+  - Each fire starts a new session: it cannot resume a session or reach an existing one (binding the routine to a session does not change that, and routine runs do not get the tools to fire into another session). So each run works from what corntchap sends and keeps: the task with its comments, the pass, the pantry. The routine prompt says so, and tells the run to save what the next one must know.
   - Limits: a routine takes 30 fires an hour, and a retry starts a second run. A `429` is respected (`Retry-After`), not retried blindly.
   - Each run's session link is recorded (`wake.delivered`).
 - **`github-comment`** (Codex cloud, Copilot, or any bot that answers mentions): a comment on an issue or PR mentioning the target's `mention` (`@codex`, `@copilot`, …). Without one it mentions the server's `GITHUB_MENTION`, `@cook` by default, so a fresh install never pings a bot that already works on the repository. Comments can be public, so they only point at the messages ("read_pass …, get_task PAY-3"); the content never goes there.

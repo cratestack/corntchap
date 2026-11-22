@@ -163,6 +163,7 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 "Paste the routine prompt below into the routine's prompt, so each run acts on what corntchap sends.".into(),
                 format!("Give the routine the corntchap MCP server as a connector, signed in with {cook}'s token."),
                 "Add an API trigger to the routine and copy its URL and its token (the token is shown once).".into(),
+                "Know that each wake starts a new session of the routine: it cannot resume or reach an existing session, so it works from what corntchap sends and keeps (task comments, the pass, the pantry). Do not change the routine's prompt to forward wakes elsewhere.".into(),
                 "Enter both here. corntchap keeps the token and never shows it again.".into(),
             ],
             vec![
