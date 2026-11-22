@@ -486,7 +486,7 @@ pub async fn add_wake_target(
     }
     if typ != "relay" && !p.is_admin {
         return Err(Error::Forbidden(
-            "only an admin can add webhook and github-comment wake targets".into(),
+            "only an admin can add webhook, claude-routine and github-comment wake targets".into(),
         ));
     }
     match typ {
@@ -503,7 +503,21 @@ pub async fn add_wake_target(
                 }
             }
         }
-        _ => return invalid("type must be relay, webhook or github-comment"),
+        "claude-routine" => {
+            let url = config.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            let local = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
+            if !(url.starts_with("https://") || local) || !url.contains("/fire") {
+                return invalid(
+                    "claude-routine targets need config.url, the routine's API trigger URL (https://api.anthropic.com/v1/claude_code/routines/trig_.../fire)",
+                );
+            }
+            if config.get("token").and_then(|t| t.as_str()).is_none() {
+                return invalid(
+                    "claude-routine targets need config.token, the routine's API token (sk-ant-oat01-...)",
+                );
+            }
+        }
+        _ => return invalid("type must be relay, webhook, claude-routine or github-comment"),
     }
     let tid = Uuid::new_v4();
     let projects: Vec<String> = projects.into_iter().map(|s| s.to_uppercase()).collect();
@@ -516,7 +530,12 @@ pub async fn add_wake_target(
         .bind(&config)
         .execute(&mut *c)
         .await?;
-    Ok(json!({"id": tid, "agent": agent.to_lowercase(), "type": typ}))
+    let mut out = json!({"id": tid, "agent": agent.to_lowercase(), "type": typ});
+    if typ == "claude-routine" {
+        // the routine's own prompt must tell it to act on what corntchap sends
+        out["routine_prompt"] = json!(crate::cloud::ROUTINE_PROMPT);
+    }
+    Ok(out)
 }
 
 pub async fn list_wake_targets(db: &PgPool, p: &Principal, agent: &str) -> Result<Value> {
@@ -526,7 +545,7 @@ pub async fn list_wake_targets(db: &PgPool, p: &Principal, agent: &str) -> Resul
     let rows: Vec<Value> = sqlx::query_scalar(
         // secrets in config are never echoed back
         "select jsonb_build_object('id', id, 'type', type, 'projects', projects, 'labels', labels,
-            'config', config - 'token' - 'headers') from wake_targets where agent_id = $1 order by id",
+            'config', config - 'token' - 'headers' - 'secret') from wake_targets where agent_id = $1 order by id",
     )
     .bind(id)
     .fetch_all(&mut *c)

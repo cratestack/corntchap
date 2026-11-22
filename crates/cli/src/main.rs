@@ -399,29 +399,37 @@ enum AgentCmd {
     Wake(WakeCmd),
 }
 
+// parsed once from the command line: the size of the variants does not matter
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum WakeCmd {
     /// Add a wake target to an agent.
     Add {
         agent: String,
-        /// relay | webhook | github-comment
-        #[arg(long = "type")]
+        /// relay | claude-routine | webhook | github-comment
+        #[arg(long = "type", value_parser = ["relay", "claude-routine", "webhook", "github-comment"])]
         typ: String,
         #[arg(long = "project")]
         projects: Vec<String>,
         #[arg(long = "label")]
         labels: Vec<String>,
-        /// webhook: URL to POST (e.g. a Claude routine /fire URL)
+        /// claude-routine: the routine's API trigger URL (…/routines/trig_…/fire); webhook: URL to POST
         #[arg(long)]
         url: Option<String>,
-        /// webhook: bearer token for the URL; github-comment: GitHub token
+        /// claude-routine: the routine's API token (sk-ant-oat01-…); webhook: bearer token; github-comment: GitHub token
         #[arg(long)]
         token: Option<String>,
+        /// webhook: sign each body with HMAC-SHA256 (X-Corntchap-Signature: sha256=…)
+        #[arg(long)]
+        secret: Option<String>,
         /// github-comment: owner/name and issue number to comment on
         #[arg(long)]
         repo: Option<String>,
         #[arg(long)]
         issue: Option<i64>,
+        /// github-comment: who the comment mentions (default @codex)
+        #[arg(long)]
+        mention: Option<String>,
     },
     /// List wake targets (of one agent, or of all your agents).
     Ls {
@@ -968,14 +976,17 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                 labels,
                 url,
                 token,
+                secret,
                 repo,
                 issue,
+                mention,
             } => {
                 let mut config = json!({});
                 match typ.as_str() {
-                    "webhook" => config = json!({"url": url, "token": token}),
+                    "webhook" => config = json!({"url": url, "token": token, "secret": secret}),
+                    "claude-routine" => config = json!({"url": url, "token": token}),
                     "github-comment" => {
-                        config = json!({"repo": repo, "issue": issue, "token": token})
+                        config = json!({"repo": repo, "issue": issue, "token": token, "mention": mention.unwrap_or_else(|| "@codex".into())})
                     }
                     _ => {}
                 }
@@ -987,6 +998,11 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                         .map(|i| format!(" ({i})"))
                         .unwrap_or_default()
                 ));
+                if let Some(prompt) = r["routine_prompt"].as_str() {
+                    println!(
+                        "\nPut this in the routine's prompt (claude.ai/code/routines), so each run acts on what corntchap sends:\n\n{prompt}\n\nThe routine also needs the corntchap MCP server, with {agent}'s token, in its connectors or its repo's .mcp.json."
+                    );
+                }
             }
             WakeCmd::Ls { agent, json } => {
                 let all = wake_targets(api, agent).await?;

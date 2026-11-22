@@ -13,8 +13,6 @@ use uuid::Uuid;
 use crate::{service::emit, state::AppState};
 
 const LOCK_ID: i64 = 0x636f726e74; // "cornt"
-pub const WAKE_PROMPT: &str = "New work is ready in {project}. Call claim_next with project {project}, finish the task, then call it again until it returns none.";
-pub const CLOUD_WAKE_PROMPT: &str = "New work is ready in {project}. Call claim_next with project {project}, finish the task, and call complete or release before your session ends. Call claim_next again until it returns none.";
 
 const LOCAL_COALESCE: Duration = Duration::from_secs(30);
 const CLOUD_COALESCE: Duration = Duration::from_secs(300);
@@ -250,6 +248,11 @@ struct Dispatcher {
     last_wake: HashMap<Uuid, Instant>,
     /// Wakes held back by coalescing; flushed once the window passes (agent, project id).
     pending: HashSet<(Uuid, Uuid)>,
+    /// Message wakes (pass, comments, answers) for cooks with cloud targets, batched per cook and
+    /// pot into one cloud run at the next tick: (agent, project, wake payload).
+    cloud: Vec<(Uuid, Uuid, Value)>,
+    /// Cloud targets that asked to wait (HTTP 429): no delivery before then.
+    cloud_wait: HashMap<Uuid, Instant>,
 }
 
 const TRIGGERS: &[&str] = &[
@@ -267,6 +270,8 @@ impl Dispatcher {
             state,
             last_wake: HashMap::new(),
             pending: HashSet::new(),
+            cloud: Vec::new(),
+            cloud_wait: HashMap::new(),
         }
     }
 
@@ -293,18 +298,42 @@ impl Dispatcher {
                     }
                     Err(_) => return,
                 },
-                _ = tick.tick() => self.flush_pending().await,
+                _ = tick.tick() => {
+                    self.flush_pending().await;
+                    self.flush_cloud().await;
+                }
             }
         }
     }
 
     async fn on_event(&mut self, seq: i64) {
-        let row: Result<Option<(String, Option<Uuid>, Option<Uuid>)>, _> =
-            sqlx::query_as("select kind, project_id, actor_id from events where seq = $1")
+        let row: Result<Option<(String, Option<Uuid>, Option<Uuid>, Value)>, _> =
+            sqlx::query_as("select kind, project_id, actor_id, payload from events where seq = $1")
                 .bind(seq)
                 .fetch_optional(&self.state.db)
                 .await;
-        if let Ok(Some((kind, Some(project), actor))) = row
+        // A message wake (it has a reason) for a cook with cloud targets: batch it for a cloud run.
+        if let Ok(Some((kind, Some(project), _, payload))) = &row
+            && kind == "wake"
+            && payload["reason"].is_string()
+            && let Some(agent) = payload["agent_id"]
+                .as_str()
+                .and_then(|a| a.parse::<Uuid>().ok())
+        {
+            let has_cloud: bool = sqlx::query_scalar(
+                "select exists (select 1 from wake_targets where agent_id = $1 and type = any($2))",
+            )
+            .bind(agent)
+            .bind(crate::cloud::CLOUD_TYPES)
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap_or(false);
+            if has_cloud {
+                self.cloud.push((agent, *project, payload.clone()));
+            }
+            return;
+        }
+        if let Ok(Some((kind, Some(project), actor, _))) = row
             && TRIGGERS.contains(&kind.as_str())
         {
             // The cook whose own action this was is in the middle of a turn and goes back to
@@ -371,6 +400,70 @@ impl Dispatcher {
         }
     }
 
+    /// Deliver the batched message wakes: one cloud run per cook, pot and target.
+    async fn flush_cloud(&mut self) {
+        if self.cloud.is_empty() {
+            return;
+        }
+        let mut batches: Vec<((Uuid, Uuid), Vec<Value>)> = vec![];
+        for (agent, project, payload) in self.cloud.drain(..) {
+            match batches.iter_mut().find(|b| b.0 == (agent, project)) {
+                Some(b) => b.1.push(payload),
+                None => batches.push(((agent, project), vec![payload])),
+            }
+        }
+        let mut keep: Vec<(Uuid, Uuid, Value)> = vec![];
+        for ((agent, project), wakes) in batches {
+            let Ok(mut conn) = self.state.db.acquire().await else {
+                keep.extend(wakes.into_iter().map(|w| (agent, project, w)));
+                continue;
+            };
+            let row: Option<(String, String)> = sqlx::query_as(
+                "select a.name, pr.key from principals a, projects pr where a.id = $1 and pr.id = $2",
+            )
+            .bind(agent)
+            .bind(project)
+            .fetch_optional(&mut *conn)
+            .await
+            .ok()
+            .flatten();
+            let Some((name, key)) = row else { continue };
+            let targets: Vec<(Uuid, String, Value)> = sqlx::query_as(
+                "select id, type, config from wake_targets where agent_id = $1 and type = any($2)
+                   and (projects is null or cardinality(projects) = 0 or $3 = any(projects))",
+            )
+            .bind(agent)
+            .bind(crate::cloud::CLOUD_TYPES)
+            .bind(&key)
+            .fetch_all(&mut *conn)
+            .await
+            .unwrap_or_default();
+            let text =
+                crate::cloud::messages_text(&mut conn, agent, &name, project, &key, &wakes).await;
+            for (target, typ, config) in targets {
+                if self
+                    .cloud_wait
+                    .get(&target)
+                    .is_some_and(|t| *t > Instant::now())
+                {
+                    // the target asked us to wait: keep these for after
+                    keep.extend(wakes.iter().map(|w| (agent, project, w.clone())));
+                    continue;
+                }
+                let res =
+                    crate::cloud::deliver(&self.state, &typ, &config, &name, &key, &text).await;
+                if let Err(f) = &res
+                    && let Some(wait) = f.retry_after
+                {
+                    self.cloud_wait.insert(target, Instant::now() + wait);
+                    keep.extend(wakes.iter().map(|w| (agent, project, w.clone())));
+                }
+                record_delivery(&mut conn, project, &name, &key, &typ, wakes.len(), res).await;
+            }
+        }
+        self.cloud.extend(keep);
+    }
+
     async fn flush_pending(&mut self) {
         let pend: Vec<(Uuid, Uuid)> = self.pending.drain().collect(); // consider() re-adds what is still held back
         let mut projects: HashSet<Uuid> = HashSet::new();
@@ -418,29 +511,20 @@ impl Dispatcher {
                 )
                 .await;
             }
-            "webhook" | "github-comment" => {
+            "webhook" | "github-comment" | "claude-routine" => {
                 let state = self.state.clone();
-                let cloud = c.runtime.as_deref() == Some("cloud");
-                let (typ, config, agent) = (c.typ.clone(), c.config.clone(), c.agent.clone());
+                let (typ, config, agent, agent_id) =
+                    (c.typ.clone(), c.config.clone(), c.agent.clone(), c.agent_id);
                 let key2 = key.clone();
                 tokio::spawn(async move {
-                    let res = deliver(&state, &typ, &config, &agent, &key2, cloud).await;
-                    let (kind, payload) = match res {
-                        Ok(status) => (
-                            "wake.delivered",
-                            json!({"agent": agent, "project": key2, "type": typ, "status": status}),
-                        ),
-                        Err(e) => {
-                            tracing::warn!("wake delivery to {agent} failed: {e}");
-                            (
-                                "wake.failed",
-                                json!({"agent": agent, "project": key2, "type": typ}),
-                            )
-                        }
+                    let Ok(mut conn) = state.db.acquire().await else {
+                        return;
                     };
-                    if let Ok(mut c) = state.db.acquire().await {
-                        let _ = emit(&mut c, Some(project), None, kind, None, payload).await;
-                    }
+                    let text =
+                        crate::cloud::work_text(&mut conn, agent_id, &agent, project, &key2).await;
+                    let res =
+                        crate::cloud::deliver(&state, &typ, &config, &agent, &key2, &text).await;
+                    record_delivery(&mut conn, project, &agent, &key2, &typ, 0, res).await;
                 });
             }
             _ => {}
@@ -448,66 +532,30 @@ impl Dispatcher {
     }
 }
 
-/// POST the wake. The text is always a fixed template, never task content.
-async fn deliver(
-    state: &AppState,
-    typ: &str,
-    config: &Value,
+/// Note a cloud delivery in the feed (with the session a Claude routine started).
+async fn record_delivery(
+    c: &mut PgConnection,
+    project: Uuid,
     agent: &str,
-    project: &str,
-    cloud: bool,
-) -> Result<u16, String> {
-    let template = if cloud {
-        CLOUD_WAKE_PROMPT
-    } else {
-        WAKE_PROMPT
-    };
-    let prompt = template.replace("{project}", project);
-    let (url, body, mut req_headers): (String, Value, Vec<(String, String)>) = if typ == "webhook" {
-        let url = config["url"].as_str().ok_or("missing url")?.to_string();
-        let body = config
-            .get("body")
-            .cloned()
-            .unwrap_or_else(|| json!({"text": prompt, "agent": agent, "project": project}));
-        let mut h = vec![];
-        if let Some(t) = config["token"].as_str() {
-            h.push(("authorization".to_string(), format!("Bearer {t}")));
+    key: &str,
+    typ: &str,
+    messages: usize,
+    res: Result<crate::cloud::Delivered, crate::cloud::Failed>,
+) {
+    let (kind, payload) = match res {
+        Ok(d) => (
+            "wake.delivered",
+            json!({"agent": agent, "project": key, "type": typ, "status": d.status,
+                   "session_url": d.session_url, "messages": messages}),
+        ),
+        Err(f) => {
+            tracing::warn!("cloud wake for {agent} ({typ}) failed: {}", f.error);
+            (
+                "wake.failed",
+                json!({"agent": agent, "project": key, "type": typ, "error": f.error,
+                       "retry_in_s": f.retry_after.map(|d| d.as_secs()), "messages": messages}),
+            )
         }
-        for (k, v) in config["headers"].as_object().into_iter().flatten() {
-            if let Some(v) = v.as_str() {
-                h.push((k.clone(), v.to_string()));
-            }
-        }
-        (url, body, h)
-    } else {
-        let repo = config["repo"].as_str().ok_or("missing repo")?;
-        let issue = config["issue"].as_i64().ok_or("issue must be a number")?;
-        let token = config["token"].as_str().ok_or("missing token")?;
-        let base = config["api_url"]
-            .as_str()
-            .unwrap_or("https://api.github.com");
-        let mention = config["mention"].as_str().unwrap_or("@codex");
-        (
-            format!("{base}/repos/{repo}/issues/{issue}/comments"),
-            json!({"body": format!("{mention} {prompt}")}),
-            vec![
-                ("authorization".to_string(), format!("Bearer {token}")),
-                (
-                    "accept".to_string(),
-                    "application/vnd.github+json".to_string(),
-                ),
-            ],
-        )
     };
-    let mut req = state.http.post(&url).json(&body);
-    for (k, v) in req_headers.drain(..) {
-        req = req.header(k, v);
-    }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
-    let status = resp.status();
-    if status.is_success() {
-        Ok(status.as_u16())
-    } else {
-        Err(format!("HTTP {status}"))
-    }
+    let _ = emit(c, Some(project), None, kind, None, payload).await;
 }

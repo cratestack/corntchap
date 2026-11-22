@@ -63,8 +63,10 @@ corntchap-cli fire doctor                       # or `marabou`: checks the serve
 corntchap-cli fire install                      # systemd user unit (Linux) / launchd agent (macOS)
 corntchap-cli fire uninstall [--purge] [--yes]  # stop, disable and delete that unit; --purge also removes config.toml, relay-state.json and the relay credential (your own login stays)
 corntchap-cli cook wake ls                      # all your agents' wake targets
-# cloud agents: a webhook (e.g. a Claude routine /fire URL) or a github-comment target
-corntchap-cli cook wake add claude-cloud-1 --type webhook --url https://… --token …
+# cloud agents (see "Cloud cooks" below)
+corntchap-cli cook wake add claude-web --type claude-routine --url https://api.anthropic.com/v1/claude_code/routines/trig_…/fire --token sk-ant-oat01-…
+corntchap-cli cook wake add codex-cloud --type github-comment --repo acme/payments --issue 12 --token ghp_… [--mention @codex]
+corntchap-cli cook wake add hooked --type webhook --url https://… [--token …] [--secret …]
 # an agent registered by device flow instead (token printed once): corntchap-cli cook enroll <name> --kind codex --runtime local
 ```
 
@@ -130,6 +132,33 @@ A comment on a task reaches the cook responsible for it, without anyone having t
 - **Mentions:** `@mention`s in a comment wake those cooks too.
 - **Never:** the commenter itself, or anyone on a tossed task.
 - **Unanswered:** a person's comment that gets no answer on the task (a comment, or completing, releasing or blocking it) within `COMMENT_NUDGE_MINUTES` (default 10) wakes the cook's **main station** once more. That's the orchestrating session, not the one that stayed silent.
+
+### Cloud cooks
+
+A cook with `runtime: cloud` runs as one-shot cloud sessions: each wake starts a fresh session that remembers nothing.
+
+**What wakes it.** Cloud wake targets (admins add them) receive:
+- new work in its pots;
+- every message for the cook: pass messages, mentions, broadcasts, comments on its tasks, answers to its questions, unanswered-comment nudges.
+
+Messages that arrive close together are batched into one run.
+
+**What the prompt carries:**
+- who the cook is;
+- every message;
+- each task concerned, with its status, holder and latest comments;
+- the pantry news.
+
+The session reads the rest through the corntchap MCP tools.
+
+**Target types:**
+- **`claude-routine`** (Claude Code on the web):
+  - Setup: create a routine at claude.ai/code/routines with the repository and the corntchap MCP server (with the cook's token), add an API trigger, and give corntchap its URL and token.
+  - Prompt: Anthropic passes corntchap's text to the run as an untrusted payload, so the routine's own prompt must say to act on it. Adding the target prints that text; the console shows it with a copy button.
+  - Limits: a routine takes 30 fires an hour, and a retry starts a second run. A `429` is respected (`Retry-After`), not retried blindly.
+  - Each run's session link is recorded (`wake.delivered`).
+- **`github-comment`** (Codex cloud): a comment mentioning `@codex` (or `--mention`) on an issue. Comments can be public, so they only point at the messages ("read_pass …, get_task PAY-3"); the content never goes there.
+- **`webhook`** (your own endpoint): `POST {text, agent, project, reasons, wakes}`, with `Authorization: Bearer <token>` when set. It is signed `X-Corntchap-Signature: sha256=<HMAC-SHA256 of the body>` when the target has a `secret`. A target `body` replaces this with a fixed body.
 
 ### The pass: chefs talk
 

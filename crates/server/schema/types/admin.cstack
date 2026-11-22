@@ -105,6 +105,8 @@ type WakeTargetAdded {
   id String
   agent String
   type String
+  /// claude-routine: the text to put in the routine's prompt, so each run acts on the corntchap wake.
+  routine_prompt String?
 }
 
 type GrantsView {
