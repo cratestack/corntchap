@@ -32,6 +32,7 @@ import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
 import { PRIORITIES } from "./new-task";
 import { MenuChip, useMenus } from "./menus";
+import { Attachments } from "./files";
 import { ParkedQuestion, parkedQuestionRef } from "./questions";
 import { projectOfTask } from "@/lib/nav";
 import { cn } from "@/lib/utils";
@@ -250,6 +251,8 @@ function TaskDetailBody({ id }: { id: string }) {
               </ul>
             )}
           </section>
+
+          <Attachments target={{ pot: projectOfTask(t.id), task: t.id }} files={t.files} />
 
           {(t.dependencies.length > 0 || t.subtasks.length > 0 || t.parent) && (
             <section className="space-y-4">

@@ -1,4 +1,5 @@
 mod api;
+mod file;
 mod menu;
 mod opencode;
 mod pantry;
@@ -74,6 +75,9 @@ enum Cmd {
     /// The pantry: what a pot's cooks and people have learned (conventions, gotchas, decisions, how-tos), saved under stable keys.
     #[command(subcommand, name = "pantry", alias = "memory")]
     Pantry(pantry::PantryCmd),
+    /// Files: share screenshots, logs and build artifacts (up to 1 GiB) in a pot, behind corntchap's login.
+    #[command(subcommand, name = "file", alias = "files")]
+    File(file::FileCmd),
     /// Menus (milestones): group a pot's tasks and watch them get served.
     #[command(subcommand, name = "menu", alias = "milestone")]
     Menu(menu::MenuCmd),
@@ -753,6 +757,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         }
         Cmd::Pantry(p) => pantry::run(p, &api).await?,
         Cmd::Menu(c) => menu::run(c, &api).await?,
+        Cmd::File(c) => file::run(c, &api).await?,
         Cmd::Agent(a) => agent(a, &api).await?,
         Cmd::Station(c) => station::run(c, &api).await?,
         Cmd::Login { .. } | Cmd::Logout { .. } | Cmd::Doctor | Cmd::Relay { .. } => unreachable!(),

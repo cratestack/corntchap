@@ -101,6 +101,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let cli = Cli::parse();
     let cfg = config(&cli)?;
+    if let Some(origin) = cfg.storage.as_ref().and_then(|s| s.public_origin()) {
+        corntchap::console::allow_images_from(&origin);
+    }
     let pool = app::connect(&cfg).await?;
     match cli.cmd.unwrap_or(Cmd::Serve) {
         Cmd::Migrate => {

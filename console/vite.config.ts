@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
   const target = process.env.CORNTCHAP_URL ?? env.CORNTCHAP_URL ?? "http://127.0.0.1:8080";
   // The server's CSRF check compares Origin with PUBLIC_URL, so the proxy presents the server's own origin.
   const proxy = Object.fromEntries(
-    ["/api", "/auth", "/logout", "/oauth", "/device"].map((p) => [
+    ["/api", "/auth", "/logout", "/oauth", "/device", "/files"].map((p) => [
       p,
       { target, changeOrigin: false, xfwd: true, headers: { origin: target } },
     ]),

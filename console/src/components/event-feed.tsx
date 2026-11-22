@@ -21,6 +21,8 @@ import {
   MessageCircleQuestion,
   CircleCheck,
   CircleX,
+  Paperclip,
+  FileWarning,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
@@ -28,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { fmtAgo, useNow } from "@/lib/format";
 import { Avatar } from "./bits";
 import { useOpenMemory, useOpenTask } from "@/lib/nav";
+import { fileHref } from "@/lib/files";
 import { questionLink } from "./questions";
 
 interface Described {
@@ -92,11 +95,44 @@ export function describe(e: ChangeView): Described {
       return { icon: PartyPopper, tone: "text-success", verb: "served the" };
     case "menu.reopened":
       return { icon: RotateCcw, tone: "text-primary", verb: "reopened the" };
+    case "file.created":
+      return { icon: Paperclip, tone: "text-primary", verb: "uploaded", detail: undefined };
+    case "file.ready":
+      return { icon: CircleCheck, tone: "text-success", verb: "finished uploading", detail: undefined };
+    case "file.failed":
+      return { icon: FileWarning, tone: "text-destructive", verb: "upload failed:", detail: p.reason ?? undefined };
+    case "file.deleted":
+      return { icon: Trash2, tone: "text-destructive", verb: "deleted", detail: undefined };
     case "task.lease_expired":
       return { icon: Hourglass, tone: "text-corn-text", verb: "lease ran out on" };
     default:
       return { icon: CirclePlay, tone: "text-muted-foreground", verb: e.kind.replace(/[._]/g, " ") };
   }
+}
+
+/** The file's name, linking to its permanent URL unless it is gone or not there yet. */
+function FileLink({ e }: { e: ChangeView }) {
+  const id = e.payload.file ?? "";
+  const name = e.payload.title ?? id;
+  const cls = "inline-block max-w-[16rem] truncate align-bottom font-mono text-[12px] font-bold";
+  if (id && e.kind !== "file.deleted" && e.kind !== "file.failed" && e.payload.title) {
+    return (
+      <a
+        href={fileHref(id, e.payload.title)}
+        target="_blank"
+        rel="noreferrer"
+        title={name}
+        className={cn(cls, "underline-offset-2 hover:underline focus-visible:underline")}
+      >
+        {name}
+      </a>
+    );
+  }
+  return (
+    <span title={name} className={cn(cls, e.kind === "file.deleted" && "line-through decoration-muted-foreground/60")}>
+      {name}
+    </span>
+  );
 }
 
 const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: boolean; now: number }) {
@@ -148,6 +184,12 @@ const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: b
                 {e.payload.title ?? e.payload.menu}
               </Link>{" "}
               <span className="text-muted-foreground">menu</span>
+            </>
+          )}
+          {e.kind.startsWith("file.") && (e.payload.file || e.payload.title) && (
+            <>
+              {e.task && <span className="text-muted-foreground"> · </span>}
+              <FileLink e={e} />
             </>
           )}
           {e.kind === "memory.saved" && e.payload.key && (

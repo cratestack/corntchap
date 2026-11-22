@@ -32,6 +32,7 @@ import { TaskCard, TaskGroup, groupTasks } from "@/components/task-views";
 import { TaskSheet } from "@/components/task-sheet";
 import { NewMemoryDialog, PantryView } from "@/components/pantry";
 import { MenuDialog, MenuStrip, MenusView, useMenus } from "@/components/menus";
+import { FilesView } from "@/components/files";
 import { AskQuestionDialog, QuestionsView } from "@/components/questions";
 
 const VIEWS: { id: BaseView; label: string }[] = [
@@ -41,6 +42,7 @@ const VIEWS: { id: BaseView; label: string }[] = [
   { id: "pantry", label: "Pantry" },
   { id: "menus", label: "Menus" },
   { id: "questions", label: "Questions" },
+  { id: "files", label: "Files" },
 ];
 
 /** The views that show tasks (and so take filters). */
@@ -94,7 +96,7 @@ export function PotRedirect() {
 export function KitchenPage() {
   const { key = "", view = "list" } = useParams();
   const potKey = key.toUpperCase();
-  const base: BaseView = view === "board" || view === "activity" || view === "pantry" || view === "menus" || view === "questions" ? view : "list";
+  const base: BaseView = view === "board" || view === "activity" || view === "pantry" || view === "menus" || view === "questions" || view === "files" ? view : "list";
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const openTask = useOpenTask();
@@ -226,6 +228,7 @@ export function KitchenPage() {
         {base === "board" && <BoardView loading={tasks.isLoading} tasks={visible} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} total={all.length} menus={chipNames} />}
         {base === "activity" && <ActivityView events={potEvents} />}
         {base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
+        {base === "files" && <FilesView potKey={potKey} />}
         {base === "questions" && <QuestionsView potKey={potKey} onAsk={() => setAsking(true)} />}
         {base === "menus" && (
           <MenusView
@@ -716,6 +719,7 @@ const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[
   { id: "pantry", label: "Pantry", match: (k) => k.startsWith("memory.") },
   { id: "menus", label: "Menus", match: (k) => k.startsWith("menu.") },
   { id: "questions", label: "Questions", match: (k) => k.startsWith("question.") },
+  { id: "files", label: "Files", match: (k) => k.startsWith("file.") },
   { id: "edits", label: "New and edited", match: (k) => k === "task.created" || k === "task.updated" },
 ];
 

@@ -51,6 +51,23 @@ pub struct StorageConfig {
 pub const DEFAULT_MAX_BYTES: i64 = 1024 * 1024 * 1024;
 pub const DEFAULT_INLINE_MAX_BYTES: i64 = 5 * 1024 * 1024;
 
+impl StorageConfig {
+    /// The origin browsers fetch presigned URLs from (scheme://host[:port]), for the console's CSP.
+    pub fn public_origin(&self) -> Option<String> {
+        let u = Url::parse(&self.public_endpoint).ok()?;
+        let host = u.host_str()?;
+        let host = if self.path_style {
+            host.to_string()
+        } else {
+            format!("{}.{host}", self.bucket)
+        };
+        Some(match u.port() {
+            Some(p) => format!("{}://{host}:{p}", u.scheme()),
+            None => format!("{}://{host}", u.scheme()),
+        })
+    }
+}
+
 pub struct Storage {
     pub cfg: StorageConfig,
     internal: Bucket,
@@ -564,23 +581,23 @@ pub async fn upload_stream(
 
 async fn mark_ready(db: &PgPool, state: &AppState, id: Uuid, size: i64) -> Result<()> {
     let mut tx = db.begin().await?;
-    let row: Option<(Uuid, Option<Uuid>, String, i64, String)> = sqlx::query_as(
+    let row: Option<(Uuid, Option<Uuid>, String, i64, String, Option<Uuid>)> = sqlx::query_as(
         "update files f set status = 'ready', size = $2, ready_at = now() from projects pr
          where f.id = $1 and f.status = 'uploading' and pr.id = f.project_id
-         returning f.project_id, f.task_id, pr.key, f.number, f.name",
+         returning f.project_id, f.task_id, pr.key, f.number, f.name, f.created_by",
     )
     .bind(id)
     .bind(size)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some((project, task, key, number, name)) = row {
+    if let Some((project, task, key, number, name, by)) = row {
         let fref = format!("{key}-F{number}");
         emit(
             &mut tx,
             Some(project),
             task,
             "file.ready",
-            None,
+            by,
             json!({"file": fref, "title": name, "url": link(&state.config.public_url, &fref, &name)}),
         )
         .await?;
@@ -591,22 +608,22 @@ async fn mark_ready(db: &PgPool, state: &AppState, id: Uuid, size: i64) -> Resul
 
 async fn mark_failed(db: &PgPool, id: Uuid, why: &str) -> Result<()> {
     let mut tx = db.begin().await?;
-    let row: Option<(Uuid, Option<Uuid>, String, i64, String)> = sqlx::query_as(
+    let row: Option<(Uuid, Option<Uuid>, String, i64, String, Option<Uuid>)> = sqlx::query_as(
         "update files f set status = 'failed', error = $2 from projects pr
          where f.id = $1 and f.status = 'uploading' and pr.id = f.project_id
-         returning f.project_id, f.task_id, pr.key, f.number, f.name",
+         returning f.project_id, f.task_id, pr.key, f.number, f.name, f.created_by",
     )
     .bind(id)
     .bind(why)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some((project, task, key, number, name)) = row {
+    if let Some((project, task, key, number, name, by)) = row {
         emit(
             &mut tx,
             Some(project),
             task,
             "file.failed",
-            None,
+            by,
             json!({"file": format!("{key}-F{number}"), "title": name, "reason": why}),
         )
         .await?;
