@@ -318,12 +318,17 @@ fn open_browser(url: &str) {
     if url.is_empty() || std::env::var("CORNTCHAP_NO_BROWSER").is_ok() {
         return;
     }
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
+    let mut cmd = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        // not `cmd /C start`: cmd would reinterpret `&` in the URL
+        let mut c = std::process::Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler");
+        c
     } else {
-        "xdg-open"
+        std::process::Command::new("xdg-open")
     };
-    let _ = std::process::Command::new(cmd)
+    let _ = cmd
         .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

@@ -921,10 +921,13 @@ mod tests {
 
     // A tiny HTTP server standing in for OpenCode v2 (basic auth opencode:s3cret required).
     // Records (method, path+query, authorization, body) of every request.
+    #[cfg(unix)]
     type Seen = std::sync::Arc<std::sync::Mutex<Vec<(String, String, String, String)>>>;
 
+    #[cfg(unix)]
     const BASIC: &str = "Basic b3BlbmNvZGU6czNjcmV0"; // opencode:s3cret
 
+    #[cfg(unix)]
     async fn fake_v2(reject_delivery: bool) -> (String, Seen) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1028,6 +1031,7 @@ mod tests {
     }
 
     /// A fake `opencode` executable answering `service status` / `service get password`.
+    #[cfg(unix)]
     fn fake_opencode_bin(dir: &std::path::Path, url: &str) -> String {
         use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(dir).unwrap();
@@ -1041,6 +1045,7 @@ mod tests {
         p.display().to_string()
     }
 
+    #[cfg(unix)]
     fn scratch(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "cc-oc-{name}-{}-{}",
@@ -1052,6 +1057,7 @@ mod tests {
         ))
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn v2_service_discovery_auth_listing_and_queued_prompt() {
         let (base, seen) = fake_v2(false).await;
@@ -1108,6 +1114,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn v2_prompt_retries_with_plainer_bodies_on_400() {
         let (base, seen) = fake_v2(true).await;

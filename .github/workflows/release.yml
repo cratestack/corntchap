@@ -95,6 +95,7 @@ jobs:
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, name: linux-aarch64 }
           - { os: macos-14,         target: aarch64-apple-darwin,       name: darwin-arm64 }
           - { os: macos-15-intel,   target: x86_64-apple-darwin,        name: darwin-x86_64 }
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc,     name: windows-x86_64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -113,16 +114,30 @@ jobs:
           CC_x86_64_unknown_linux_musl: musl-gcc
           CC_aarch64_unknown_linux_musl: musl-gcc
       - name: package
+        if: runner.os != 'Windows'
         run: |
           out=corntchap-cli-${{ matrix.name }}
           cp target/${{ matrix.target }}/release/corntchap-cli "$out"
           chmod +x "$out"
           tar czf "$out.tar.gz" "$out"
           shasum -a 256 "$out.tar.gz" > "$out.tar.gz.sha256"
+      # Windows: a zip holding corntchap-cli.exe, plus a `<hex>  <file>` checksum line like the tarballs (Scoop reads it)
+      - name: package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $out = "corntchap-cli-${{ matrix.name }}.zip"
+          Copy-Item "target/${{ matrix.target }}/release/corntchap-cli.exe" corntchap-cli.exe
+          Compress-Archive -Path corntchap-cli.exe -DestinationPath $out
+          $hash = (Get-FileHash -Algorithm SHA256 $out).Hash.ToLower()
+          [System.IO.File]::WriteAllText("$PWD/$out.sha256", "$hash  $out`n")
       - uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.name }}
-          path: corntchap-cli-${{ matrix.name }}.tar.gz*
+          path: |
+            corntchap-cli-${{ matrix.name }}.tar.gz*
+            corntchap-cli-${{ matrix.name }}.zip*
+          if-no-files-found: error
 
   github-release:
     needs: cli

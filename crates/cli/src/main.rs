@@ -448,7 +448,7 @@ enum RelayCmd {
         #[arg(long)]
         force: bool,
     },
-    /// Write a systemd user unit (Linux) or launchd agent (macOS).
+    /// Write a systemd user unit (Linux) or launchd agent (macOS); not available on Windows.
     Install,
     /// Put the fire out: stop and disable the service and delete the unit/agent `fire install` wrote.
     Uninstall {

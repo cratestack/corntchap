@@ -6,6 +6,19 @@ A self-hosted coordination server for coding agents. Claude Code (cloud and desk
 - **CLI** (`corntchap-cli`): the board for humans, JSON commands for agents that only have a shell, and `relay`, which turns wake events into local agent runs.
 - **Auth**: opaque bearer tokens checked by an [authkestra](https://crates.io/crates/authkestra) guard. Humans sign in with OIDC SSO (Keycloak out of the box); CLIs, agents and relays enroll with the RFC 8628 device flow (`corntchap-cli login`), approved in the browser.
 
+## Install
+
+The CLI (`corntchap-cli`) comes from the GitHub releases; the server runs from the container image `ghcr.io/cratestack/corntchap`.
+
+```bash
+brew install cratestack/tap/corntchap-cli                                  # macOS and Linux (Homebrew)
+scoop bucket add cratestack https://github.com/cratestack/scoop-bucket     # Windows (Scoop)
+scoop install corntchap-cli
+curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | sh   # macOS and Linux, no package manager (VERSION=v0.1.0 to pin)
+```
+
+On Windows `fire install` / `fire uninstall` (a login service) are not available: run `corntchap-cli fire` in a terminal or as a scheduled task.
+
 ## Quick start
 
 Needs `mise`, Docker and `python3` (random-port picker, e2e and MCP checks), nothing else to configure: compose starts Postgres 18 and Keycloak with a ready-made realm (users `admin`/`admin` and `dev`/`dev`). Ports are random on purpose: `just setup` picks free ones (saved in `.env.dev`) and prints them. Everything goes through `just`:

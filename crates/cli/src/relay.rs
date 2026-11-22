@@ -877,12 +877,22 @@ pub fn which(cmd: &str) -> bool {
         return std::path::Path::new(cmd).exists();
     }
     std::env::var("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(cmd).exists()))
+        .map(|p| {
+            std::env::split_paths(&p).any(|d| {
+                d.join(cmd).exists() || (cfg!(windows) && d.join(format!("{cmd}.exe")).exists())
+            })
+        })
         .unwrap_or(false)
 }
 
+const NO_SERVICE_ON_WINDOWS: &str =
+    "not supported on Windows; run `corntchap-cli fire` in a terminal or as a scheduled task";
+
 /// systemd user unit (Linux) or launchd agent (macOS) so the relay starts at login.
 pub fn install() -> Result<()> {
+    if cfg!(windows) {
+        bail!(NO_SERVICE_ON_WINDOWS);
+    }
     let exe = std::env::current_exe()?;
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
     if cfg!(target_os = "macos") {
@@ -1082,6 +1092,9 @@ fn do_step(s: &Step) -> Result<()> {
 /// removes the relay's own config, state file and credential.
 pub fn uninstall(purge: bool, yes: bool) -> Result<()> {
     use std::io::{IsTerminal, Write};
+    if cfg!(windows) {
+        bail!(NO_SERVICE_ON_WINDOWS);
+    }
     let home = dirs::home_dir().ok_or_else(|| anyhow!("no home directory"))?;
     let uid = std::process::Command::new("id")
         .arg("-u")
