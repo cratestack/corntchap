@@ -44,6 +44,9 @@ type TaskView {
   depends_on String[]
   /// The agent holding the lease.
   claimed_by String?
+  /// The station (agent session) that holds the lease or is parked on the task, e.g. st_1a2b3c4d.
+  /// A cook with several stations touches only the leases of its own station.
+  station String?
   /// Fencing token of the current lease: pass it to every lease call; a newer claim makes older epochs stale.
   lease_epoch Int
   /// When the lease lapses unless extended (RFC 3339).
@@ -82,6 +85,9 @@ type TaskDetail {
   depends_on String[]
   /// The agent holding the lease.
   claimed_by String?
+  /// The station (agent session) that holds the lease or is parked on the task, e.g. st_1a2b3c4d.
+  /// A cook with several stations touches only the leases of its own station.
+  station String?
   /// Fencing token of the current lease: pass it to every lease call; a newer claim makes older epochs stale.
   lease_epoch Int
   /// When the lease lapses unless extended (RFC 3339).
