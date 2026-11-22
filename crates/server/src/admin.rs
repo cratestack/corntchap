@@ -931,7 +931,9 @@ pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<V
             'max_leases', a.max_leases, 'owner', (select name from principals where id = a.owner_id),
             'grants', to_jsonb(a.grants),
             'disabled', a.disabled_at is not null, 'last_seen_at', a.last_seen_at,
-            'busy', (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()))
+            'busy', (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()),
+            'teams', coalesce((select jsonb_agg(t.name order by t.name) from team_members m join teams t on t.id = m.team_id
+                               where m.principal_id = a.id), '[]'::jsonb))
          from principals a where a.kind = $1 and ($2 or a.owner_id = $3) order by a.name",
     )
     .bind(kind)

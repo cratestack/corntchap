@@ -198,6 +198,8 @@ export interface AgentRow {
   owner: string | null;
   /** Cooks: what a person granted beyond working tasks (plan, manage, admin). */
   grants?: string[];
+  /** Teams the cook is in (empty: it sees no pot). */
+  teams?: string[];
   disabled: boolean;
   last_seen_at: string | null;
   busy: number;

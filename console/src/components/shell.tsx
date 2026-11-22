@@ -254,13 +254,13 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
             <SideLink to="/cooks" icon={ChefHat} onNavigate={onNavigate}>
               Cooks
             </SideLink>
+            <SideLink to="/teams" icon={Users} onNavigate={onNavigate}>
+              Teams
+            </SideLink>
             {me.is_admin && (
               <>
                 <SideLink to="/admin/pots" icon={FolderKanban} onNavigate={onNavigate}>
                   Pots
-                </SideLink>
-                <SideLink to="/admin/teams" icon={Users} onNavigate={onNavigate}>
-                  Teams
                 </SideLink>
                 <SideLink to="/admin/users" icon={UserRound} onNavigate={onNavigate}>
                   Users

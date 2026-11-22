@@ -838,29 +838,87 @@ async fn agent_setup(
     runtime: &str,
     team: Option<&str>,
 ) -> Result<()> {
-    let r = api
+    // Check the team first: a typo must not leave a half-made cook behind (or lose its token).
+    if let Some(t) = team {
+        let teams = api.get("/teams").await?;
+        let names: Vec<&str> = teams
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x["name"].as_str())
+            .collect();
+        if !names.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+            bail!(
+                "no team {t} that you can see; nothing was created. Teams: {}",
+                if names.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    names.join(", ")
+                }
+            );
+        }
+    }
+    let (n, token) = match api
         .post(
             "/agents",
             json!({"name": name, "kind": kind, "runtime": runtime}),
         )
-        .await?;
-    let n = s(&r, "name");
-    let token = s(&r, "token");
-    ok_line(format!("agent {n} created ({kind}, {runtime})"));
+        .await
+    {
+        Ok(r) => {
+            ok_line(format!(
+                "agent {} created ({kind}, {runtime})",
+                s(&r, "name")
+            ));
+            (s(&r, "name"), Some(s(&r, "token")))
+        }
+        // Run again after a failure: finish setting up the cook you already have.
+        Err(e) if format!("{e:#}").contains("409") => {
+            let mine = api.get("/agents").await?;
+            let exists = mine
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|a| a["name"].as_str() == Some(&name.to_lowercase()));
+            if !exists {
+                bail!("the name {name} is taken: choose another one");
+            }
+            ok_line(format!(
+                "agent {} already exists: finishing its setup",
+                name.to_lowercase()
+            ));
+            (name.to_lowercase(), None)
+        }
+        Err(e) => return Err(e),
+    };
     match team {
-        Some(t) => {
-            api.post(
+        Some(t) => match api
+            .post(
                 &format!("/teams/{t}/members"),
                 json!({"principal": n, "role": "member"}),
             )
-            .await?;
-            ok_line(format!("{n} joined team {t}"));
-        }
+            .await
+        {
+            Ok(_) => ok_line(format!("{n} joined team {t}")),
+            Err(e) if format!("{e:#}").contains("409") => {
+                ok_line(format!("{n} is already in team {t}"))
+            }
+            Err(e) => warn_line(format!(
+                "could not add {n} to team {t}: {e:#}\n  retry: corntchap-cli team join {t} {n}"
+            )),
+        },
         None => println!(
             "Next: corntchap-cli team join <team> {n}   (an agent only sees its team's projects)"
         ),
     }
-    if runtime == "local" {
+    let had_relay = token.is_none()
+        && api
+            .get(&format!("/agents/{n}/wake-targets"))
+            .await
+            .ok()
+            .and_then(|v| v.as_array().map(|a| a.iter().any(|t| t["type"] == "relay")))
+            .unwrap_or(false);
+    if runtime == "local" && !had_relay {
         match api
             .post(
                 &format!("/agents/{n}/wake-targets"),
@@ -872,6 +930,12 @@ async fn agent_setup(
             Err(e) => warn_line(format!("could not add the relay wake target: {e:#}")),
         }
     }
+    let Some(token) = token else {
+        println!(
+            "\nIts token was shown when it was created. Lost it? `corntchap-cli cook rotate {n}` revokes it and prints a new one."
+        );
+        return Ok(());
+    };
     println!("\nToken (shown once):\n\n  {token}\n");
     print!("{}", setup::mcp_snippet(kind, &api.server, &token));
     if runtime == "local" {
