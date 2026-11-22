@@ -40,6 +40,19 @@ services:
       timeout: 3s
       retries: 20
 
+  rustfs:   # S3-compatible file storage (dev credentials; the server creates the bucket)
+    image: rustfs/rustfs:1.0.6
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-corntchap}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-corntchap-dev-secret}
+    ports: ["127.0.0.1:${S3_PORT:?run `just setup`: it picks a random port}:9000"]
+    volumes: ["rustfsdata:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:9000/ || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
   corntchap:
     build:
       context: .
@@ -48,6 +61,7 @@ services:
     depends_on:
       db: { condition: service_healthy }
       keycloak: { condition: service_healthy }
+      rustfs: { condition: service_healthy }
     environment:
       DATABASE_URL: postgres://corn:corn@db/corntchap
       PUBLIC_URL: ${PUBLIC_URL:?run `just setup`}   # plain http is only accepted on localhost
@@ -57,7 +71,14 @@ services:
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-corntchap}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-corntchap-dev-secret}
       RUST_LOG: ${RUST_LOG:-info}
+      S3_ENDPOINT: http://rustfs:9000                        # the server, over the compose network
+      S3_PUBLIC_ENDPOINT: http://127.0.0.1:${S3_PORT}        # presigned URLs for agents and browsers
+      S3_BUCKET: ${S3_BUCKET:-corntchap}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-corntchap}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-corntchap-dev-secret}
+      S3_CREATE_BUCKET: "1"
     ports: ["127.0.0.1:${APP_PORT:?run `just setup`: it picks a random port}:8080"]
 
 volumes:
   pgdata:
+  rustfsdata:

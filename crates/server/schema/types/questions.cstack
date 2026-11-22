@@ -39,6 +39,8 @@ type QuestionView {
   updated_at String
   /// Follow-ups in the question's thread.
   notes QuestionNote[]
+  /// Files attached to the question (screenshots for the chef).
+  files FileRef[]
 }
 
 /// What pick_question returns: a question to put to your owner, or none.

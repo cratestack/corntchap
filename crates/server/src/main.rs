@@ -69,6 +69,24 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
                 .unwrap_or_else(|| corntchap::state::DEFAULT_ADMIN_ROLE.to_string()),
         });
     }
+    if let (Some(endpoint), Some(bucket)) = (env("S3_ENDPOINT"), env("S3_BUCKET")) {
+        let num = |k: &str, d: i64| env(k).and_then(|v| v.parse().ok()).unwrap_or(d);
+        c.storage = Some(corntchap::files::StorageConfig {
+            public_endpoint: env("S3_PUBLIC_ENDPOINT").unwrap_or_else(|| endpoint.clone()),
+            endpoint,
+            bucket,
+            region: env("S3_REGION").unwrap_or_else(|| "us-east-1".into()),
+            access_key: env("S3_ACCESS_KEY").unwrap_or_default(),
+            secret_key: env("S3_SECRET_KEY").unwrap_or_default(),
+            path_style: env("S3_PATH_STYLE").is_none_or(|v| v != "false" && v != "0"),
+            create_bucket: env("S3_CREATE_BUCKET").is_some_and(|v| v == "true" || v == "1"),
+            max_bytes: num("FILES_MAX_BYTES", corntchap::files::DEFAULT_MAX_BYTES),
+            inline_max_bytes: num(
+                "FILES_INLINE_MAX_BYTES",
+                corntchap::files::DEFAULT_INLINE_MAX_BYTES,
+            ),
+        });
+    }
     Ok(c)
 }
 

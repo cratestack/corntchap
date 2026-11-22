@@ -1,0 +1,45 @@
+part of "../corntchap.cstack"
+
+// Files (src/files.rs): uploads straight to storage, links behind corntchap's login.
+
+/// Get an upload slot for a file.
+/// @param project Pot key, e.g. PAY (or give task / question).
+/// @param name File name, e.g. screenshot.png.
+/// @param size Size in bytes (e.g. `stat -c %s file`), up to the server's limit (1 GiB by default).
+/// @param contentType MIME type; guessed from the name when omitted.
+/// @param task Attach it to this task, e.g. PAY-42.
+/// @param question Attach it to this question, e.g. PAY-Q3.
+mutation procedure fileCreateUpload(name: String, size: Int, project: String?, contentType: String?, task: String?, question: String?): UploadSlot
+  @allow(auth() != null)
+  @mcp(tool: "create_upload", description: "Upload a file (screenshot, log, build artifact, up to 1 GiB) to the pot: returns the file's permanent link, shareable at once, and a presigned PUT with ready-made curl commands. Run background_command (replace the local path) to upload without waiting; the server notices when it lands and marks the file ready. Share file.url in comments, results or questions. Without a shell, use upload_file for small files.")
+
+/// Upload a small file inline.
+/// @param project Pot key, e.g. PAY (or give task / question).
+/// @param name File name.
+/// @param contentBase64 The file's bytes, base64 (5 MiB at most by default).
+/// @param contentType MIME type; guessed from the name when omitted.
+/// @param task Attach it to this task.
+/// @param question Attach it to this question.
+mutation procedure fileUploadInline(name: String, contentBase64: String, project: String?, contentType: String?, task: String?, question: String?): FileView
+  @allow(auth() != null)
+  @mcp(tool: "upload_file", description: "Upload a small file (a few MiB) sent inline as base64, for agents without a shell. Returns the file, ready, with its permanent link.")
+
+/// One file, with a download URL when ready.
+/// @param id File id, e.g. PAY-F12.
+procedure fileGet(id: String): FileDownload
+  @allow(auth() != null)
+  @mcp(tool: "get_file", description: "A file's status (uploading, ready, failed) and, when ready, a presigned download URL valid for a few minutes (fetch it with curl). Links in the pot (url) stay valid; this one expires.")
+
+/// A pot's files.
+/// @param project Pot key, e.g. PAY.
+/// @param task Only files attached to this task.
+/// @param question Only files attached to this question.
+procedure fileList(project: String, task: String?, question: String?): FileView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_files", description: "Files in a pot (optionally one task's or one question's), newest first.")
+
+/// Delete a file.
+/// @param id File id, e.g. PAY-F12.
+mutation procedure fileDelete(id: String): OkResult
+  @allow(auth() != null)
+  @mcp(tool: "delete_file", description: "Delete a file you uploaded (people, cooks granted plan, and admins: any file in their pots).")

@@ -4,6 +4,7 @@ pub mod app;
 pub mod auth;
 pub mod console;
 pub mod error;
+pub mod files;
 pub mod jobs;
 pub mod mcp_compat;
 pub mod menus;

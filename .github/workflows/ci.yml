@@ -20,8 +20,17 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U corn" --health-interval 5s
           --health-timeout 5s --health-retries 10
+      rustfs:   # S3-compatible storage for tests/files.rs
+        image: rustfs/rustfs:1.0.6
+        env:
+          RUSTFS_ACCESS_KEY: corntchap
+          RUSTFS_SECRET_KEY: corntchap-ci-secret
+        ports: ["9000:9000"]
     env:
       TEST_DATABASE_ADMIN_URL: postgres://corn:corn@127.0.0.1/postgres
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_ACCESS_KEY: corntchap
+      S3_SECRET_KEY: corntchap-ci-secret
     steps:
       - uses: actions/checkout@v5
       # A migration that has shipped is never edited: databases that applied it would refuse to start.

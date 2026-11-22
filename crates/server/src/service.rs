@@ -170,11 +170,20 @@ async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
     .bind(id)
     .fetch_one(&mut *c)
     .await?;
+    let files: Value = sqlx::query_scalar(
+        "select coalesce(jsonb_agg(jsonb_build_object('id', fp.key || '-F' || f.number, 'name', f.name,
+            'content_type', f.content_type, 'size', f.size, 'status', f.status) order by f.number), '[]'::jsonb)
+         from files f join projects fp on fp.id = f.project_id where f.task_id = $1 and f.status <> 'deleted'",
+    )
+    .bind(id)
+    .fetch_one(&mut *c)
+    .await?;
     let o = t.as_object_mut().unwrap();
     o.insert("items".into(), items);
     o.insert("comments".into(), comments);
     o.insert("dependencies".into(), deps);
     o.insert("subtasks".into(), subtasks);
+    o.insert("files".into(), files);
     Ok(t)
 }
 

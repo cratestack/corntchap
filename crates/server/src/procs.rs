@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::Error,
-    menus, pantry, questions,
+    files, menus, pantry, questions,
     schema::cratestack_schema::{self, procedures::*},
     service,
     state::{AppState, Principal},
@@ -1078,5 +1078,106 @@ impl ProcedureRegistry for Procedures {
         let p = principal(ctx)?;
         let db = &self.state.db;
         typed(questions::answer(db, &p, &a.id, a.reason.as_deref().unwrap_or(""), true).await)
+    }
+
+    async fn file_create_upload(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: file_create_upload::Args,
+        _z: file_create_upload::Authorized,
+    ) -> Result<file_create_upload::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let (db, st) = (&self.state.db, &self.state);
+        typed(
+            files::create_upload(
+                db,
+                st,
+                &p,
+                files::NewFile {
+                    project: a.project,
+                    name: a.name,
+                    content_type: a.contentType,
+                    size: Some(a.size),
+                    task: a.task,
+                    question: a.question,
+                },
+            )
+            .await,
+        )
+    }
+
+    async fn file_upload_inline(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: file_upload_inline::Args,
+        _z: file_upload_inline::Authorized,
+    ) -> Result<file_upload_inline::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let (db, st) = (&self.state.db, &self.state);
+        typed(
+            files::upload_inline(
+                db,
+                st,
+                &p,
+                files::NewFile {
+                    project: a.project,
+                    name: a.name,
+                    content_type: a.contentType,
+                    size: None,
+                    task: a.task,
+                    question: a.question,
+                },
+                &a.contentBase64,
+            )
+            .await,
+        )
+    }
+
+    async fn file_get(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: file_get::Args,
+        _z: file_get::Authorized,
+    ) -> Result<file_get::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let (db, st) = (&self.state.db, &self.state);
+        typed(files::get(db, st, &p, &a.id).await)
+    }
+
+    async fn file_list(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: file_list::Args,
+        _z: file_list::Authorized,
+    ) -> Result<file_list::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let (db, st) = (&self.state.db, &self.state);
+        typed(
+            files::list(
+                db,
+                st,
+                &p,
+                &a.project,
+                a.task.as_deref(),
+                a.question.as_deref(),
+            )
+            .await,
+        )
+    }
+
+    async fn file_delete(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: file_delete::Args,
+        _z: file_delete::Authorized,
+    ) -> Result<file_delete::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let (db, st) = (&self.state.db, &self.state);
+        typed(files::delete(db, st, &p, &a.id).await)
     }
 }

@@ -97,8 +97,25 @@ async fn run_jobs(state: AppState) {
             }
         }
     };
+    let w = state.clone();
+    let files = async move {
+        if let Some(st) = &w.storage
+            && st.cfg.create_bucket
+            && let Err(e) = st.ensure_bucket().await
+        {
+            tracing::warn!("storage: {e}");
+        }
+        let mut tick = tokio::time::interval(Duration::from_secs(3));
+        loop {
+            tick.tick().await;
+            if let Err(e) = crate::files::watch(&w).await {
+                tracing::warn!("file watcher: {e}");
+            }
+        }
+    };
     tokio::select! {
         _ = reaper => {},
+        _ = files => {},
         _ = Dispatcher::new(state).run() => {},
     }
 }

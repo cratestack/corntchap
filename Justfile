@@ -50,11 +50,11 @@ image tag="dev":
 
 # Pick random free ports once (writes .env.dev); delete the file to re-roll.
 env-init:
-    [ -f .env.dev ] || python3 scripts/devenv.py > .env.dev
+    @python3 scripts/devenv.py --ensure .env.dev
 
-# Postgres 18 + Keycloak (dev realm) via compose, on random loopback ports from .env.dev.
+# Postgres 18 + Keycloak (dev realm) + RustFS (files) via compose, on random loopback ports from .env.dev.
 infra: env-init
-    {{load}} docker compose up -d --wait db keycloak
+    {{load}} docker compose up -d --wait db keycloak rustfs
 
 # Alias kept for muscle memory.
 db: infra

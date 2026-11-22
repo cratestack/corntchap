@@ -166,7 +166,30 @@ pub async fn start(background: bool) -> TestApp {
         admin_role: "corntchap-admin".into(),
     });
     cfg.run_background = background;
+    // File storage when an S3 endpoint is configured (RustFS from `just infra`, a service in CI):
+    // one throwaway bucket per test app.
+    if let (Ok(endpoint), Ok(key), Ok(secret)) = (
+        std::env::var("S3_ENDPOINT"),
+        std::env::var("S3_ACCESS_KEY"),
+        std::env::var("S3_SECRET_KEY"),
+    ) {
+        cfg.storage = Some(corntchap::files::StorageConfig {
+            public_endpoint: endpoint.clone(),
+            endpoint,
+            bucket: format!("t{}", uuid::Uuid::new_v4().simple()),
+            region: "us-east-1".into(),
+            access_key: key,
+            secret_key: secret,
+            path_style: true,
+            create_bucket: true,
+            max_bytes: 1024 * 1024,
+            inline_max_bytes: 64 * 1024,
+        });
+    }
     let state = AppState::new(pool, cfg);
+    if let Some(st) = &state.storage {
+        st.ensure_bucket().await.expect("create the test bucket");
+    }
     let app = corntchap::app::build(state.clone()).unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let http = reqwest::Client::builder()
