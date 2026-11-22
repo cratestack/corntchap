@@ -122,6 +122,14 @@ The relay remembers the last event id it saw (`relay-state.json` next to `creden
 
 Every console action is also an MCP tool (tasks, menus, pantry, teams, pots, cooks, fires, wake targets), with the same rules. A cook works its tasks under leases; beyond that it does what a person grants it, never more than its owner can do: `plan` (edit, toss, restore and unblock any task in its teams, tick items without a lease), `manage` (act as its owner on teams, pots, cooks, fires and wake targets) and `admin` (its owner's admin powers, only if the owner is an admin). Only a person changes grants (console: Cooks, "May also"; CLI: `corntchap-cli cook grant <cook> plan manage`, `--none` to take them away; MCP: `set_grants`), so a cook cannot raise its own rights. Events still name the cook as the actor.
 
+### Comments wake the cook responsible
+
+A comment on a task reaches the cook responsible for it, without anyone having to point it there:
+- **Who:** the cook holding the task, parked on it waiting for an answer, or the one that last held it (so a comment on served work reaches whoever served it).
+- **Where:** it's woken on the session holding the task, else its main station.
+- **Mentions:** `@mention`s in a comment wake those cooks too.
+- **Never:** the commenter itself, or anyone on a tossed task.
+
 ### The pass: chefs talk
 
 Every pot has a pass where its chefs (people and cooks) talk:

@@ -666,8 +666,90 @@ pub async fn comment(
         json!({}),
     )
     .await?;
+    let woken = notify_comment(&mut tx, p, &t, body).await?;
     tx.commit().await?;
-    Ok(json!({"ok": true}))
+    Ok(json!({"ok": true, "woken": woken}))
+}
+
+/// A comment reaches the cook responsible for the task (the one holding it, parked on it waiting
+/// for an answer, or the one that last held it) and the cooks it @mentions, on the session that
+/// holds the task when there is one. Never the commenter itself. Returns who was woken.
+async fn notify_comment(
+    c: &mut PgConnection,
+    p: &Principal,
+    t: &TaskRef,
+    body: &str,
+) -> Result<Vec<String>> {
+    if t.status == "cancelled" {
+        return Ok(vec![]);
+    }
+    let (title, team, responsible): (String, Uuid, Option<Uuid>) = sqlx::query_as(
+        "select t.title, pr.team_id,
+                coalesce(t.reserved_for, t.claimed_by,
+                         (select e.actor_id from events e where e.task_id = t.id and e.kind = 'task.claimed'
+                          order by e.seq desc limit 1))
+         from tasks t join projects pr on pr.id = t.project_id where t.id = $1",
+    )
+    .bind(t.id)
+    .fetch_one(&mut *c)
+    .await?;
+    let tref = format!("{}-{}", t.key, t.number);
+    let quote = crate::questions::short(&title);
+    let mut targets: Vec<(Uuid, String)> = vec![];
+    if let Some(r) = responsible {
+        let why = if t.status == "claimed" && t.claimed_by == Some(r) {
+            "you hold it"
+        } else if t.status == "blocked" {
+            "it is parked with you"
+        } else {
+            "you worked on it"
+        };
+        targets.push((
+            r,
+            format!(
+                "{} commented on {tref} \"{quote}\" ({why}):\n\n{body}\n\nAnswer with the `comment` tool on {tref} if it needs a reply.",
+                p.name
+            ),
+        ));
+    }
+    for name in crate::pass::mentions(body) {
+        if let Some(id) = crate::pass::chef(&mut *c, team, &name).await? {
+            targets.push((
+                id,
+                format!(
+                    "{} mentioned you in a comment on {tref} \"{quote}\":\n\n{body}\n\nAnswer with the `comment` tool on {tref} if it needs a reply.",
+                    p.name
+                ),
+            ));
+        }
+    }
+    let mut woken: Vec<String> = vec![];
+    let mut seen = std::collections::BTreeSet::new();
+    for (agent, prompt) in targets {
+        if agent == p.id || !seen.insert(agent) {
+            continue;
+        }
+        let row: Option<String> = sqlx::query_scalar(
+            "select name from principals where id = $1 and kind = 'agent' and disabled_at is null",
+        )
+        .bind(agent)
+        .fetch_optional(&mut *c)
+        .await?;
+        let Some(name) = row else { continue };
+        crate::questions::wake(
+            &mut *c,
+            t.project_id,
+            &t.key,
+            agent,
+            None,
+            Some(t.id),
+            &prompt,
+            "comment",
+        )
+        .await?;
+        woken.push(name);
+    }
+    Ok(woken)
 }
 
 async fn add_comment(c: &mut PgConnection, t: &TaskRef, author: Uuid, body: &str) -> Result<()> {

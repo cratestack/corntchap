@@ -407,7 +407,7 @@ async fn one(c: &mut PgConnection, id: Uuid) -> Result<Value> {
 }
 
 /// A chef (person or cook, never a fire) of the team, by name.
-async fn chef(c: &mut PgConnection, team: Uuid, name: &str) -> Result<Option<Uuid>> {
+pub(crate) async fn chef(c: &mut PgConnection, team: Uuid, name: &str) -> Result<Option<Uuid>> {
     Ok(sqlx::query_scalar(
         "select pr.id from principals pr join team_members tm on tm.principal_id = pr.id
          where tm.team_id = $1 and pr.name = $2 and pr.kind <> 'relay' and pr.disabled_at is null",
@@ -419,7 +419,7 @@ async fn chef(c: &mut PgConnection, team: Uuid, name: &str) -> Result<Option<Uui
 }
 
 /// `@name` mentions in a message (lowercased, deduplicated).
-fn mentions(body: &str) -> BTreeSet<String> {
+pub(crate) fn mentions(body: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let chars: Vec<char> = body.chars().collect();
     for (i, ch) in chars.iter().enumerate() {
