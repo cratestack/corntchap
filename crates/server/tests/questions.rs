@@ -208,9 +208,9 @@ async fn stations_and_the_question_pool() {
         &app.mcp(&c1, "release", json!({"id": c2claim["task"]["id"], "epoch": c2claim["lease"]["epoch"], "reason": "later"})).await,
         "release",
     );
-    // the cook's lease slots bound the wakes: with one slot, a second station is not woken while
-    // the first one has not claimed yet
-    sqlx::query("update principals set max_leases = 1 where id = $1")
+    // the cook's lease slots bound the wakes: c1 holds one lease; with two slots, one more station
+    // is woken, and no other while that one has not claimed yet
+    sqlx::query("update principals set max_leases = 2 where id = $1")
         .bind(agent)
         .execute(&mut *conn)
         .await
