@@ -68,6 +68,7 @@ pub fn routes() -> Router<AppState> {
         .route("/files/{id}", get(files_get).delete(files_delete))
         .route("/stations", get(stations_list).post(stations_add))
         .route("/stations/{id}", delete(stations_remove))
+        .route("/stations/{id}/main", post(stations_main))
         .route(
             "/projects/{key}/questions",
             get(questions_list).post(questions_ask),
@@ -389,6 +390,17 @@ async fn stations_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<
 }
 async fn stations_remove(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
     ok(stations::remove(&st.db, &p.worker()?, &id).await?)
+}
+
+/// `{main: bool}` (default true): make the station its cook's main one in its pot, or unset it.
+async fn stations_main(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    body: Option<Json<Value>>,
+) -> J {
+    let main = body.and_then(|Json(b)| b["main"].as_bool()).unwrap_or(true);
+    ok(stations::set_main(&st.db, &p.worker()?, &id, main).await?)
 }
 
 // ---- the question pool ----

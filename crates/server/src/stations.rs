@@ -18,7 +18,7 @@ pub const RUNTIMES: &[&str] = &["opencode", "claude-code", "codex", "other"];
 
 const STATION_JSON: &str = r#"jsonb_build_object(
   'id', st.ref, 'cook', a.name, 'project', pr.key, 'runtime', st.runtime, 'session', st.session_ref,
-  'directory', st.directory, 'label', st.label, 'created_at', st.created_at, 'last_woken_at', st.last_woken_at,
+  'directory', st.directory, 'label', st.label, 'main', st.main, 'created_at', st.created_at, 'last_woken_at', st.last_woken_at,
   'holding', coalesce((select jsonb_agg(pr.key || '-' || t.number order by t.number) from tasks t
       where t.station_id = st.id and t.status = 'claimed' and t.lease_expires_at > now()), '[]'::jsonb),
   'waiting', coalesce((select jsonb_agg(pr.key || '-' || t.number order by t.number) from tasks t
@@ -79,7 +79,8 @@ pub struct NewStation {
 }
 
 /// Register (or move) a session as a station of a cook in a pot. The same session registered
-/// again keeps its station id and takes the new pot, directory and label.
+/// again keeps its station id (and its main flag) and takes the new directory and label; moved to
+/// another pot it stops being the main station of the old one.
 pub async fn register(db: &PgPool, p: &Principal, n: NewStation) -> Result<Value> {
     let runtime = n.runtime.trim().to_lowercase();
     if !RUNTIMES.contains(&runtime.as_str()) {
@@ -109,7 +110,8 @@ pub async fn register(db: &PgPool, p: &Principal, n: NewStation) -> Result<Value
          values ($1,$2,$3,$4,$5,$6,$7,$8)
          on conflict (agent_id, runtime, session_ref) do update
            set project_id = excluded.project_id, directory = coalesce(excluded.directory, stations.directory),
-               label = coalesce(excluded.label, stations.label)
+               label = coalesce(excluded.label, stations.label),
+               main = stations.main and stations.project_id = excluded.project_id
          returning id",
     )
     .bind(new_ref())
@@ -163,6 +165,45 @@ pub async fn list(
         .fetch_all(db)
         .await?;
     Ok(Value::Array(rows))
+}
+
+/// Make a station its cook's main one in its pot (the session that answers messages and mentions),
+/// or stop it being the main one. The cook itself, its owner (or a cook acting for them) and
+/// admins may.
+pub async fn set_main(db: &PgPool, p: &Principal, station: &str, main: bool) -> Result<Value> {
+    let who = admin::acting_or_self(db, p).await?;
+    let mut tx = db.begin().await?;
+    let row: Option<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "select st.id, st.agent_id, st.project_id from stations st join principals a on a.id = st.agent_id
+         where st.ref = $1 and ($2 or a.id = $3 or a.owner_id = $3)
+         for update of st",
+    )
+    .bind(station.trim())
+    .bind(who.is_admin)
+    .bind(who.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((id, agent, project)) = row else {
+        return Err(Error::NotFound(format!("no station {station}")));
+    };
+    if main {
+        sqlx::query(
+            "update stations set main = false where agent_id = $1 and project_id = $2 and main and id <> $3",
+        )
+        .bind(agent)
+        .bind(project)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query("update stations set main = $2 where id = $1")
+        .bind(id)
+        .bind(main)
+        .execute(&mut *tx)
+        .await?;
+    let out = one(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(out)
 }
 
 pub async fn remove(db: &PgPool, p: &Principal, station: &str) -> Result<Value> {
@@ -247,7 +288,7 @@ pub async fn pick_for_wake(
            where st.agent_id = $1 and st.project_id = $2
              and not exists (select 1 from tasks t where t.station_id = st.id
                   and ((t.status = 'claimed' and t.lease_expires_at > now()) or (t.status = 'blocked' and t.reserved_for is not null)))
-           order by st.last_woken_at nulls first, st.created_at limit 1
+           order by st.main desc, st.last_woken_at nulls first, st.created_at limit 1
            for update skip locked)
          returning ref, runtime, session_ref, directory, label",
     )

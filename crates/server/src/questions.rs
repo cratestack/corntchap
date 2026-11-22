@@ -699,9 +699,9 @@ pub async fn wake(
     Ok(())
 }
 
-/// The station to wake when the question names none (the cook asked without `station`): the
-/// station that holds or is parked on the question's task, else the cook's station in this pot
-/// that was woken last (the session it is most likely talking in), else none.
+/// The station to wake when none is named (answers, notes, pass messages and mentions): the
+/// station that holds or is parked on the task in question (it has the context), else the cook's
+/// main station in this pot, else its station woken last, else none.
 async fn infer_station(
     c: &mut PgConnection,
     project: Uuid,
@@ -722,9 +722,10 @@ async fn infer_station(
             return Ok(on_task);
         }
     }
+    // the cook's main station in the pot, else the one woken last
     Ok(sqlx::query_scalar(
         "select id from stations where agent_id = $1 and project_id = $2
-         order by last_woken_at desc nulls last, created_at desc limit 1",
+         order by main desc, last_woken_at desc nulls last, created_at desc limit 1",
     )
     .bind(agent)
     .bind(project)

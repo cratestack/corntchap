@@ -1295,4 +1295,15 @@ impl ProcedureRegistry for Procedures {
             .map(serde_json::Value::Array),
         )
     }
+
+    async fn station_set_main(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: station_set_main::Args,
+        _z: station_set_main::Authorized,
+    ) -> Result<station_set_main::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(stations::set_main(&self.state.db, &p, &a.id, a.main.unwrap_or(true)).await)
+    }
 }

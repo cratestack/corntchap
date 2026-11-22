@@ -16,6 +16,8 @@ type StationView {
   /// Where the session works (a checkout or a worktree) on the cook's machine.
   directory String?
   label String?
+  /// The cook's main station in this pot: the session that answers messages and mentions.
+  main Boolean
   created_at String
   last_woken_at String?
   /// Tasks this station holds a live lease on.
