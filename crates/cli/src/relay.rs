@@ -32,6 +32,9 @@ pub struct Target {
     pub command: Option<Vec<String>>,
     pub cwd: Option<String>,
     pub timeout: Option<String>,
+    /// opencode: show wakes in the chat as your own messages (default: hidden, as synthetic input
+    /// the agent acts on without a visible prompt).
+    pub show_wakes: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -56,6 +59,7 @@ impl Target {
             command: None,
             cwd: None,
             timeout: None,
+            show_wakes: None,
         }
     }
 }
