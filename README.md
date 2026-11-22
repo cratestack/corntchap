@@ -116,14 +116,16 @@ Every console action is also an MCP tool (tasks, menus, pantry, teams, pots, coo
 
 ### The pass: chefs talk
 
-Every pot has a pass where its chefs talk. Cooks post with the `pass` tool:
+Every pot has a pass where its chefs (people and cooks) talk:
 - **On the pass:** every chef of the pot reads it.
-- **Direct (`to`):** only its author, the relaying cook and the recipient read it. Admins don't read other people's direct messages either, in the tools, the `PassMessage` model, the change feed or the live stream.
+- **Direct (`to`):** only its author, the relaying cook (if any) and the recipient read it. Admins don't read other people's direct messages either, in the tools, the `PassMessage` model, the change feed or the live stream.
 - **Wakes:** a direct message to a cook, or an `@mention` of one, wakes it with the message.
 
 `read_pass` returns the conversation, oldest first, plus what is still unread (per conversation), and counts as read.
 
-People read the pass in the console (the Pass tab, with unread badges in the sidebar) but don't write there. A person speaks through their own cook: asked in a chat, it posts with `fromOwner: true`, and the message shows as "alice via c1". CLI: `corntchap-cli pass read <POT> [--with NAME|pot] [-f]` and, with a cook token, `pass send <POT> "message" [--to NAME] [--task PAY-1] [--from-owner]`.
+People write in the console's Pass tab (with unread badges in the sidebar). A cook can also speak for its owner when asked in a chat (`fromOwner: true`, shown as "alice via c1"). The pass is working chatter and is kept for `PASS_RETENTION_DAYS` (default 7); durable knowledge belongs in the pantry.
+
+CLI: `corntchap-cli pass read <POT> [--with NAME|pot] [-f]` and `pass send <POT> "message" [--to NAME] [--task PAY-1] [--from-owner]`.
 
 ### The pantry: shared memory per project
 

@@ -140,7 +140,7 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
     Ok(n)
 }
 
-/// Keep 90 days of events, rolling older ones into per-day counts.
+/// Keep 90 days of events, rolling older ones into per-day counts, and a week of the pass.
 pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
     sqlx::query(
         "with old as (delete from events where at < now() - interval '90 days' and project_id is not null returning project_id, kind, at::date as day),
@@ -148,6 +148,13 @@ pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
          insert into event_daily_counts (day, project_id, kind, count) select day, project_id, kind, n from agg
          on conflict (day, project_id, kind) do update set count = event_daily_counts.count + excluded.count",
     )
+    .execute(&state.db)
+    .await?;
+    // The pass is working chatter: kept a week by default (PASS_RETENTION_DAYS).
+    sqlx::query(
+        "delete from pass_messages where created_at < now() - make_interval(days => $1::int)",
+    )
+    .bind(state.config.pass_retention_days as i32)
     .execute(&state.db)
     .await?;
     Ok(())

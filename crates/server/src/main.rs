@@ -69,6 +69,9 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
                 .unwrap_or_else(|| corntchap::state::DEFAULT_ADMIN_ROLE.to_string()),
         });
     }
+    if let Some(d) = env("PASS_RETENTION_DAYS").and_then(|v| v.parse::<i64>().ok()) {
+        c.pass_retention_days = d.max(1);
+    }
     if let (Some(endpoint), Some(bucket)) = (env("S3_ENDPOINT"), env("S3_BUCKET")) {
         let num = |k: &str, d: i64| env(k).and_then(|v| v.parse().ok()).unwrap_or(d);
         c.storage = Some(corntchap::files::StorageConfig {
