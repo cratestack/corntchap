@@ -18,7 +18,9 @@ async fn tool_err(app: &common::TestApp, tok: &str, name: &str, args: Value) -> 
 #[tokio::test]
 async fn menus_group_tasks_and_track_progress() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin = tok.unwrap();
     for (team, key) in [("acme", "PAY"), ("other", "OPS")] {
         app.post(&admin, "/teams", json!({"name": team})).await;

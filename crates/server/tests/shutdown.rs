@@ -10,7 +10,9 @@ use serde_json::json;
 #[tokio::test]
 async fn streams_end_when_the_server_stops() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     let (_, relay) = app.post(&root, "/relays", json!({"name": "r1"})).await;
     let relay = relay["token"].as_str().unwrap().to_string();

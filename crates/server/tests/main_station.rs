@@ -23,10 +23,12 @@ async fn last_wake_station(app: &common::TestApp) -> Value {
 #[tokio::test]
 async fn the_main_station_answers() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
-    app.post(&root, "/users", json!({"login": "alice"})).await;
-    app.post(&root, "/users", json!({"login": "eve"})).await;
+    app.add_user("alice").await;
+    app.add_user("eve").await;
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(&root, "/teams/acme/members", json!({"principal": "alice"}))
         .await;

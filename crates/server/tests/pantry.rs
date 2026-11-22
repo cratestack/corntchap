@@ -17,7 +17,9 @@ struct World {
 
 async fn world() -> World {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin = tok.unwrap();
     for (team, key, name) in [("acme", "PAY", "Payments"), ("other", "OPS", "Platform")] {
         app.post(&admin, "/teams", json!({"name": team})).await;

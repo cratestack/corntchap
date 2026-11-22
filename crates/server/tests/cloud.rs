@@ -113,7 +113,9 @@ fn ok(r: &Value, what: &str) -> Value {
 async fn cloud_cooks_get_work_and_messages() {
     let (base, seen) = fake_endpoint().await;
     let app = common::start(true).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(&root, "/teams/acme/members", json!({"principal": "octo"}))

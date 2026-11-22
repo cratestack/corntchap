@@ -5,8 +5,8 @@ part of "../corntchap.cstack"
 /// A person who can sign in.
 type UserView {
   name String
-  /// OIDC login (username at the identity provider).
-  login String?
+  /// How the person is shown (their name or e-mail at the identity provider); never used for lookup.
+  display_name String?
   is_admin Boolean
   /// Signed in at least once (linked to an identity).
   linked Boolean?
@@ -32,6 +32,8 @@ type TeamCreated {
 /// One of a team's chefs: a person or a cook.
 type MemberView {
   name String
+  /// How a person is shown (absent for cooks).
+  display_name String?
   /// user or agent.
   kind String
   /// owner, or member (a chef).

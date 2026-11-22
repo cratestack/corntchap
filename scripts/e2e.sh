@@ -20,7 +20,7 @@ SERVER=http://127.0.0.1:$PORT
 CLI=$(cd "$BIN" && pwd)/corntchap-cli
 
 $BIN/corntchap migrate
-BOOT=$($BIN/corntchap init --admin octo | sed -n 's/^bootstrap token[^:]*: //p')
+BOOT=$($BIN/corntchap init --name octo | sed -n 's/^bootstrap token[^:]*: //p')
 $BIN/corntchap serve >"$WORK/server.log" 2>&1 & SERVER_PID=$!
 for i in $(seq 50); do curl -sf $SERVER/healthz >/dev/null && break; sleep 0.2; done
 

@@ -17,7 +17,9 @@ fn refused(r: &Value, what: &str) -> String {
 #[tokio::test]
 async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     let call = |tok: &str, tool: &str, args: Value| {
         let (tok, tool, app) = (tok.to_string(), tool.to_string(), &app);
@@ -25,10 +27,7 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
     };
 
     // --- the admin drives everything over MCP (every console action has a tool) ---
-    ok(
-        &call(&root, "create_user", json!({"login": "alice"})).await,
-        "create_user",
-    );
+    app.add_user("alice").await;
     let users = ok(&call(&root, "list_users", json!({})).await, "list_users");
     assert!(
         users

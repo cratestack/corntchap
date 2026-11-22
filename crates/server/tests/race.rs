@@ -7,7 +7,7 @@ use std::collections::HashMap;
 #[tokio::test]
 async fn ten_agents_race_over_fifty_tasks() {
     let (pool, _) = common::fresh_db().await;
-    let (_, _) = admin::init_admin(&pool, "octo").await.unwrap();
+    let (_, _) = admin::init_admin(&pool, Some("octo")).await.unwrap();
     let admin_p: Principal =
         sqlx::query_as::<_, (uuid::Uuid,)>("select id from principals where name='octo'")
             .fetch_one(&pool)
@@ -130,7 +130,7 @@ async fn ten_agents_race_over_fifty_tasks() {
 #[tokio::test]
 async fn expired_lease_is_fenced() {
     let (pool, _) = common::fresh_db().await;
-    admin::init_admin(&pool, "octo").await.unwrap();
+    admin::init_admin(&pool, Some("octo")).await.unwrap();
     let id: uuid::Uuid = sqlx::query_scalar("select id from principals where name='octo'")
         .fetch_one(&pool)
         .await

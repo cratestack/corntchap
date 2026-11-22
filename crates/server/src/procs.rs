@@ -642,25 +642,6 @@ impl ProcedureRegistry for Procedures {
         typed(admin::list_users(db, &p).await)
     }
 
-    async fn admin_add_user(
-        &self,
-        _db: &Db,
-        ctx: &CratestackContext,
-        a: admin_add_user::Args,
-        _z: admin_add_user::Authorized,
-    ) -> Result<admin_add_user::Output, CratestackError> {
-        let p = principal(ctx)?;
-        let db = &self.state.db;
-        typed(
-            admin::create_user(db, &p, &a.login, a.isAdmin.unwrap_or(false))
-                .await
-                .map(|mut v| {
-                    v["linked"] = serde_json::json!(false);
-                    v
-                }),
-        )
-    }
-
     async fn admin_teams(
         &self,
         _db: &Db,

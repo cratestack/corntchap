@@ -778,7 +778,7 @@ pub async fn doctor(full: bool) -> Result<()> {
                 match api.get("/me").await {
                     Ok(me) => println!(
                         "ok   signed in as {} ({}{})",
-                        me["name"].as_str().unwrap_or("?"),
+                        crate::ui::person(&me),
                         me["kind"].as_str().unwrap_or("?"),
                         if me["is_admin"] == true {
                             ", admin"

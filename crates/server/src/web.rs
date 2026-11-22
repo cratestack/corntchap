@@ -91,6 +91,7 @@ fn store(state: &AppState) -> PgSessionStore {
 
 pub struct Session {
     pub user: Principal,
+    pub display_name: Option<String>,
     pub csrf: String,
     /// The IdP's id_token, used as `id_token_hint` at logout.
     pub id_token: Option<String>,
@@ -113,15 +114,24 @@ pub async fn session_from_headers(
     let Ok(uid) = sess.identity.external_id.parse::<Uuid>() else {
         return Ok(None);
     };
-    let row: Option<(Uuid, String, String, Option<Uuid>, bool, i64)> = sqlx::query_as(
-        "select id, kind, name, owner_id, is_admin, max_leases from principals
-         where id = $1 and disabled_at is null",
+    let row: Option<(
+        Uuid,
+        String,
+        String,
+        Option<Uuid>,
+        bool,
+        i64,
+        Option<String>,
+    )> = sqlx::query_as(
+        "select id, kind, name, owner_id, is_admin, max_leases, display_name from principals
+         where id = $1 and kind = 'user' and disabled_at is null",
     )
     .bind(uid)
     .fetch_optional(&state.db)
     .await?;
-    Ok(
-        row.map(|(id, kind, name, owner_id, is_admin, max_leases)| Session {
+    Ok(row.map(
+        |(id, kind, name, owner_id, is_admin, max_leases, display_name)| Session {
+            display_name,
             user: Principal {
                 id,
                 kind,
@@ -145,8 +155,8 @@ pub async fn session_from_headers(
                 .attributes
                 .get(sessions::ATTR_ID_TOKEN)
                 .cloned(),
-        }),
-    )
+        },
+    ))
 }
 
 /// `/files/PAY-F12/name`: the permanent file link. Bearer token or the console's session cookie;
@@ -375,72 +385,70 @@ async fn oidc_callback(
     let id_token = token.id_token.clone().unwrap_or_default();
     let cfg = state.config.oidc.as_ref().expect("oidc configured");
     let sub = identity.external_id.clone();
-    // The account name: preferred_username, else the local part of a *verified* e-mail address.
+    // The identity is the OIDC subject and nothing else: never preferred_username, never an e-mail.
+    if sub.trim().is_empty() {
+        return Ok(error_page(
+            StatusCode::FORBIDDEN,
+            "Cannot sign you in",
+            "The identity provider sent no subject (<code>sub</code>) for you; ask an admin.",
+        ));
+    }
+    // How the person is shown to people (never used for lookup or mentions): name, else a *verified* e-mail.
     let verified = id_token_claim(&id_token, "email_verified")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let login = id_token_str(&id_token, "preferred_username")
-        .and_then(|n| admin::norm_name(&n).ok())
+    let display_name = id_token_str(&id_token, "name")
+        .and_then(|v| admin::clean_display_name(&v))
         .or_else(|| {
-            if !verified {
-                return None;
-            }
-            let email = id_token_str(&id_token, "email")?;
-            admin::norm_name(email.split('@').next()?).ok()
+            verified
+                .then(|| id_token_str(&id_token, "email"))
+                .flatten()
+                .and_then(|v| admin::clean_display_name(&v))
         });
-    let Some(login) = login else {
-        return Ok(error_page(
-            StatusCode::FORBIDDEN,
-            "Cannot create your account",
-            "The identity provider sent no usable <code>preferred_username</code> or verified e-mail; ask an admin.",
-        ));
-    };
+    let issuer = cfg.identity_issuer();
     let want_admin = has_admin_role(&id_token, &cfg.admin_role);
 
-    // Match by stable subject first, then link a pre-provisioned login on first sign-in.
-    let find = || async {
-        sqlx::query_scalar::<_, Uuid>(
-            "update principals set oidc_sub = $1, oidc_login = $2
-             where kind = 'user' and disabled_at is null and (oidc_sub = $1 or (oidc_sub is null and oidc_login = $2))
-             returning id",
-        )
-        .bind(&sub)
-        .bind(&login)
-        .fetch_optional(&state.db)
-        .await
-    };
-    let mut user = find().await?;
-    if user.is_none() {
-        // Just-in-time provisioning: the IdP is the source of truth for who may sign in.
-        user = sqlx::query_scalar(
-            "insert into principals (id, kind, name, oidc_login, oidc_sub, is_admin, admin_source)
-             values ($1,'user',$2,$2,$3,false,'oidc') on conflict do nothing returning id",
-        )
-        .bind(Uuid::new_v4())
-        .bind(&login)
-        .bind(&sub)
-        .fetch_optional(&state.db)
-        .await?;
-        if user.is_none() {
-            user = find().await?; // lost a race with a concurrent sign-in of the same user
+    let found: Option<(Uuid, bool)> = sqlx::query_as(
+        "select id, disabled_at is not null from principals
+         where kind = 'user' and oidc_iss = $1 and oidc_sub = $2",
+    )
+    .bind(issuer)
+    .bind(&sub)
+    .fetch_optional(&state.db)
+    .await?;
+    let user = match found {
+        Some((_, true)) => {
+            return Ok(error_page(
+                StatusCode::FORBIDDEN,
+                "Account disabled",
+                "This account is disabled; ask an admin.",
+            ));
         }
-    }
-    let Some(user) = user else {
-        return Ok(error_page(
-            StatusCode::CONFLICT,
-            "Name already taken",
-            &format!(
-                "The name <code>{}</code> already belongs to another account on this instance (an agent, a relay, a disabled user or a user linked to a different sign-in). Ask an admin.",
-                esc(&login)
-            ),
-        ));
+        Some((id, false)) => id,
+        // Just-in-time provisioning: the IdP is the source of truth for who may sign in; the handle is random.
+        None => {
+            admin::provision_user(
+                &state.db,
+                &admin::OidcIdentity { issuer, sub: &sub },
+                display_name.as_deref(),
+                &mut admin::random_pick,
+            )
+            .await?
+        }
     };
-    // Admin flag follows the IdP role, except for admins made by `init` or by hand.
+    sqlx::query("update principals set display_name = $2 where id = $1")
+        .bind(user)
+        .bind(&display_name)
+        .execute(&state.db)
+        .await?;
+    let login: String = sqlx::query_scalar("select name from principals where id = $1")
+        .bind(user)
+        .fetch_one(&state.db)
+        .await?;
+    // The IdP role decides the admin flag only for admins it made itself (`admin_source = 'oidc'`): `init` and
+    // manual settings (`user admin --on|--off`) are never changed by a sign-in.
     sqlx::query(
-        "update principals set
-           admin_source = case when $2 and not is_admin then 'oidc' else admin_source end,
-           is_admin = case when $2 then true when admin_source = 'oidc' then false else is_admin end
-         where id = $1",
+        "update principals set is_admin = $2 where id = $1 and admin_source = 'oidc' and is_admin <> $2",
     )
     .bind(user)
     .bind(want_admin)
@@ -493,7 +501,7 @@ async fn logout_page(State(state): State<AppState>, headers: HeaderMap) -> Resul
         },
         &format!(
             "<h1>Log out?</h1><p>Signed in as <b>{}</b>.</p><form method=post action=/logout><input type=hidden name=csrf value=\"{}\"><div class=actions><button class=primary>Log out</button><a class=btn href=\"/\">Stay</a></div></form>",
-            esc(&session.user.name),
+            pages::person(&session.user.name, session.display_name.as_deref()),
             esc(&session.csrf)
         ),
     )
@@ -631,7 +639,7 @@ async fn device_code(
     }
     let name = match (kind.as_str(), req.name.as_deref()) {
         ("user", _) => None,
-        (_, Some(n)) if !n.is_empty() => Some(admin::norm_name(n)?),
+        (_, Some(n)) if !n.is_empty() => Some(admin::norm_handle_syntax(n)?),
         _ => {
             return Err(Error::Invalid(
                 "name is required to enroll an agent or relay".into(),
@@ -777,7 +785,10 @@ fn device_left<'a>(session: &'a Session) -> Left<'a> {
     Left {
         headline: "Approve a device",
         sub: "A terminal, an agent or a relay asked to join your kitchen. Check the code matches before you say yes.",
-        who: Some((session.user.name.as_str(), session.csrf.as_str())),
+        who: Some((
+            pages::person(&session.user.name, session.display_name.as_deref()),
+            session.csrf.as_str(),
+        )),
     }
 }
 
@@ -838,11 +849,12 @@ async fn device_page(
         .map(|(o,)| format!("<div class=warn><b>Heads up:</b> this name already exists (owner: {}). Approving <b>replaces its credentials</b>; the old token stops working.</div>", esc(&o)))
         .unwrap_or_default();
     let row = |k: &str, v: &str| format!("<div><dt>{k}</dt><dd>{v}</dd></div>");
+    let person_html = pages::person(&session.user.name, session.display_name.as_deref());
     let mut details = String::new();
     match kind.as_str() {
         "user" => {
             details.push_str(&row("Action", "Sign in the CLI"));
-            details.push_str(&row("As", &esc(&session.user.name)));
+            details.push_str(&row("As", &person_html));
         }
         "agent" => {
             details.push_str(&row("Action", "Enroll a cook"));
@@ -855,7 +867,7 @@ async fn device_page(
                 &esc(agent_kind.as_deref().unwrap_or("other")),
             ));
             details.push_str(&row("Runtime", &esc(runtime.as_deref().unwrap_or("local"))));
-            details.push_str(&row("Owner", &esc(&session.user.name)));
+            details.push_str(&row("Owner", &person_html));
         }
         _ => {
             details.push_str(&row("Action", "Enroll a fire (relay)"));
@@ -863,7 +875,7 @@ async fn device_page(
                 "Name",
                 &format!("<code>{}</code>", esc(name.as_deref().unwrap_or(""))),
             ));
-            details.push_str(&row("Owner", &esc(&session.user.name)));
+            details.push_str(&row("Owner", &person_html));
         }
     }
     Ok(pages::render(
@@ -954,6 +966,7 @@ async fn device_decision(
                 )));
             }
             None => {
+                admin::ensure_not_a_handle(&mut tx, &name).await?;
                 let pid = Uuid::new_v4();
                 let (ak, rt) = if kind == "agent" {
                     (
@@ -1026,6 +1039,7 @@ async fn session_info(State(state): State<AppState>, headers: HeaderMap) -> Resu
     let mut resp = Json(json!({
         "id": s.user.id,
         "name": s.user.name,
+        "display_name": s.display_name,
         "kind": s.user.kind,
         "is_admin": s.user.is_admin,
         "csrf": s.csrf,

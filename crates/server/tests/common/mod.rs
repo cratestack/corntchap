@@ -5,7 +5,7 @@ use axum::{
     response::Redirect,
     routing::{get, post},
 };
-use corntchap::state::{AppState, Config, OidcConfig};
+use corntchap::state::{AppState, Config, OidcConfig, Principal};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -40,6 +40,9 @@ pub struct Ident {
     pub sub: String,
     pub username: String,
     pub email: String,
+    pub email_verified: bool,
+    /// The `name` claim; `None` leaves it out.
+    pub name: Option<String>,
     pub admin_role: bool,
 }
 
@@ -49,6 +52,8 @@ impl Default for Ident {
             sub: "sub-4242".into(),
             username: "Octo".into(),
             email: "octo@example.test".into(),
+            email_verified: true,
+            name: Some("Octo Cat".into()),
             admin_role: false,
         }
     }
@@ -114,8 +119,11 @@ pub async fn mock_oidc(who: Who) -> String {
         let w = i.who.lock().unwrap().clone();
         let mut claims = json!({
             "iss": i.base, "aud": "cid", "sub": w.sub, "iat": now, "exp": now + 300, "nonce": nonce,
-            "preferred_username": w.username, "email": w.email, "email_verified": true, "name": "Octo Cat",
+            "preferred_username": w.username, "email": w.email, "email_verified": w.email_verified,
         });
+        if let Some(n) = &w.name {
+            claims["name"] = json!(n);
+        }
         if w.admin_role {
             claims["realm_access"] = json!({"roles": ["offline_access", "corntchap-admin"]});
         }
@@ -265,7 +273,55 @@ impl TestApp {
             username: username.into(),
             email: format!("{username}@example.test"),
             admin_role,
+            ..Ident::default()
         };
+    }
+
+    /// Choose exactly what the mock IdP signs in next.
+    pub fn sign_in_with(&self, ident: Ident) {
+        *self.who.lock().unwrap() = ident;
+    }
+
+    /// A person who exists already (what a first sign-in would have created), with this handle.
+    pub async fn add_user(&self, handle: &str) {
+        sqlx::query(
+            "with p as (insert into principals (kind, name) values ('user', $1) returning id, name)
+             insert into handle_claims (name, principal_id) select name, id from p",
+        )
+        .bind(handle)
+        .execute(&self.state.db)
+        .await
+        .unwrap();
+    }
+
+    pub async fn principal(&self, handle: &str) -> Principal {
+        let (id, is_admin): (uuid::Uuid, bool) =
+            sqlx::query_as("select id, is_admin from principals where name = $1")
+                .bind(handle)
+                .fetch_one(&self.state.db)
+                .await
+                .unwrap();
+        Principal {
+            id,
+            kind: "user".into(),
+            name: handle.into(),
+            owner_id: None,
+            is_admin,
+            max_leases: 1,
+            runtime: None,
+            agent_kind: None,
+            token_id: None,
+            grants: vec![],
+        }
+    }
+
+    /// The handle of the person with this OIDC subject.
+    pub async fn handle_of(&self, sub: &str) -> String {
+        sqlx::query_scalar("select name from principals where oidc_sub = $1")
+            .bind(sub)
+            .fetch_one(&self.state.db)
+            .await
+            .unwrap()
     }
 
     /// Sign in through the mock OIDC provider and return the session cookie header value.

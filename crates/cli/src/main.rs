@@ -56,6 +56,9 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Your own account: change your handle (the @name others mention).
+    #[command(subcommand, name = "me", alias = "self")]
+    Me(MeCmd),
     /// Consult the marabout: checks the server, your credentials and the fire config.
     #[command(name = "marabou", alias = "doctor")]
     Doctor,
@@ -265,13 +268,25 @@ enum TaskCmd {
 }
 
 #[derive(Subcommand)]
+enum MeCmd {
+    /// Rename yourself: letters, digits, '-', '_' and '.' (max 64); a taken or reserved handle is refused.
+    Rename { handle: String },
+}
+
+#[derive(Subcommand)]
 enum UserCmd {
-    /// Add a user by their OIDC username (admin).
-    Add {
-        login: String,
+    /// Make a user an admin, or not (admin). The last admin cannot be demoted.
+    Admin {
+        handle: String,
+        #[arg(long, conflicts_with = "off", required_unless_present = "off")]
+        on: bool,
         #[arg(long)]
-        admin: bool,
+        off: bool,
     },
+    /// Disable a person (admin): their tokens and sessions stop working. The last admin who can sign in cannot be disabled.
+    Disable { handle: String },
+    /// Enable a disabled person again (admin). Their old tokens stay revoked: they sign in again.
+    Enable { handle: String },
     /// List users.
     Ls {
         #[arg(long)]
@@ -551,7 +566,7 @@ async fn login(url: &str, token: Option<String>, no_verify: bool) -> Result<()> 
         relay_token: None,
     }
     .save()?;
-    ok_line(format!("signed in to {url} as {}", s(&me, "name")));
+    ok_line(format!("signed in to {url} as {}", ui::person(&me)));
     Ok(())
 }
 
@@ -665,9 +680,10 @@ fn whoami_text(v: &Value, server: &str) -> String {
     if v["is_admin"] == true {
         role.push("admin".into());
     }
+    let who = ui::person(v);
     let mut o = format!(
         "{}  ({})\n{}\n",
-        ui::bold(&s(v, "name")),
+        ui::bold(&who),
         role.join(", "),
         ui::dim(server)
     );
@@ -719,13 +735,32 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         }
         Cmd::Tui => tui::run(api).await?,
         Cmd::Task(t) => task(t, &api).await?,
-        Cmd::User(UserCmd::Add { login, admin }) => {
-            api.post("/users", json!({"login": login, "is_admin": admin}))
+        Cmd::User(UserCmd::Admin { handle, on, off: _ }) => {
+            api.patch(&format!("/users/{handle}"), json!({"is_admin": on}))
                 .await?;
             ok_line(format!(
-                "added user {login}{} (they sign in at {}/board or with `corntchap-cli login`)",
-                if admin { " as admin" } else { "" },
-                api.server
+                "{handle} is {} an admin (manual admin setting: the IdP role no longer changes it)",
+                if on { "now" } else { "no longer" }
+            ));
+        }
+        Cmd::User(UserCmd::Disable { handle }) => {
+            api.patch(&format!("/users/{handle}"), json!({"disabled": true}))
+                .await?;
+            ok_line(format!(
+                "{handle} is disabled: their tokens and sessions no longer work"
+            ));
+        }
+        Cmd::User(UserCmd::Enable { handle }) => {
+            api.patch(&format!("/users/{handle}"), json!({"disabled": false}))
+                .await?;
+            ok_line(format!("{handle} is enabled again (they sign in anew)"));
+        }
+        Cmd::Me(MeCmd::Rename { handle }) => {
+            let v = api.patch("/me", json!({"name": handle})).await?;
+            ok_line(format!(
+                "you are now @{} (was @{})",
+                s(&v, "name"),
+                s(&v, "previous")
             ));
         }
         Cmd::User(UserCmd::Ls { json }) => {

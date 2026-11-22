@@ -60,10 +60,12 @@ fn bodies(page: &Value) -> Vec<&str> {
 #[tokio::test]
 async fn the_pass() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     for u in ["alice", "bob", "eve"] {
-        app.post(&root, "/users", json!({"login": u})).await;
+        app.add_user(u).await;
     }
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(&root, "/teams", json!({"name": "other"})).await;

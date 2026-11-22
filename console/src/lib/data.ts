@@ -89,7 +89,7 @@ export function useTeamChefs(team: string | null | undefined, opts: { enabled?: 
       const rows = await client.teamMembers.list({ query: { filters: { "team.name": team ?? "" }, include: ["principal"] } });
       return rows
         .filter((m) => m.principal?.name)
-        .map((m) => ({ name: m.principal!.name!, kind: m.principal!.kind ?? "user", role: m.role ?? "member" }))
+        .map((m) => ({ name: m.principal!.name!, display_name: m.principal!.displayName ?? null, kind: m.principal!.kind ?? "user", role: m.role ?? "member" }))
         .sort((a, b) => a.name.localeCompare(b.name));
     },
     !!team && (opts.enabled ?? true),
@@ -204,8 +204,10 @@ export interface AgentRow {
 }
 
 export interface UserRow {
+  /** The handle: what others @mention and admins type. */
   name: string;
-  login: string | null;
+  /** How the person is shown (from the identity provider); never used for lookup. */
+  display_name: string | null;
   is_admin: boolean;
   linked: boolean;
   disabled: boolean;
@@ -220,6 +222,7 @@ export interface TeamRow {
 
 export interface MemberRow {
   name: string;
+  display_name?: string | null;
   kind: string;
   role: string;
 }

@@ -22,7 +22,9 @@ async fn upload_watch_link_download() {
         return;
     }
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     for (team, key) in [("acme", "PAY"), ("other", "OPS")] {
         app.post(&root, "/teams", json!({"name": team})).await;

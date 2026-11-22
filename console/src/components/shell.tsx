@@ -1,5 +1,5 @@
 import { UploadTray } from "./files";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import {
   ChefHat,
@@ -12,6 +12,7 @@ import {
   Menu,
   Monitor,
   Moon,
+  Pencil,
   Search,
   Sun,
   UserRound,
@@ -25,7 +26,8 @@ import { useAgents, useClaimedTasks, useInvalidateAll, useOpenQuestionCounts, us
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import { lastView } from "@/lib/views";
-import { Avatar, StateDot, STATE_LABEL, cookState } from "./bits";
+import { Avatar, PersonName, StateDot, STATE_LABEL, cookState } from "./bits";
+import { HandleDialog } from "./handle-dialog";
 import { LogoMark, Wordmark } from "./brand";
 import { CommandPalette } from "./command-palette";
 import { NewTaskDialog } from "./new-task";
@@ -86,7 +88,9 @@ function FireCard() {
 function AccountMenu({ compact = false }: { compact?: boolean }) {
   const me = useSession();
   const { theme, setTheme } = useTheme();
+  const [renaming, setRenaming] = useState(false);
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -100,8 +104,11 @@ function AccountMenu({ compact = false }: { compact?: boolean }) {
           <Avatar name={me.name} className="size-7 text-[13px]" />
           {!compact && (
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-semibold text-sidebar-foreground">{me.name}</span>
-              <span className="block text-[11px] text-sidebar-muted">{me.is_admin ? "admin" : me.kind}</span>
+              <span className="block truncate text-[13px] font-semibold text-sidebar-foreground">{me.display_name ?? me.name}</span>
+              <span className="block truncate text-[11px] text-sidebar-muted">
+                {me.display_name ? `@${me.name}` : me.is_admin ? "admin" : me.kind}
+                {me.display_name && me.is_admin ? " · admin" : ""}
+              </span>
             </span>
           )}
         </button>
@@ -109,8 +116,11 @@ function AccountMenu({ compact = false }: { compact?: boolean }) {
       <DropdownMenuContent align="start" side={compact ? "bottom" : "top"} className="w-56">
         <DropdownMenuLabel className="font-normal">
           <span className="block text-[11px] text-muted-foreground">Signed in as</span>
-          <span className="block font-semibold">{me.name}</span>
+          <PersonName name={me.name} displayName={me.display_name} className="block break-words font-semibold" />
         </DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => setRenaming(true)}>
+          <Pencil className="size-4" /> Change handle
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuLabel className="label-caps py-1">Theme</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={theme} onValueChange={(v) => setTheme(v as typeof theme)}>
@@ -130,6 +140,8 @@ function AccountMenu({ compact = false }: { compact?: boolean }) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    <HandleDialog open={renaming} onOpenChange={setRenaming} current={me.name} />
+    </>
   );
 }
 

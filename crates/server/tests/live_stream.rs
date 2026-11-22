@@ -62,7 +62,9 @@ impl Sse {
 #[tokio::test]
 async fn replay_then_live_with_visibility() {
     let app = common::start(true).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin = tok.unwrap();
     for (team, key) in [("acme", "PAY"), ("other", "OPS")] {
         app.post(&admin, "/teams", json!({"name": team})).await;

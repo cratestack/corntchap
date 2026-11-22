@@ -121,10 +121,12 @@ fn err(r: &Value, has: &str) {
 async fn a_cook_connects_itself_through_the_form_the_link_or_the_tool() {
     let (base, seen) = fake_endpoint().await;
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     for u in ["alice", "eve"] {
-        app.post(&root, "/users", json!({"login": u})).await;
+        app.add_user(u).await;
     }
     let alice = admin::operator_token(&app.state.db, "alice", None)
         .await
@@ -504,7 +506,9 @@ async fn modern(
 #[tokio::test]
 async fn the_agent_is_told_whether_its_client_shows_the_form() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     let (_, c) = app
         .post(

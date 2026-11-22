@@ -19,10 +19,12 @@ fn err_text(r: &Value) -> String {
 #[tokio::test]
 async fn a_started_session_is_a_new_station_woken_with_its_task() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     for u in ["alice", "eve"] {
-        app.post(&root, "/users", json!({"login": u})).await;
+        app.add_user(u).await;
     }
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(&root, "/teams/acme/members", json!({"principal": "alice"}))

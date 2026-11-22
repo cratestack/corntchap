@@ -22,7 +22,9 @@ impl W {
 #[tokio::test]
 async fn every_tool_returns_its_typed_output() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin = tok.unwrap();
     app.post(&admin, "/teams", json!({"name": "acme"})).await;
     app.post(
@@ -197,7 +199,9 @@ async fn every_tool_returns_its_typed_output() {
 #[tokio::test]
 async fn relay_token_on_mcp_explains_itself() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin = tok.unwrap();
     let (_, rl) = app.post(&admin, "/relays", json!({"name": "r1"})).await;
     let r = app

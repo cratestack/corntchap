@@ -4,6 +4,18 @@ import { cn } from "@/lib/utils";
 import { colorFor, fmtLease, initial, leaseLeftMs, useNow, type Bucket } from "@/lib/format";
 import { WaxBand } from "./brand";
 
+/** A person as humans read it: "Display Name · @handle"; without a display name (cooks, fresh accounts) just the name. */
+export function PersonName({ name, displayName, className }: { name: string; displayName?: string | null | undefined; className?: string }) {
+  if (!displayName) return <span className={cn("font-medium", className)}>{name}</span>;
+  return (
+    <span className={cn("min-w-0", className)}>
+      <span className="font-medium">{displayName}</span>
+      <span className="text-muted-foreground"> · </span>
+      <span className="font-mono text-[12px] text-muted-foreground">@{name}</span>
+    </span>
+  );
+}
+
 export function Avatar({ name, className, title }: { name: string; className?: string; title?: string }) {
   return (
     <span

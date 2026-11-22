@@ -17,7 +17,9 @@ async fn wakes_for(app: &common::TestApp, agent: &str) -> i64 {
 #[tokio::test]
 async fn a_cook_is_not_woken_by_its_own_work() {
     let app = common::start(true).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let root = tok.unwrap();
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(

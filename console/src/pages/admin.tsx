@@ -4,12 +4,11 @@ import { Check, ChevronsUpDown, Flame, Loader2, Plus, RotateCw, ShieldCheck, Tra
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DataTable, PageShell, TD, TH } from "@/components/page";
-import { Avatar, EmptyState, RowSkeleton, StateDot, cookState } from "@/components/bits";
+import { Avatar, EmptyState, PersonName, RowSkeleton, StateDot, cookState } from "@/components/bits";
 import { CopyButton, TokenDialog } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -417,7 +416,7 @@ function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
         {(members.data ?? []).map((m) => (
           <li key={m.name} className="flex items-center gap-3 px-4 py-2.5">
             <Avatar name={m.name} className="size-7 text-[13px]" />
-            <span className="font-medium">{m.name}</span>
+            <PersonName name={m.name} displayName={m.display_name} />
             <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{m.kind}</span>
             <span className="font-mono text-[11px] text-muted-foreground">{m.role === "member" ? "chef" : m.role}</span>
             <Button
@@ -444,9 +443,10 @@ function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
 }
 
 interface Candidate {
-  /** What the API takes as `principal`: a user's login or a cook's name. */
+  /** What the API takes as `principal`: a person's handle or a cook's name. */
   principal: string;
   label: string;
+  display?: string | null;
   kind: "user" | "cook";
 }
 
@@ -464,8 +464,8 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
   const { people, cookList } = useMemo(() => {
     const taken = new Set((members.data ?? []).map((m) => m.name));
     const people: Candidate[] = (users.data ?? [])
-      .filter((u) => !u.disabled && !taken.has(u.name) && !(u.login && taken.has(u.login)))
-      .map((u) => ({ principal: u.login ?? u.name, label: u.login ?? u.name, kind: "user" as const }));
+      .filter((u) => !u.disabled && !taken.has(u.name))
+      .map((u) => ({ principal: u.name, label: u.name, display: u.display_name, kind: "user" as const }));
     const cookList: Candidate[] = (cooks.data ?? [])
       .filter((c) => !c.disabled && !taken.has(c.name))
       .map((c) => ({ principal: c.name, label: c.name, kind: "cook" as const }));
@@ -519,7 +519,7 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
               {who ? (
                 <span className="flex min-w-0 items-center gap-2">
                   <Avatar name={who.label} className="size-5 text-[10px]" />
-                  <span className="truncate">{who.label}</span>
+                  <PersonName name={who.label} displayName={who.display} className="truncate" />
                   <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{who.kind === "cook" ? "cook" : "person"}</span>
                 </span>
               ) : (
@@ -530,7 +530,7 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
           </PopoverTrigger>
           <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0">
             <Command>
-              <CommandInput placeholder="Search by login or name" />
+              <CommandInput placeholder="Search by name or handle" />
               <CommandList>
                 <CommandEmpty>{loading ? "Loading…" : "Nobody left to add."}</CommandEmpty>
                 {people.length > 0 && (
@@ -538,14 +538,14 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
                     {people.map((c) => (
                       <CommandItem
                         key={`u:${c.principal}`}
-                        value={`person ${c.label}`}
+                        value={`person ${c.label} ${c.display ?? ""}`}
                         onSelect={() => {
                           setWho(c);
                           setPick(false);
                         }}
                       >
                         <Avatar name={c.label} className="size-5 text-[10px]" />
-                        <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                        <PersonName name={c.label} displayName={c.display} className="flex-1 truncate" />
                         <span className="text-[11px] text-muted-foreground">person</span>
                         {who?.kind === c.kind && who.principal === c.principal && <Check className="size-4" aria-hidden="true" />}
                       </CommandItem>
@@ -596,37 +596,12 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
 
 export function UsersAdminPage() {
   const users = useV1<UserRow[]>("/users");
-  const call = useV1Call();
-  const [creating, setCreating] = useState(false);
-  const [login, setLogin] = useState("");
-  const [admin, setAdmin] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  async function create() {
-    setBusy(true);
-    try {
-      await call("POST", "/users", { login, is_admin: admin });
-      toast.success(`${login} can sign in`);
-      setCreating(false);
-      setLogin("");
-      setAdmin(false);
-    } catch (e) {
-      toast.error("Could not add that user", { description: errorMessage(e) });
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <PageShell
       eyebrow="Admin"
       title="Users"
-      sub="People who can sign in through your identity provider. Users are also created the first time they sign in."
-      actions={
-        <Button onClick={() => setCreating(true)}>
-          <Plus /> Add user
-        </Button>
-      }
+      sub="People who have signed in through your identity provider. Each gets a kitchen handle at their first sign-in and can change it from the account menu."
     >
       {users.isLoading ? (
         <RowSkeleton rows={3} />
@@ -635,7 +610,6 @@ export function UsersAdminPage() {
           <thead>
             <tr>
               <TH>User</TH>
-              <TH>Login</TH>
               <TH>Role</TH>
               <TH>Sign-in</TH>
             </tr>
@@ -645,10 +619,9 @@ export function UsersAdminPage() {
               <tr key={u.name}>
                 <TD>
                   <span className="flex items-center gap-2.5">
-                    <Avatar name={u.name} /> <span className="font-medium">{u.name}</span>
+                    <Avatar name={u.name} /> <PersonName name={u.name} displayName={u.display_name} />
                   </span>
                 </TD>
-                <TD className="font-mono text-[12px] text-muted-foreground">{u.login ?? "-"}</TD>
                 <TD>
                   {u.is_admin ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11.5px] font-medium text-primary">
@@ -659,23 +632,13 @@ export function UsersAdminPage() {
                   )}
                 </TD>
                 <TD className="text-[12.5px] text-muted-foreground">
-                  {u.disabled ? "disabled" : u.linked ? "linked" : "waiting for first sign-in"}
+                  {u.disabled ? "disabled" : u.linked ? "signed in" : "local (no sign-in)"}
                 </TD>
               </tr>
             ))}
           </tbody>
         </DataTable>
       )}
-      <FormDialog open={creating} onOpenChange={setCreating} title="Add a user" description="Pre-provision a login so you can add it to a team before it ever signs in." onSubmit={create} busy={busy} submitLabel="Add user" disabled={!login}>
-        <div className="space-y-1.5">
-          <Label htmlFor="usr-login">Login</Label>
-          <Input id="usr-login" required autoFocus value={login} onChange={(e) => setLogin(e.target.value)} placeholder="dev" />
-        </div>
-        <div className="flex items-center justify-between rounded-lg border border-border bg-muted/40 px-3 py-2.5">
-          <Label htmlFor="usr-admin">Admin</Label>
-          <Switch id="usr-admin" checked={admin} onCheckedChange={setAdmin} />
-        </div>
-      </FormDialog>
     </PageShell>
   );
 }

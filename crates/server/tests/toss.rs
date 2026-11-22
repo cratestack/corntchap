@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 #[tokio::test]
 async fn people_toss_and_restore_tasks() {
     let app = common::start(false).await;
-    let (_, tok) = admin::init_admin(&app.state.db, "octo").await.unwrap();
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
     let admin = tok.unwrap();
     app.post(&admin, "/teams", json!({"name": "acme"})).await;
     app.post(
