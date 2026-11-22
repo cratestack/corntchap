@@ -368,7 +368,7 @@ pub fn teams_table(v: &Value) -> String {
         .map(|t| {
             vec![
                 plain(s(t, "name")),
-                plain(s(t, "role")),
+                plain(role_label(&s(t, "role"))),
                 plain(t["members"].to_string()),
                 plain(match t["projects"].as_array() {
                     Some(a) if !a.is_empty() => a
@@ -382,7 +382,16 @@ pub fn teams_table(v: &Value) -> String {
             ]
         })
         .collect();
-    table(&["team", "role", "members", "projects"], rows, "no teams")
+    table(&["team", "role", "chefs", "projects"], rows, "no teams")
+}
+
+/// Team roles as shown: the stored `member` reads as chef.
+fn role_label(r: &str) -> String {
+    if r == "member" {
+        "chef".into()
+    } else {
+        r.to_string()
+    }
 }
 
 pub fn members_table(v: &Value) -> String {
@@ -394,11 +403,11 @@ pub fn members_table(v: &Value) -> String {
             vec![
                 plain(s(m, "name")),
                 plain(s(m, "kind")),
-                plain(s(m, "role")),
+                plain(role_label(&s(m, "role"))),
             ]
         })
         .collect();
-    table(&["name", "kind", "role"], rows, "no members")
+    table(&["name", "kind", "role"], rows, "no chefs")
 }
 
 pub fn users_table(v: &Value) -> String {
@@ -412,7 +421,7 @@ pub fn users_table(v: &Value) -> String {
                 plain(if u["is_admin"] == true {
                     "admin"
                 } else {
-                    "member"
+                    "chef"
                 }),
                 if u["linked"] == true {
                     plain("signed in")
@@ -448,7 +457,7 @@ pub fn agents_table(v: &Value) -> String {
                         })
                         .unwrap_or_else(|| "-".into()),
                 ),
-                plain(x["busy"].to_string()),
+                plain(format!("{}/{}", x["busy"], x["max_leases"])),
                 if x["disabled"] == true {
                     colored("disabled".into(), Color::Red)
                 } else {
@@ -459,7 +468,7 @@ pub fn agents_table(v: &Value) -> String {
         .collect();
     table(
         &[
-            "name", "kind", "runtime", "owner", "grants", "busy", "state",
+            "name", "kind", "runtime", "owner", "grants", "leases", "state",
         ],
         rows,
         "no agents (create one with `cook setup <name> --kind … --runtime …`)",

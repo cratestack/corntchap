@@ -22,7 +22,8 @@ model Principal {
   oidcLogin String? @readonly @map("oidc_login")
   agentKind String? @readonly @map("agent_kind")
   runtime String? @readonly
-  maxLeases Int @readonly @map("max_leases")
+  /// Tasks a cook may hold at once (its stations share them). Admins and the cook's owner may change it.
+  maxLeases Int @range(min: 1, max: 50) @map("max_leases")
   isAdmin Boolean @readonly @map("is_admin")
   disabledAt DateTime? @readonly @map("disabled_at")
   lastSeenAt DateTime? @readonly @map("last_seen_at")
@@ -36,6 +37,8 @@ model Principal {
   @@map("principals")
   @@deny("read", auth().kind == "relay")
   @@allow("read", auth().isAdmin == true || idRef == auth().id || ownerRef == auth().id || memberships.some.team.members.some.principalRef == auth().id)
+  // Every other field is @readonly, so an update can only change a cook's maxLeases.
+  @@allow("update", auth().kind == "user" && kind == "agent" && (auth().isAdmin == true || ownerRef == auth().id))
   @@mcp(resource: "principals")
 }
 

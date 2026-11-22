@@ -277,17 +277,19 @@ enum TeamCmd {
         #[arg(long)]
         json: bool,
     },
-    /// List a team's members.
+    /// List a team's chefs (the people and cooks in it).
+    #[command(name = "chefs", alias = "members")]
     Members {
         team: String,
         #[arg(long)]
         json: bool,
     },
-    /// Add a user or agent to a team.
+    /// Add a user or agent to a team as one of its chefs.
     Join {
         team: String,
         principal: String,
-        #[arg(long, default_value = "member")]
+        /// chef or owner.
+        #[arg(long, default_value = "chef")]
         role: String,
     },
     /// Remove a user or agent from a team.
@@ -368,6 +370,14 @@ enum AgentCmd {
         /// Take every grant away (work only).
         #[arg(long, conflicts_with = "grants")]
         none: bool,
+    },
+    /// How many tasks a cook may hold at once (its stations share them). Its owner or an admin.
+    #[command(name = "limit", alias = "max-leases")]
+    Limit {
+        name: String,
+        /// 1 to 50.
+        #[arg(value_parser = clap::value_parser!(i64).range(1..=50))]
+        leases: i64,
     },
     /// Stop an agent from claiming work.
     Disable { name: String },
@@ -893,6 +903,29 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
             } else {
                 ok_line(format!("{name} may also {}", g.join(", ")));
             }
+        }
+        AgentCmd::Limit { name, leases } => {
+            let list = api.get("/agents").await?;
+            let id = list
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|a| a["name"].as_str() == Some(name.to_lowercase().as_str()))
+                .and_then(|a| a["id"].as_str().map(String::from))
+                .ok_or_else(|| anyhow!("no cook named {name} among yours"))?;
+            // the principals model: only maxLeases is writable, by the cook's owner or an admin
+            let mut r = api
+                .http
+                .patch(format!("{}/api/v2/principals/{id}", api.server))
+                .json(&json!({"maxLeases": leases}));
+            if let Some(t) = &api.token {
+                r = r.bearer_auth(t);
+            }
+            api.send(r).await?;
+            ok_line(format!(
+                "{name} may hold {leases} task{} at once",
+                if leases == 1 { "" } else { "s" }
+            ));
         }
         AgentCmd::Rotate { name } => {
             let r = api
