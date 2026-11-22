@@ -105,6 +105,32 @@ async fn broadcast_reaches_every_session() {
     .into();
     assert_eq!(wakes_after(&app, c).await, expected);
     assert_eq!(m["woken"].as_array().unwrap().len(), 4, "{m}");
+    // who was woken is kept with the message: any later reader sees it, not only the poster
+    let page = ok(
+        &app.mcp(
+            &tokens["c2"],
+            "read_pass",
+            json!({"project": "PAY", "chef": "pot"}),
+        )
+        .await,
+        "read later",
+    );
+    let later = &page["messages"][0]["woken"];
+    let mut got: Vec<(String, String)> = later
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| {
+            (
+                w["cook"].as_str().unwrap().to_string(),
+                w["station"].as_str().unwrap_or("-").to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    let mut want: Vec<(String, String)> = expected.iter().cloned().collect();
+    want.sort();
+    assert_eq!(got, want, "{later}");
     let text: String = sqlx::query_scalar(
         "select payload->>'text' from events where kind = 'wake' order by seq desc limit 1",
     )
@@ -129,6 +155,31 @@ async fn broadcast_reaches_every_session() {
     );
     let expected: BTreeSet<_> = [pair("c2", &st["x"]), pair("c3", "-")].into();
     assert_eq!(wakes_after(&app, c).await, expected, "@all is a broadcast");
+
+    // a mention records the cook and the session it reached, for every reader
+    ok(
+        &app.mcp(
+            &alice,
+            "pass",
+            json!({"project": "PAY", "message": "@c2 can you look?"}),
+        )
+        .await,
+        "mention",
+    );
+    let page = ok(
+        &app.mcp(
+            &doug,
+            "read_pass",
+            json!({"project": "PAY", "chef": "pot", "limit": 1}),
+        )
+        .await,
+        "read mention",
+    );
+    assert_eq!(
+        page["messages"][0]["woken"],
+        json!([{"cook": "c2", "station": st["x"], "label": null}]),
+        "{page}"
+    );
 
     // a person broadcasting reaches every session
     let c = cursor(&app).await;

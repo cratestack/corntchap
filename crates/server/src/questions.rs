@@ -674,7 +674,7 @@ pub async fn wake(
     task: Option<Uuid>,
     text: &str,
     reason: &str,
-) -> Result<()> {
+) -> Result<Value> {
     let name: String = sqlx::query_scalar("select name from principals where id = $1")
         .bind(agent)
         .fetch_one(&mut *c)
@@ -719,7 +719,12 @@ pub async fn wake(
         json!({"agent": name, "agent_id": agent, "project": key, "station": st, "text": text, "reason": reason}),
     )
     .await?;
-    Ok(())
+    // who was woken, for the record: the cook, and the session when there is one
+    Ok(json!({
+        "cook": name,
+        "station": st.as_ref().and_then(|s| s["id"].as_str()),
+        "label": st.as_ref().and_then(|s| s["label"].as_str().or(s["directory"].as_str())),
+    }))
 }
 
 /// The station to wake when none is named (answers, notes, pass messages and mentions): the

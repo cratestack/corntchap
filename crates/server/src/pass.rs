@@ -30,7 +30,7 @@ const MSG_JSON: &str = r#"jsonb_build_object(
   'to', (select name from principals where id = m.to_principal),
   'body', m.body,
   'task', (select pr.key || '-' || t.number from tasks t where t.id = m.task_id),
-  'at', m.created_at, 'woken', '[]'::jsonb,
+  'at', m.created_at, 'woken', m.woken,
   'station', (select s.ref from stations s where s.id = m.station_id),
   'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = m.station_id))"#;
 
@@ -160,7 +160,7 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     if broadcast && to.is_some() {
         return invalid("a broadcast goes to everyone: leave `to` out");
     }
-    let mut reached: Vec<String> = vec![];
+    let mut reached: Vec<Value> = vec![];
     if broadcast {
         let rows: Vec<(Uuid, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
             "select a.id, a.name, st.id, st.ref from principals a
@@ -188,24 +188,22 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             if own {
                 continue;
             }
-            wake(
-                &mut tx,
-                pr.id,
-                &pr.key,
-                agent,
-                station,
-                task,
-                &prompt,
-                "broadcast",
-            )
-            .await?;
-            reached.push(match sref {
-                Some(r) => format!("{name}/{r}"),
-                None => name,
-            });
+            reached.push(
+                wake(
+                    &mut tx,
+                    pr.id,
+                    &pr.key,
+                    agent,
+                    station,
+                    task,
+                    &prompt,
+                    "broadcast",
+                )
+                .await?,
+            );
+            let _ = (name, sref);
         }
-        let mut out = one(&mut tx, id).await?;
-        out["woken"] = json!(reached);
+        let out = record_woken(&mut tx, id, &reached).await?;
         tx.commit().await?;
         return Ok(out);
     }
@@ -247,17 +245,21 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
                 pr.key, pr.key
             )
         };
-        wake(&mut tx, pr.id, &pr.key, id, None, task, &prompt, "pass").await?;
-        let name: String = sqlx::query_scalar("select name from principals where id = $1")
-            .bind(id)
-            .fetch_one(&mut *tx)
-            .await?;
-        reached.push(name);
+        reached.push(wake(&mut tx, pr.id, &pr.key, id, None, task, &prompt, "pass").await?);
     }
-    let mut out = one(&mut tx, id).await?;
-    out["woken"] = json!(reached);
+    let out = record_woken(&mut tx, id, &reached).await?;
     tx.commit().await?;
     Ok(out)
+}
+
+/// Keep who a message woke with the message itself, so every reader sees it.
+async fn record_woken(c: &mut PgConnection, id: Uuid, woken: &[Value]) -> Result<Value> {
+    sqlx::query("update pass_messages set woken = $2 where id = $1")
+        .bind(id)
+        .bind(json!(woken))
+        .execute(&mut *c)
+        .await?;
+    one(c, id).await
 }
 
 /// Read a pot's pass. `chef`: none for everything you can read (the pass and your direct

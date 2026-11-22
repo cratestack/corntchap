@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import type { PassMessageView, PassPage } from "@corntchap/api";
+import type { PassMessageView, PassPage, WokenRef } from "@corntchap/api";
 import { Hash, Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,12 @@ import { Markdown } from "./markdown";
 import { RefreshButton } from "./refresh-button";
 
 const POT = "pot";
+
+/** "doug · quiet-planet" for a woken session, "doug" for a cook woken through its wake target. */
+function wokenName(w: WokenRef): string {
+  const where = w.label ?? w.station;
+  return where ? `${w.cook} · ${where}` : w.cook;
+}
 
 /**
  * One conversation of a pot's pass, newest 100 messages. Reading marks them read on the server, so the pot
@@ -244,6 +250,11 @@ function Thread({
                 <Markdown className="mt-0.5 min-w-0 text-[13.5px] break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:overflow-x-auto">
                   {m.body}
                 </Markdown>
+                {m.woken.length > 0 && (
+                  <p className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground" title={m.woken.map(wokenName).join("\n")}>
+                    woke {m.woken.length === 1 ? wokenName(m.woken[0]!) : `${m.woken.length} sessions: ${m.woken.map(wokenName).join(", ")}`}
+                  </p>
+                )}
               </div>
             </li>
           ))}
@@ -304,7 +315,7 @@ function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string;
         station: null,
       });
       void invalidate();
-      if (sent.woken.length > 0) toast(`Woke ${sent.woken.length === 1 ? sent.woken[0] : `${sent.woken.length} sessions`}`);
+      if (sent.woken.length > 0) toast(`Woke ${sent.woken.length === 1 ? wokenName(sent.woken[0]!) : `${sent.woken.length} sessions`}`);
     } catch (e) {
       setText(body);
       toast.error("Could not send it", { description: errorMessage(e) });

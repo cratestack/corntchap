@@ -91,11 +91,11 @@ pub async fn run(c: PassCmd, api: &Api) -> Result<()> {
                     Some(t) => ok_line(format!("sent to {t} on {}", s(&m, "project"))),
                     None => ok_line(format!("posted on {}'s pass", s(&m, "project"))),
                 }
-                let woken: Vec<&str> = m["woken"]
+                let woken: Vec<String> = m["woken"]
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .filter_map(Value::as_str)
+                    .map(woken_name)
                     .collect();
                 if !woken.is_empty() {
                     println!("  woke {}", woken.join(", "));
@@ -141,6 +141,15 @@ pub async fn run(c: PassCmd, api: &Api) -> Result<()> {
     Ok(())
 }
 
+/// "doug · quiet-planet" for a woken session, "doug" for a cook woken through its target.
+fn woken_name(w: &Value) -> String {
+    let cook = w["cook"].as_str().unwrap_or("?");
+    match w["label"].as_str().or(w["station"].as_str()) {
+        Some(l) => format!("{cook} · {l}"),
+        None => cook.to_string(),
+    }
+}
+
 fn print_page(page: &Value, json: bool) {
     for m in page["messages"].as_array().into_iter().flatten() {
         if json {
@@ -177,6 +186,15 @@ fn print_page(page: &Value, json: bool) {
         );
         for line in s(m, "body").lines() {
             println!("  {line}");
+        }
+        let woken: Vec<String> = m["woken"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(woken_name)
+            .collect();
+        if !woken.is_empty() {
+            println!("  {}", ui::dim(&format!("woke {}", woken.join(", "))));
         }
     }
 }
