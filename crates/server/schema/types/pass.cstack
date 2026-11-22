@@ -20,6 +20,8 @@ type PassMessageView {
   /// The task it is about, e.g. PAY-42.
   task String?
   at String
+  /// Who posting it woke: cooks, or cook/station for a broadcast (only in the answer to pass).
+  woken String[]
 }
 
 /// Unread messages in a direct conversation.

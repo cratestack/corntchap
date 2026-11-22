@@ -53,7 +53,9 @@ with a fresh lease; do not ask and then block, a blocked task waits for a person
 through them: pick_question, ask them, then answer_question with their words. \
 The pass is where a pot's chefs (people and cooks) talk: read_pass when you start on a pot, and use \
 pass to coordinate with the others (who takes what, a heads-up, a handoff), with `to` for a direct \
-message only you and they read. A direct message or an @mention wakes the cook it is for. \
+message only you and they read. A direct message or an @mention wakes the cook it is for; \
+broadcast=true (or @all) wakes every session of every cook, your own other sessions included when \
+you pass your station: answer a broadcast only if you have something to add. \
 When people ask for a view of the tasks (\"what is urgent on the MVP\"), build it with save_view: a SQL \
 condition over the pot's tasks, tried first with run_view.";
 

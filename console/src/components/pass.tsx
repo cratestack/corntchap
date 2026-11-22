@@ -257,6 +257,7 @@ function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string;
   const [busy, setBusy] = useState(false);
   const [caret, setCaret] = useState(0);
   const [pick, setPick] = useState(0);
+  const [everyone, setEveryone] = useState(false);
   const ta = useRef<HTMLTextAreaElement>(null);
   const channel = withWho === POT;
 
@@ -288,8 +289,17 @@ function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string;
     setBusy(true);
     setText("");
     try {
-      await client.procedures.passPost({ project: potKey, message: body, to: channel ? null : withWho, task: null, fromOwner: null });
+      const sent = await client.procedures.passPost({
+        project: potKey,
+        message: body,
+        to: channel ? null : withWho,
+        task: null,
+        fromOwner: null,
+        broadcast: channel && everyone ? true : null,
+        station: null,
+      });
       void invalidate();
+      if (sent.woken.length > 0) toast(`Woke ${sent.woken.length === 1 ? sent.woken[0] : `${sent.woken.length} sessions`}`);
     } catch (e) {
       setText(body);
       toast.error("Could not send it", { description: errorMessage(e) });
@@ -358,9 +368,17 @@ function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string;
           <span className="max-sm:sr-only">Send</span>
         </Button>
       </div>
-      <p className="mt-1 font-mono text-[10.5px] text-muted-foreground">
-        ↵ to send · shift+↵ for a new line · markdown ok · {channel ? "@name wakes a cook" : "a message to a cook wakes it"} · kept a week
-      </p>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+        {channel && (
+          <label className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground" title="Wake every session of every cook in this pot (same as writing @all)">
+            <input type="checkbox" checked={everyone} onChange={(e) => setEveryone(e.target.checked)} className="size-3.5 accent-[var(--primary)]" />
+            Wake everyone
+          </label>
+        )}
+        <p className="font-mono text-[10.5px] text-muted-foreground">
+          ↵ to send · shift+↵ for a new line · markdown ok · {channel ? "@name wakes a cook, @all every session" : "a message to a cook wakes it"} · kept a week
+        </p>
+      </div>
     </div>
   );
 }

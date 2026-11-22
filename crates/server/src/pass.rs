@@ -30,7 +30,7 @@ const MSG_JSON: &str = r#"jsonb_build_object(
   'to', (select name from principals where id = m.to_principal),
   'body', m.body,
   'task', (select pr.key || '-' || t.number from tasks t where t.id = m.task_id),
-  'at', m.created_at)"#;
+  'at', m.created_at, 'woken', '[]'::jsonb)"#;
 
 /// Messages of pot `$1` that principal `$2` may read.
 const VISIBLE: &str = "m.project_id = $1 and (m.to_principal is null or m.author_id = $2 or m.relayed_by = $2 or m.to_principal = $2)";
@@ -47,6 +47,10 @@ pub struct Post {
     pub task: Option<String>,
     /// Post in the cook's owner's name (the owner asked for it in a chat with their cook).
     pub from_owner: bool,
+    /// Wake every session of every chef in the pot (also `@all` in the message).
+    pub broadcast: bool,
+    /// The sender's own station, so a broadcast skips that session but reaches its siblings.
+    pub station: Option<String>,
 }
 
 pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
@@ -145,13 +149,71 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     )
     .await?;
 
+    let mentioned = mentions(body);
+    let broadcast = a.broadcast
+        || (mentioned.contains("all") && chef(&mut tx, pr.team_id, "all").await?.is_none());
+    if broadcast && to.is_some() {
+        return invalid("a broadcast goes to everyone: leave `to` out");
+    }
+    // the session sending it, if it said: a broadcast skips it and reaches its siblings
+    let own_station = crate::stations::for_claim(&mut tx, &p, a.station.as_deref(), pr.id).await?;
+    let mut reached: Vec<String> = vec![];
+    if broadcast {
+        let rows: Vec<(Uuid, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
+            "select a.id, a.name, st.id, st.ref from principals a
+             join team_members tm on tm.principal_id = a.id and tm.team_id = $1
+             left join stations st on st.agent_id = a.id and st.project_id = $2
+             where a.kind = 'agent' and a.disabled_at is null
+             order by a.name, st.created_at",
+        )
+        .bind(pr.team_id)
+        .bind(pr.id)
+        .fetch_all(&mut *tx)
+        .await?;
+        let prompt = format!(
+            "{signature} wrote to everyone on {}'s pass (every chef's sessions got it):\n\n{body}\n\n\
+             Read it, and answer on the pass (the `pass` tool, project {}) only if you have something to add; \
+             the other sessions are reading it too.",
+            pr.key, pr.key
+        );
+        for (agent, name, station, sref) in rows {
+            let own = match (own_station, station) {
+                (Some(mine), Some(st)) => st == mine,
+                // without its station the sender's cook is skipped whole: it cannot tell its sessions apart
+                _ => agent == p.id,
+            };
+            if own {
+                continue;
+            }
+            wake(
+                &mut tx,
+                pr.id,
+                &pr.key,
+                agent,
+                station,
+                task,
+                &prompt,
+                "broadcast",
+            )
+            .await?;
+            reached.push(match sref {
+                Some(r) => format!("{name}/{r}"),
+                None => name,
+            });
+        }
+        let mut out = one(&mut tx, id).await?;
+        out["woken"] = json!(reached);
+        tx.commit().await?;
+        return Ok(out);
+    }
+
     // Wake the cooks it is for: the recipient of a direct message, or the cooks @mentioned.
     let mut woken: BTreeSet<Uuid> = BTreeSet::new();
     let targets: Vec<(Uuid, bool)> = match &to {
         Some((id, _)) => vec![(*id, true)],
         None => {
             let mut v = vec![];
-            for name in mentions(body) {
+            for name in mentioned {
                 if let Some(id) = chef(&mut tx, pr.team_id, &name).await?
                     && id != p.id
                     && id != author
@@ -183,8 +245,14 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             )
         };
         wake(&mut tx, pr.id, &pr.key, id, None, task, &prompt, "pass").await?;
+        let name: String = sqlx::query_scalar("select name from principals where id = $1")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+        reached.push(name);
     }
-    let out = one(&mut tx, id).await?;
+    let mut out = one(&mut tx, id).await?;
+    out["woken"] = json!(reached);
     tx.commit().await?;
     Ok(out)
 }
