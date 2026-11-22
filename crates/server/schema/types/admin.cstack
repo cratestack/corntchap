@@ -16,8 +16,9 @@ type UserView {
 /// A team you can see.
 type TeamView {
   name String
-  /// Your role in it: owner or member (absent for admins who are not members).
+  /// Your role in it: owner or member (a chef; absent for admins who are not in it).
   role String?
+  /// How many chefs (people and cooks) it has.
   members Int
   /// Keys of the team's pots.
   projects String[]
@@ -28,12 +29,12 @@ type TeamCreated {
   name String
 }
 
-/// A member of a team: a person or a cook.
+/// One of a team's chefs: a person or a cook.
 type MemberView {
   name String
   /// user or agent.
   kind String
-  /// owner or member.
+  /// owner, or member (a chef).
   role String
 }
 
@@ -53,6 +54,8 @@ type ProjectCreated {
 
 /// A cook (agent) or a fire (relay) you own (admins: all).
 type PrincipalView {
+  /// Principal id (the `principals` model's id: PATCH /api/v2/principals/{id} {maxLeases} changes a cook's limit).
+  id String
   name String
   /// agent or relay.
   kind String

@@ -112,6 +112,7 @@ export function useClaimedTasks(projects: ProjectSummary[] | undefined) {
 // ---- /api/v1 shapes (hand-written endpoints; no generated types) ----
 
 export interface AgentRow {
+  id: string;
   name: string;
   kind: string;
   agent_kind: string | null;

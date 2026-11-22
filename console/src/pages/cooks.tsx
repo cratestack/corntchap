@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useLocation } from "react-router";
-import { ChefHat, ChevronDown, Loader2, Plug, Plus, Power, RotateCw, Trash2 } from "lucide-react";
+import { ChefHat, ChevronDown, Loader2, Minus, Plug, Plus, Power, RotateCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page";
@@ -29,13 +29,14 @@ import {
   useProc,
   useProjects,
   useV1,
+  useInvalidateAll,
   useV1Call,
   type AgentRow,
   type TeamRow,
   type WakeTargetRow,
 } from "@/lib/data";
 import type { StationView } from "@corntchap/api";
-import { errorMessage } from "@/lib/api";
+import { client, errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { KIND_LABEL } from "@/lib/snippets";
 import { useSession } from "@/lib/session";
@@ -171,6 +172,41 @@ function Grants({ a }: { a: AgentRow }) {
   );
 }
 
+/** Tasks held right now out of the cook's limit, which its owner (or an admin) can step up or down. */
+function LeaseLimit({ a }: { a: AgentRow }) {
+  const invalidate = useInvalidateAll();
+  const [busy, setBusy] = useState(false);
+  async function set(n: number) {
+    setBusy(true);
+    try {
+      await client.principals.update(a.id, { maxLeases: n });
+      void invalidate();
+      toast.success(`${a.name} may now hold ${n} task${n === 1 ? "" : "s"} at once`);
+    } catch (e) {
+      toast.error("Could not change the limit", { description: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+  const step = "size-6 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40";
+  return (
+    <span className="inline-flex items-center gap-1.5 font-mono text-[12px]">
+      <span>{a.busy} of</span>
+      <span className="inline-flex items-center rounded-md border border-border" role="group" aria-label={`Leases ${a.name} may hold at once`}>
+        <Button type="button" variant="ghost" size="icon" className={step} disabled={busy || a.max_leases <= 1} onClick={() => void set(a.max_leases - 1)} aria-label="One fewer">
+          <Minus className="size-3" />
+        </Button>
+        <span className="min-w-5 text-center font-bold" aria-live="polite">
+          {busy ? <Loader2 className="mx-auto size-3 animate-spin" /> : a.max_leases}
+        </span>
+        <Button type="button" variant="ghost" size="icon" className={step} disabled={busy || a.max_leases >= 50} onClick={() => void set(a.max_leases + 1)} aria-label="One more">
+          <Plus className="size-3" />
+        </Button>
+      </span>
+    </span>
+  );
+}
+
 function CookCard({
   a,
   current,
@@ -257,8 +293,8 @@ function CookCard({
         <dt className="text-muted-foreground">Last seen</dt>
         <dd>{fmtAgo(a.last_seen_at, now)}</dd>
         <dt className="text-muted-foreground">Leases</dt>
-        <dd className="font-mono text-[12px]">
-          {a.busy} of {a.max_leases}
+        <dd>
+          <LeaseLimit a={a} />
         </dd>
         <dt className="pt-1 text-muted-foreground">May also</dt>
         <dd>

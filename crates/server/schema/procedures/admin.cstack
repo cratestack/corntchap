@@ -20,7 +20,7 @@ mutation procedure adminAddUser(login: String, isAdmin: Boolean?): UserView
 /// Teams you belong to (admins: all), with their pots.
 procedure adminTeams(): TeamView[]
   @allow(auth() != null)
-  @mcp(tool: "list_teams", description: "Teams you belong to (admins: all), with your role, member count and pots.")
+  @mcp(tool: "list_teams", description: "Teams you belong to (admins: all), with your role, how many chefs and its pots.")
 
 /// Create a team (admins only); you become its owner.
 /// @param name Team name, e.g. payments.
@@ -28,21 +28,21 @@ mutation procedure adminAddTeam(name: String): TeamCreated
   @allow(auth() != null)
   @mcp(tool: "create_team", description: "Create a team (admins only); a person creating it becomes its owner.")
 
-/// Members of a team.
+/// A team's chefs: the people and cooks in it.
 /// @param team Team name.
 procedure adminTeamMembers(team: String): MemberView[]
   @allow(auth() != null)
-  @mcp(tool: "list_team_members", description: "Members of a team (people and cooks) with their role.")
+  @mcp(tool: "list_team_members", description: "A team's chefs (people and cooks) with their role (chef or owner).")
 
 /// Add a person or a cook to a team (team owners and admins; a cook only with its owner's say-so).
 /// @param team Team name.
 /// @param principal A person's login or a cook's name.
-/// @param role member (default) or owner (people only).
+/// @param role chef (default; also accepted as member) or owner (people only).
 mutation procedure adminAddMember(team: String, principal: String, role: String?): MemberAdded
   @allow(auth() != null)
-  @mcp(tool: "add_team_member", description: "Add a person or a cook to a team (team owners and admins). A cook joins only if you own it or are an admin.")
+  @mcp(tool: "add_team_member", description: "Add a chef (a person or a cook) to a team (team owners and admins). A cook joins only if you own it or are an admin.")
 
-/// Remove a member from a team (team owners and admins).
+/// Remove a chef from a team (team owners and admins).
 /// @param team Team name.
 /// @param principal A person's login or a cook's name.
 mutation procedure adminRemoveMember(team: String, principal: String): OkResult

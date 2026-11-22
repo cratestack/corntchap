@@ -367,7 +367,7 @@ export function TeamsAdminPage() {
     <PageShell
       eyebrow="Admin"
       title="Teams"
-      sub="Teams decide who sees which pots. Members can be people or cooks."
+      sub="Teams decide who sees which pots. Their chefs can be people or cooks."
       actions={
         <Button onClick={() => setCreating(true)}>
           <Plus /> New team
@@ -378,7 +378,7 @@ export function TeamsAdminPage() {
         <RowSkeleton rows={3} />
       ) : (teams.data ?? []).length === 0 ? (
         <EmptyState title="No teams yet" action={<Button onClick={() => setCreating(true)}>Make the first team</Button>}>
-          A team owns pots and has members. Start with the people who cook together.
+          A team owns pots and has chefs. Start with the people who cook together.
         </EmptyState>
       ) : (
         <div className="space-y-4">
@@ -406,10 +406,10 @@ function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
         <h2 className="text-[18px]">{team.name}</h2>
         <span className="font-mono text-[11.5px] text-muted-foreground">
-          {team.members} members · pots {team.projects.length ? team.projects.join(", ") : "none"}
+          {team.members} {team.members === 1 ? "chef" : "chefs"} · pots {team.projects.length ? team.projects.join(", ") : "none"}
         </span>
         <Button size="sm" variant="outline" className="ml-auto" onClick={onAdd}>
-          <UserPlus /> Add member
+          <UserPlus /> Add chef
         </Button>
       </div>
       <ul className="divide-y divide-border">
@@ -419,7 +419,7 @@ function TeamCard({ team, onAdd }: { team: TeamRow; onAdd: () => void }) {
             <Avatar name={m.name} className="size-7 text-[13px]" />
             <span className="font-medium">{m.name}</span>
             <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{m.kind}</span>
-            <span className="font-mono text-[11px] text-muted-foreground">{m.role}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">{m.role === "member" ? "chef" : m.role}</span>
             <Button
               size="icon-xs"
               variant="ghost"
@@ -505,7 +505,7 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
       }}
     >
       <div className="space-y-1.5">
-        <Label htmlFor="mem-who">Member</Label>
+        <Label htmlFor="mem-who">Chef</Label>
         <Popover open={pick} onOpenChange={setPick}>
           <PopoverTrigger asChild>
             <Button
@@ -583,7 +583,7 @@ function AddMember({ team, onClose }: { team: string | null; onClose: () => void
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="member">Member</SelectItem>
+            <SelectItem value="member">Chef</SelectItem>
             <SelectItem value="owner">Owner</SelectItem>
           </SelectContent>
         </Select>
@@ -655,7 +655,7 @@ export function UsersAdminPage() {
                       <ShieldCheck className="size-3" aria-hidden="true" /> admin
                     </span>
                   ) : (
-                    <span className="text-muted-foreground">member</span>
+                    <span className="text-muted-foreground">chef</span>
                   )}
                 </TD>
                 <TD className="text-[12.5px] text-muted-foreground">

@@ -237,9 +237,12 @@ pub async fn add_member(
     role: &str,
 ) -> Result<Value> {
     let p = &acting(db, p).await?;
-    if role != "owner" && role != "member" {
-        return invalid("role must be owner or member");
-    }
+    // A team's chefs: "chef" is stored as `member`.
+    let role = match role {
+        "chef" | "member" => "member",
+        "owner" => "owner",
+        _ => return invalid("role must be chef or owner"),
+    };
     let mut c = db.acquire().await?;
     let tid = owned_team(&mut c, p, team).await?;
     let target: Option<(Uuid, String, Option<Uuid>)> =
@@ -408,7 +411,7 @@ pub async fn create_principal(
 pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<Value> {
     let p = &acting_or_self(db, p).await?;
     let rows: Vec<Value> = sqlx::query_scalar(
-        "select jsonb_build_object('name', a.name, 'kind', a.kind, 'agent_kind', a.agent_kind, 'runtime', a.runtime,
+        "select jsonb_build_object('id', a.id, 'name', a.name, 'kind', a.kind, 'agent_kind', a.agent_kind, 'runtime', a.runtime,
             'max_leases', a.max_leases, 'owner', (select name from principals where id = a.owner_id),
             'grants', to_jsonb(a.grants),
             'disabled', a.disabled_at is not null, 'last_seen_at', a.last_seen_at,

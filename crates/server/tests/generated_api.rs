@@ -513,3 +513,84 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
     let get = tools.iter().find(|t| t["name"] == "get_task").unwrap();
     assert!(get["outputSchema"].is_object(), "{get}");
 }
+
+#[tokio::test]
+async fn cook_lease_limits_are_changed_through_the_model() {
+    let w = world().await;
+    let (_, v) = w.v2(&w.admin, Method::GET, "/principals", None).await;
+    let id_of = |name: &str| {
+        rows(&v)
+            .into_iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing"))["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (a1, alice) = (id_of("a1"), id_of("alice"));
+    // an admin raises a cook's limit
+    let (st, v) = w
+        .v2(
+            &w.admin,
+            Method::PATCH,
+            &format!("/principals/{a1}"),
+            Some(json!({"maxLeases": 2})),
+        )
+        .await;
+    assert_eq!((st, &v["maxLeases"]), (200, &json!(2)), "{v}");
+    // out of range, or any other field: refused
+    let (st, _) = w
+        .v2(
+            &w.admin,
+            Method::PATCH,
+            &format!("/principals/{a1}"),
+            Some(json!({"maxLeases": 0})),
+        )
+        .await;
+    assert!((400..500).contains(&st), "{st}");
+    let (st, _) = w
+        .v2(
+            &w.admin,
+            Method::PATCH,
+            &format!("/principals/{a1}"),
+            Some(json!({"name": "renamed"})),
+        )
+        .await;
+    assert!((400..500).contains(&st), "{st}");
+    // a teammate who does not own it, the cook itself, and people's own limits: refused
+    for (who, id) in [(&w.alice, &a1), (&w.a1, &a1), (&w.admin, &alice)] {
+        let (st, _) = w
+            .v2(
+                who,
+                Method::PATCH,
+                &format!("/principals/{}", id),
+                Some(json!({"maxLeases": 3})),
+            )
+            .await;
+        assert!(st == 403 || st == 404, "{st}");
+    }
+    // the owner may
+    let (st, made) = w
+        .app
+        .post(
+            &w.alice,
+            "/agents",
+            json!({"name": "a2", "kind": "other", "runtime": "local"}),
+        )
+        .await;
+    assert_eq!(st, 200, "{made}");
+    let (_, v2) = w.v2(&w.alice, Method::GET, "/principals", None).await;
+    let a2 = rows(&v2).into_iter().find(|p| p["name"] == "a2").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (st, v) = w
+        .v2(
+            &w.alice,
+            Method::PATCH,
+            &format!("/principals/{a2}"),
+            Some(json!({"maxLeases": 4})),
+        )
+        .await;
+    assert_eq!((st, &v["maxLeases"]), (200, &json!(4)), "{v}");
+}
