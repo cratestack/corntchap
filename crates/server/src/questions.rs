@@ -679,6 +679,15 @@ pub async fn wake(
         .bind(agent)
         .fetch_one(&mut *c)
         .await?;
+    let task_ref: Option<String> = match task {
+        Some(t) => sqlx::query_scalar(
+            "select pr.key || '-' || t.number from tasks t join projects pr on pr.id = t.project_id where t.id = $1",
+        )
+        .bind(t)
+        .fetch_optional(&mut *c)
+        .await?,
+        None => None,
+    };
     let station = match station {
         Some(s) => Some(s),
         None => infer_station(&mut *c, project, agent, task).await?,
@@ -723,7 +732,8 @@ pub async fn wake(
         None,
         "wake",
         None,
-        json!({"agent": name, "agent_id": agent, "project": key, "station": st, "text": text, "reason": reason}),
+        json!({"agent": name, "agent_id": agent, "project": key, "station": st, "text": text, "reason": reason,
+               "task": task_ref}),
     )
     .await?;
     // who was woken, for the record: the cook, and the session when there is one

@@ -884,6 +884,12 @@ impl ProcedureRegistry for Procedures {
             if let Some(t) = a.token {
                 config.insert("token".into(), serde_json::json!(t));
             }
+            if let Some(s) = a.secret {
+                config.insert("secret".into(), serde_json::json!(s));
+            }
+            if let Some(m) = a.mention {
+                config.insert("mention".into(), serde_json::json!(m));
+            }
             admin::add_wake_target(
                 db,
                 &p,
