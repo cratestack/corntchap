@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 
 use uuid::Uuid;
 
-use crate::{auth, connect, error::Error, procs, state::AppState};
+use crate::{auth, connect, error::Error, procs, state::AppState, usage};
 
 /// Revisions answered by this module, newest first (the first is the fallback on negotiation).
 pub const LEGACY_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -152,6 +152,53 @@ fn ref_key(s: &str) -> Option<&str> {
             .chars()
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
     (key_ok && !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())).then_some(key)
+}
+
+/// The pot a tool call is about, for the usage count: its `project` argument, else the pot of the
+/// MCP URL, else the key of a task, question or file reference in the arguments.
+fn usage_pot(args: &Value) -> Option<String> {
+    if let Some(p) = args["project"]
+        .as_str()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        return Some(p.to_uppercase());
+    }
+    if let Some(p) = current_pot() {
+        return Some(p.key);
+    }
+    args.as_object()?
+        .values()
+        .filter_map(Value::as_str)
+        .flat_map(|s| s.split(',').map(str::trim))
+        .find_map(|part| ref_key(part).map(String::from))
+}
+
+/// Characters of text in a tool result's `content` (what the agent reads).
+fn content_chars(result: &Value) -> u64 {
+    result["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c["text"].as_str())
+        .map(|t| t.chars().count() as u64)
+        .sum()
+}
+
+/// The JSON-RPC messages of a response body: plain JSON, or the `data:` lines of an event stream.
+fn body_messages(body: &[u8]) -> Vec<Value> {
+    if let Ok(v) = serde_json::from_slice::<Value>(body) {
+        return match v {
+            Value::Array(items) => items,
+            v => vec![v],
+        };
+    }
+    std::str::from_utf8(body)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("data:"))
+        .filter_map(|d| serde_json::from_str(d.trim_start()).ok())
+        .collect()
 }
 
 /// On a pot's URL: `project` defaults to the pot, and naming another pot (or another pot's task,
@@ -282,6 +329,44 @@ impl<T: McpTools> Compat<T> {
         }
         pot_args(&self.schema_of(&tool), &mut params["arguments"], &p.key)?;
         Ok(params)
+    }
+
+    /// Count a tool result sent to `who` (see [`usage`]).
+    fn note_call(&self, who: Uuid, params: &Value, result: &Value) {
+        let name = params["name"].as_str().unwrap_or_default();
+        usage::record(
+            &self.state,
+            who,
+            usage_pot(&params["arguments"]),
+            usage::TOOL,
+            name,
+            content_chars(result),
+        );
+    }
+
+    /// Count the `tools/call` and `tools/list` responses cratestack sent on 2026-07-28.
+    async fn note_modern(&self, headers: &HeaderMap, method: &str, params: &Value, body: &[u8]) {
+        for m in body_messages(body) {
+            let Some(result) = m.get("result") else {
+                continue;
+            };
+            // identified like any MCP request; the count is skipped when that fails
+            let Ok(p) = auth::authenticate_headers(&self.state, headers).await else {
+                return;
+            };
+            if method == "tools/list" {
+                usage::record(
+                    &self.state,
+                    p.id,
+                    current_pot().map(|p| p.key),
+                    usage::LIST,
+                    "tools/list",
+                    result.to_string().chars().count() as u64,
+                );
+            } else {
+                self.note_call(p.id, params, result);
+            }
+        }
     }
 
     fn schema_of(&self, tool: &str) -> Value {
@@ -425,11 +510,9 @@ impl<T: McpTools> Compat<T> {
             bytes
         };
         let tool = params["name"].as_str().unwrap_or_default().to_string();
-        if method == "tools/call" && !UI_TOOLS.contains(&tool.as_str()) {
-            return next
-                .run(Request::from_parts(parts, Body::from(bytes)))
-                .await;
-        }
+        // a tool other than the connect form: its response is only counted, never rewritten
+        let counted_only = method == "tools/call" && !UI_TOOLS.contains(&tool.as_str());
+        let headers = parts.headers.clone();
         let renders =
             connect::renders_ui(&params["_meta"]["io.modelcontextprotocol/clientCapabilities"]);
         let resp = next
@@ -442,6 +525,10 @@ impl<T: McpTools> Compat<T> {
         let Ok(rbytes) = to_bytes(rbody, MAX_BODY * 4).await else {
             return empty(StatusCode::INTERNAL_SERVER_ERROR);
         };
+        if counted_only {
+            self.note_modern(&headers, &method, &params, &rbytes).await;
+            return Response::from_parts(rparts, Body::from(rbytes));
+        }
         let patch = |v: &mut Value| {
             let Some(result) = v.get_mut("result") else {
                 return;
@@ -470,6 +557,9 @@ impl<T: McpTools> Compat<T> {
             }
         };
         let out = rewrite_body(&rbytes, &patch).unwrap_or_else(|| rbytes.to_vec());
+        if matches!(method.as_str(), "tools/list" | "tools/call") {
+            self.note_modern(&headers, &method, &params, &out).await;
+        }
         rparts.headers.remove(header::CONTENT_LENGTH);
         Response::from_parts(rparts, Body::from(out))
     }
@@ -486,10 +576,11 @@ impl<T: McpTools> Compat<T> {
         {
             return empty(StatusCode::FORBIDDEN);
         }
-        let (ctx, token) = match auth::authenticate_headers(&self.state, req.headers()).await {
+        let (ctx, token, who) = match auth::authenticate_headers(&self.state, req.headers()).await {
             Ok(p) => (
                 CratestackContext::authenticated(procs::ctx_fields(&p)),
                 p.token_id,
+                p.id,
             ),
             Err(e) => return self.auth_failure(e, req.headers()),
         };
@@ -521,7 +612,7 @@ impl<T: McpTools> Compat<T> {
                 }
                 let mut out = Vec::new();
                 for m in items {
-                    if let Some(r) = self.message(&ctx, token, m).await {
+                    if let Some(r) = self.message(&ctx, token, who, m).await {
                         out.push(r);
                     }
                 }
@@ -531,7 +622,7 @@ impl<T: McpTools> Compat<T> {
                     json_response(StatusCode::OK, &Value::Array(out))
                 }
             }
-            m => match self.message(&ctx, token, m).await {
+            m => match self.message(&ctx, token, who, m).await {
                 Some(r) => json_response(StatusCode::OK, &r),
                 None => empty(StatusCode::ACCEPTED),
             },
@@ -588,6 +679,7 @@ impl<T: McpTools> Compat<T> {
         &self,
         ctx: &CratestackContext,
         token: Option<Uuid>,
+        who: Uuid,
         msg: Value,
     ) -> Option<Value> {
         let Value::Object(obj) = msg else {
@@ -625,13 +717,22 @@ impl<T: McpTools> Compat<T> {
                         pot_tool(t, &p.key);
                     }
                 }
+                usage::record(
+                    &self.state,
+                    who,
+                    current_pot().map(|p| p.key),
+                    usage::LIST,
+                    "tools/list",
+                    l.to_string().chars().count() as u64,
+                );
                 rpc_result(id, l)
             }
             "tools/call" => match self.pot_call(&params) {
-                Err(m) => rpc_result(
-                    id,
-                    json!({"content": [{"type": "text", "text": m}], "isError": true}),
-                ),
+                Err(m) => {
+                    let r = json!({"content": [{"type": "text", "text": m}], "isError": true});
+                    self.note_call(who, &params, &r);
+                    rpc_result(id, r)
+                }
                 Ok(params) => match self.call_tool(ctx, &params).await {
                     Ok(mut r) => {
                         let name = params["name"].as_str().unwrap_or_default();
@@ -641,6 +742,7 @@ impl<T: McpTools> Compat<T> {
                         {
                             connect::guide_client(&mut r, renders);
                         }
+                        self.note_call(who, &params, &r);
                         rpc_result(id, r)
                     }
                     Err(m) => rpc_error(id, -32602, m),

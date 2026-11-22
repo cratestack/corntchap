@@ -1237,6 +1237,26 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn usage_report(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: usage_report::Args,
+        _z: usage_report::Authorized,
+    ) -> Result<usage_report::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            crate::usage::report(
+                &self.state.db,
+                &p,
+                a.project.as_deref(),
+                a.cook.as_deref(),
+                a.days,
+            )
+            .await,
+        )
+    }
+
     async fn view_list(
         &self,
         _db: &Db,
