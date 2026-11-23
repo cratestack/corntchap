@@ -355,6 +355,45 @@ pub fn wake_prompt(w: &Wake) -> String {
     }
 }
 
+/// The names of the MCP servers that point at this corntchap server, as Claude Code sees them in
+/// `dir`: the `.mcp.json` of `dir` and its parents, and `~/.claude.json` (your servers, and those of
+/// that project). claude.ai connectors are not in these files: allow those in your settings.
+pub fn corntchap_mcp_names(dir: Option<&str>, home: &std::path::Path, server: &str) -> Vec<String> {
+    let base = server.trim_end_matches('/');
+    let ours = |v: &Value| {
+        v["url"]
+            .as_str()
+            .is_some_and(|u| u.trim_end_matches('/').starts_with(&format!("{base}/mcp")))
+    };
+    let mut names: Vec<String> = vec![];
+    let mut take = |servers: &Value| {
+        for (n, v) in servers.as_object().into_iter().flatten() {
+            if ours(v) && !names.contains(n) {
+                names.push(n.clone());
+            }
+        }
+    };
+    let read = |p: &std::path::Path| -> Value {
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or(Value::Null)
+    };
+    if let Some(d) = dir {
+        let mut cur = Some(std::path::Path::new(d));
+        while let Some(c) = cur {
+            take(&read(&c.join(".mcp.json"))["mcpServers"]);
+            cur = c.parent();
+        }
+    }
+    let user = read(&home.join(".claude.json"));
+    take(&user["mcpServers"]);
+    if let Some(d) = dir {
+        take(&user["projects"][d]["mcpServers"]);
+    }
+    names
+}
+
 /// How a wake is delivered.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Plan {
@@ -561,7 +600,7 @@ async fn on_wake(api: &Api, cfg: &RelayConfig, states: &States, wake: &Value) {
         let mut w = w;
         loop {
             report(&api, &w, "started", None).await;
-            let code = run_wake(&w, &targets).await;
+            let code = run_wake(&w, &targets, &api.server).await;
             report(&api, &w, "finished", Some(code)).await;
             let mut g = states.lock().await;
             let st = g.entry(key.clone()).or_default();
@@ -602,7 +641,7 @@ pub async fn poke(cook: &str, pot: &str) -> Result<()> {
 }
 
 /// Deliver one wake; returns an exit code (0 ok, -1 skipped/failed to start).
-pub async fn run_wake(w: &Wake, targets: &[Target]) -> i32 {
+pub async fn run_wake(w: &Wake, targets: &[Target], server: &str) -> i32 {
     let fresh = mark_fresh(w.clone(), crate::station::claude_root().as_deref());
     let w = &fresh;
     let prompt = wake_prompt(w);
@@ -617,10 +656,30 @@ pub async fn run_wake(w: &Wake, targets: &[Target]) -> i32 {
         }
         Plan::Exec {
             agent,
-            command,
+            mut command,
             cwd,
             timeout,
         } => {
+            // a woken `claude -p` has nobody to approve a tool call: allow corntchap's own tools
+            if w.station
+                .as_ref()
+                .is_some_and(|s| s.runtime == "claude-code")
+                && command.iter().any(|a| a == "-p")
+            {
+                let home = dirs::home_dir().unwrap_or_default();
+                let names =
+                    corntchap_mcp_names(cwd.as_deref().map(expand).as_deref(), &home, server);
+                if !names.is_empty() {
+                    command.push("--allowedTools".into());
+                    command.push(
+                        names
+                            .iter()
+                            .map(|n| format!("mcp__{n}"))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    );
+                }
+            }
             exec_command(
                 &agent,
                 &command,
@@ -1436,6 +1495,35 @@ mod tests {
             Some(&root),
         );
         assert!(!w.station.as_ref().unwrap().fresh);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn corntchap_servers_are_found_in_mcp_json_and_claude_json() {
+        let root = std::env::temp_dir().join(format!("ct-mcp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let repo = root.join("repo/sub");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(
+            root.join("repo/.mcp.json"),
+            r#"{"mcpServers":{"corntchap-anr":{"type":"http","url":"https://c.example/mcp/ANR"},"other":{"type":"http","url":"https://x.example/mcp"}}}"#,
+        )
+        .unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let dir = repo.to_string_lossy().to_string();
+        std::fs::write(
+            home.join(".claude.json"),
+            serde_json::to_string(&json!({
+                "mcpServers": {"corntchap": {"type": "http", "url": "https://c.example/mcp"}},
+                "projects": {dir.clone(): {"mcpServers": {"corntchap-local": {"url": "https://c.example/mcp/A24/"}}}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let names = corntchap_mcp_names(Some(&dir), &home, "https://c.example/");
+        assert_eq!(names, ["corntchap-anr", "corntchap", "corntchap-local"]);
+        assert!(corntchap_mcp_names(None, &root.join("nowhere"), "https://c.example").is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 
