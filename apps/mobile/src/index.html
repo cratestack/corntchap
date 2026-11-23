@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: http:; img-src 'self' data:; style-src 'self'; script-src 'self'" />
+  <title>corntchap</title>
+  <link rel="icon" href="logo.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <img id="logo" src="logo.svg" alt="" width="88" height="88" />
+    <h1>corntchap</h1>
+    <p class="lede" id="lede">Connect to your organisation's server.</p>
+
+    <form id="form" novalidate>
+      <label for="url">Server URL</label>
+      <input id="url" name="url" type="url" inputmode="url" autocapitalize="none" autocomplete="url"
+             autocorrect="off" spellcheck="false" placeholder="https://corntchap.camer.digital" />
+      <p id="status" role="status" aria-live="polite"></p>
+      <button id="go" type="submit">Connect</button>
+    </form>
+
+    <p class="hint">Each organisation runs its own corntchap server. Ask your admin for its address.</p>
+  </main>
+  <script src="main.js"></script>
+</body>
+</html>

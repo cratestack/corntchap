@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/server", "crates/cli"]
+exclude = ["apps/mobile"]  # Tauri app: own workspace, never built with the server
 
 [workspace.package]
 edition = "2024"
