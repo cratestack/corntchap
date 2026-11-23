@@ -243,6 +243,16 @@ fn fail_page(title: &str, msg: &str) -> Response {
         .into_response()
 }
 
+/// The cook kinds a client can be given at sign-in (OpenCode first: the first-class harness).
+const KINDS: [&str; 6] = [
+    "opencode",
+    "claude-code",
+    "codex",
+    "copilot",
+    "antigravity",
+    "other",
+];
+
 /// A kind guessed from the client's name, for a new cook.
 fn guess_kind(client: &str) -> &'static str {
     let c = client.to_lowercase();
@@ -250,6 +260,10 @@ fn guess_kind(client: &str) -> &'static str {
         "opencode"
     } else if c.contains("codex") {
         "codex"
+    } else if c.contains("copilot") || c.contains("visual studio code") || c.contains("vscode") {
+        "copilot"
+    } else if c.contains("antigravity") {
+        "antigravity"
     } else if c.contains("claude") {
         "claude-code"
     } else {
@@ -451,7 +465,7 @@ pub async fn authorize(
             checked = if preselect == Some(i) { " checked" } else { "" },
         ));
     }
-    let kinds = ["opencode", "claude-code", "codex", "other"]
+    let kinds = KINDS
         .iter()
         .map(|k| {
             format!(
@@ -571,7 +585,7 @@ pub async fn decide(
             let kind = f
                 .new_kind
                 .as_deref()
-                .filter(|k| ["opencode", "claude-code", "codex", "other"].contains(k))
+                .filter(|k| KINDS.contains(k))
                 .unwrap_or("other");
             new_cook(&mut tx, &user, &name, kind).await?
         }
@@ -889,6 +903,10 @@ mod tests {
     fn new_cook_names_and_kinds_come_from_the_client() {
         assert_eq!(guess_kind("OpenCode"), "opencode");
         assert_eq!(guess_kind("Claude Code (corntchap)"), "claude-code");
+        assert_eq!(guess_kind("Visual Studio Code"), "copilot");
+        assert_eq!(guess_kind("GitHub Copilot CLI"), "copilot");
+        assert_eq!(guess_kind("Antigravity"), "antigravity");
+        assert_eq!(guess_kind("legacy tool"), "other");
         assert_eq!(slug("Claude Code  selast"), "claude-code-selast");
     }
 }

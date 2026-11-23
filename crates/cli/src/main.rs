@@ -96,7 +96,7 @@ enum Cmd {
     /// The cooks (agents): create, set up, wake targets.
     #[command(subcommand, name = "cook", alias = "agent")]
     Agent(AgentCmd),
-    /// Stations: the agent sessions (OpenCode, Claude Code, Codex) the fire wakes. `station scan` registers a repo's sessions.
+    /// Stations: the agent sessions (OpenCode, Claude Code, Codex, Copilot CLI, Antigravity) the fire wakes. `station scan` registers a repo's sessions.
     #[command(subcommand, name = "station", alias = "stations")]
     Station(station::StationCmd),
     /// Agent hooks: checkpoint the work tree after each edit or command and report agent activity. `hook install claude-code` sets it up.
@@ -412,7 +412,7 @@ enum AgentCmd {
     /// One step: create the agent, join a team, add a relay wake target (local agents) and print the MCP config plus the relay [[target]] block.
     Setup {
         name: String,
-        /// opencode | codex | claude-code | other
+        /// opencode | claude-code | codex | copilot | antigravity | other
         #[arg(long, default_value = "other")]
         kind: String,
         /// local | cloud
@@ -425,7 +425,7 @@ enum AgentCmd {
     /// Register an agent through the device flow (approve in the browser); prints its token once.
     Enroll {
         name: String,
-        /// opencode | codex | claude-code | other
+        /// opencode | claude-code | codex | copilot | antigravity | other
         #[arg(long, default_value = "other")]
         kind: String,
         /// local | cloud

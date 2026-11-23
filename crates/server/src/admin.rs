@@ -917,8 +917,19 @@ pub async fn create_principal(
     let (agent_kind, runtime) = if kind == "agent" {
         let ak = agent_kind.unwrap_or("other");
         let rt = runtime.unwrap_or("local");
-        if !["claude-code", "codex", "opencode", "other"].contains(&ak) {
-            return invalid("kind must be claude-code, codex, opencode or other");
+        if ![
+            "claude-code",
+            "codex",
+            "opencode",
+            "copilot",
+            "antigravity",
+            "other",
+        ]
+        .contains(&ak)
+        {
+            return invalid(
+                "kind must be claude-code, codex, opencode, copilot, antigravity or other",
+            );
         }
         if !["cloud", "local"].contains(&rt) {
             return invalid("runtime must be cloud or local");

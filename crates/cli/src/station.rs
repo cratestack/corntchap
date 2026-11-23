@@ -1,4 +1,4 @@
-//! `corntchap-cli station`: register the agent sessions you work in (OpenCode, Claude Code, Codex)
+//! `corntchap-cli station`: register the agent sessions you work in (OpenCode, Claude Code, Codex, and best effort Copilot CLI and Antigravity)
 //! as stations of a cook in a pot. The server wakes an idle station; the fire resumes that exact
 //! session in its own folder, so no `[[target]]`/`directory` configuration is needed.
 
@@ -37,6 +37,28 @@ pub enum StationCmd {
         /// Show what would be registered without registering anything.
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Register one session by its id, for harnesses `scan` cannot read: the Copilot CLI session id
+    /// (`copilot --resume=<id>`) or the Antigravity conversation id (`agy --output-format json`).
+    Add {
+        /// opencode | claude-code | codex | copilot | antigravity
+        #[arg(long)]
+        runtime: String,
+        /// The runtime's own session / conversation id.
+        #[arg(long)]
+        session: String,
+        /// The folder the session works in (default: this one).
+        #[arg(long)]
+        dir: Option<String>,
+        #[arg(long)]
+        pot: Option<String>,
+        /// The cook to register it for (default: your cook of the runtime's kind).
+        #[arg(long)]
+        cook: Option<String>,
+        #[arg(long)]
+        label: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -113,6 +135,15 @@ pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
             dry_run,
             json,
         } => scan(api, pot, cook, all, dry_run, json).await,
+        StationCmd::Add {
+            runtime,
+            session,
+            dir,
+            pot,
+            cook,
+            label,
+            json,
+        } => add(api, &runtime, &session, dir, pot, cook, label, json).await,
         StationCmd::Ls { pot, cook, json } => {
             let mut q = vec![];
             if let Some(p) = pot {
@@ -288,6 +319,14 @@ pub fn claude_root() -> Option<PathBuf> {
     }
 }
 
+/// GitHub Copilot CLI's state folder (`COPILOT_HOME`, else `~/.copilot`) and its `session-state`.
+pub fn copilot_root() -> Option<PathBuf> {
+    match std::env::var_os("COPILOT_HOME") {
+        Some(d) if !d.is_empty() => Some(PathBuf::from(d).join("session-state")),
+        _ => dirs::home_dir().map(|h| h.join(".copilot/session-state")),
+    }
+}
+
 fn codex_root() -> Option<PathBuf> {
     match std::env::var_os("CODEX_HOME") {
         Some(d) if !d.is_empty() => Some(PathBuf::from(d).join("sessions")),
@@ -337,6 +376,83 @@ pub fn parse_codex_meta(line: &str) -> Option<(String, String)> {
         p["id"].as_str()?.to_string(),
         p["cwd"].as_str()?.to_string(),
     ))
+}
+
+/// The working folder of a Copilot CLI session folder, best effort: the docs only promise
+/// `session-state/<id>/events.jsonl`, so look for a `cwd:` line in `workspace.yaml` (seen in the wild,
+/// not documented) and else a `cwd` field anywhere in the first lines of `events.jsonl`.
+pub fn copilot_cwd(session_dir: &Path) -> Option<String> {
+    if let Ok(y) = std::fs::read_to_string(session_dir.join("workspace.yaml")) {
+        for l in y.lines() {
+            if let Some(v) = l.strip_prefix("cwd:") {
+                let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    fn find(v: &Value) -> Option<String> {
+        match v {
+            Value::Object(m) => {
+                if let Some(Value::String(c)) = m.get("cwd") {
+                    return Some(c.clone());
+                }
+                m.values().find_map(find)
+            }
+            Value::Array(a) => a.iter().find_map(find),
+            _ => None,
+        }
+    }
+    use std::io::BufRead;
+    let f = std::fs::File::open(session_dir.join("events.jsonl")).ok()?;
+    std::io::BufReader::new(f)
+        .lines()
+        .take(20)
+        .map_while(|l| l.ok())
+        .filter_map(|l| serde_json::from_str::<Value>(&l).ok())
+        .find_map(|v| find(&v))
+}
+
+/// Copilot CLI sessions modified in the last `days` days whose folder is one of `dirs`:
+/// `<root>/<session-id>/`. Best effort (see `copilot_cwd`); `station add` registers the rest.
+pub fn copilot_sessions(root: &Path, dirs: &[String], days: u64) -> Vec<Found> {
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(days * 86400))
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return vec![];
+    };
+    let mut out = vec![];
+    for e in rd.flatten() {
+        let p = e.path();
+        let Some(id) = p.file_name().and_then(|n| n.to_str()).map(String::from) else {
+            continue;
+        };
+        if !p.is_dir() {
+            continue;
+        }
+        let ev = p.join("events.jsonl");
+        let updated = mtime_ms(if ev.is_file() { &ev } else { &p });
+        if updated < cutoff {
+            continue;
+        }
+        let Some(cwd) = copilot_cwd(&p) else {
+            continue;
+        };
+        if let Some(d) = dirs.iter().find(|d| same_path(d, &cwd)) {
+            out.push(Found {
+                runtime: "copilot",
+                session: id,
+                directory: d.clone(),
+                updated,
+                title: None,
+            });
+        }
+    }
+    out
 }
 
 fn walk(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -595,13 +711,20 @@ async fn scan_found(
         }
         found.extend(f);
     }
+    if let Some(r) = copilot_root() {
+        let f = copilot_sessions(&r, &dirs, 30);
+        if !json {
+            eprintln!("  copilot: {} session(s) in {}", f.len(), r.display());
+        }
+        found.extend(f);
+    }
     let chosen = select(found, all);
     if chosen.is_empty() {
         if json {
             println!("[]");
         } else {
             println!(
-                "no agent sessions found for these folders: start OpenCode, Claude Code or Codex in one, then scan again"
+                "no agent sessions found for these folders: start OpenCode, Claude Code, Codex or the Copilot CLI in one, then scan again (Antigravity: `station add`)"
             );
         }
         return Ok(());
@@ -677,6 +800,72 @@ async fn scan_found(
                 rows.len()
             ));
         }
+    }
+    Ok(())
+}
+
+/// `station add`: register one session by id.
+#[allow(clippy::too_many_arguments)]
+async fn add(
+    api: &Api,
+    runtime: &str,
+    session: &str,
+    dir: Option<String>,
+    pot: Option<String>,
+    cook: Option<String>,
+    label: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let runtime = runtime.trim().to_lowercase();
+    if !["opencode", "claude-code", "codex", "copilot", "antigravity"].contains(&runtime.as_str()) {
+        bail!("--runtime: one of opencode, claude-code, codex, copilot, antigravity");
+    }
+    let dir = match dir {
+        Some(d) => relay::expand(&d),
+        None => work_folder()?,
+    };
+    let pot = resolve_pot(api, &dir, pot).await?;
+    let cook = match cook {
+        Some(c) => c,
+        None => {
+            let agents = api.get("/agents").await?;
+            let names: Vec<String> = agents
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|a| {
+                    a["agent_kind"].as_str() == Some(runtime.as_str()) && a["disabled"] != true
+                })
+                .filter_map(|a| a["name"].as_str().map(String::from))
+                .collect();
+            pick_cook(&runtime, &names, std::io::stdin().is_terminal())?.ok_or_else(|| {
+                anyhow!("no {runtime} cook: create one with `corntchap-cli cook setup <name> --kind {runtime}`, or pass --cook")
+            })?
+        }
+    };
+    let label = label.unwrap_or_else(|| {
+        Path::new(&dir)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("session")
+            .to_string()
+    });
+    let r = api
+        .post(
+            "/stations",
+            serde_json::json!({
+                "cook": cook, "project": pot, "runtime": runtime, "session": session,
+                "directory": dir, "label": label,
+            }),
+        )
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r)?);
+    } else {
+        ok_line(format!(
+            "station {} registered for {cook} in {pot} ({runtime}, {dir})",
+            r["id"].as_str().unwrap_or("?")
+        ));
     }
     Ok(())
 }
@@ -790,11 +979,12 @@ pub async fn doctor(server: &str) {
                 }
                 _ => (false, "OpenCode not reachable".into()),
             },
-            "claude-code" | "codex" => {
-                let bin = if runtime == "codex" {
-                    "codex"
-                } else {
-                    "claude"
+            "claude-code" | "codex" | "copilot" | "antigravity" => {
+                let bin = match runtime {
+                    "codex" => "codex",
+                    "copilot" => "copilot",
+                    "antigravity" => "agy",
+                    _ => "claude",
                 };
                 let dir_ok = dir.is_none_or(|d| Path::new(&relay::expand(d)).is_dir());
                 match (relay::which(bin), dir_ok) {
@@ -1015,6 +1205,8 @@ pub fn open_command(runtime: &str, session: &str, terminal: bool) -> Result<Vec<
         ("claude-code", true) => vec!["claude", "--resume", session],
         ("codex", true) => vec!["codex", "resume", session],
         ("codex", false) => bail!("Codex sessions open in a terminal: add --terminal"),
+        ("copilot", _) => vec!["copilot", "--resume", session],
+        ("antigravity", _) => vec!["agy", "--conversation", session],
         ("opencode", _) => {
             bail!("open OpenCode in the station's folder and pick session {session}")
         }
@@ -1160,6 +1352,58 @@ mod tests {
             None
         );
         assert_eq!(parse_codex_meta("not json"), None);
+    }
+
+    #[test]
+    fn copilot_sessions_are_found_by_workspace_yaml_or_events() {
+        let home = tmp("copilot");
+        let root = home.join("session-state");
+        // a workspace.yaml with a cwd
+        let a = root.join("11111111-aaaa");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(
+            a.join("workspace.yaml"),
+            "id: 11111111-aaaa\ncwd: \"/work/pay\"\n",
+        )
+        .unwrap();
+        // no yaml: a cwd nested in the first events
+        let b = root.join("22222222-bbbb");
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(
+            b.join("events.jsonl"),
+            "{\"type\":\"session.start\",\"data\":{\"context\":{\"cwd\":\"/work/pay\"}}}\n{\"type\":\"x\"}\n",
+        )
+        .unwrap();
+        // another folder, and an unreadable one
+        let c = root.join("33333333-cccc");
+        std::fs::create_dir_all(&c).unwrap();
+        std::fs::write(c.join("workspace.yaml"), "cwd: /work/other\n").unwrap();
+        std::fs::create_dir_all(root.join("44444444-dddd")).unwrap();
+        std::fs::write(root.join("stray-file"), "x").unwrap();
+        let dirs = vec!["/work/pay".to_string()];
+        let mut f = copilot_sessions(&root, &dirs, 30);
+        f.sort_by(|x, y| x.session.cmp(&y.session));
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0].session, "11111111-aaaa");
+        assert_eq!(f[1].session, "22222222-bbbb");
+        assert!(
+            f.iter()
+                .all(|x| x.runtime == "copilot" && x.directory == "/work/pay")
+        );
+        assert!(copilot_sessions(&home.join("nope"), &dirs, 30).is_empty());
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn copilot_and_antigravity_open_with_their_own_resume() {
+        assert_eq!(
+            open_command("copilot", "s1", true).unwrap(),
+            ["copilot", "--resume", "s1"]
+        );
+        assert_eq!(
+            open_command("antigravity", "c1", false).unwrap(),
+            ["agy", "--conversation", "c1"]
+        );
     }
 
     #[test]

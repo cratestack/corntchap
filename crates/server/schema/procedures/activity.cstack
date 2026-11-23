@@ -3,7 +3,7 @@ part of "../corntchap.cstack"
 // Agent activity: hooks of the agent runtimes report each edit or command (`corntchap-cli hook`).
 
 /// Record what an agent session just did. Needs a registered station (`corntchap-cli station scan`).
-/// @param runtime claude-code, opencode or codex.
+/// @param runtime claude-code, opencode, codex or copilot.
 /// @param session The runtime's own session id.
 /// @param tool The tool that ran, e.g. Edit or Bash.
 /// @param files Paths changed since the previous checkpoint (never contents).

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/api";
 import { useV1Call } from "@/lib/data";
-import { copyText, mcpSnippets, type CookKind } from "@/lib/snippets";
+import { copyText, mcpSnippets } from "@/lib/snippets";
 import { FormSheetBody, FormSheetFoot, FormSheetHead, formSheetClass } from "./bits";
 
 /**
@@ -97,7 +97,7 @@ export function TokenBox({ token, name }: { token: string; name?: string }) {
 
 export function Snippets({ token, defaultKind }: { token?: string | null; defaultKind?: string | null }) {
   const snippets = mcpSnippets(window.location.origin, token);
-  const start = (defaultKind && snippets.find((s) => s.id === (defaultKind as CookKind))?.id) || "claude-code";
+  const start = (defaultKind && snippets.find((s) => s.id === defaultKind)?.id) || "claude-code";
   const [active, setActive] = useState<string>(start);
   const cur = snippets.find((s) => s.id === active) ?? snippets[0]!;
   return (

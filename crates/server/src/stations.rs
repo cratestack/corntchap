@@ -15,7 +15,14 @@ use crate::{
     state::Principal,
 };
 
-pub const RUNTIMES: &[&str] = &["opencode", "claude-code", "codex", "other"];
+pub const RUNTIMES: &[&str] = &[
+    "opencode",
+    "claude-code",
+    "codex",
+    "copilot",
+    "antigravity",
+    "other",
+];
 
 const STATION_JSON: &str = r#"jsonb_build_object(
   'id', st.ref, 'cook', a.name, 'project', pr.key, 'runtime', st.runtime, 'session', st.session_ref,

@@ -213,7 +213,7 @@ Procedures and MCP tools: `cookRename` / `rename_cook`, `cookDelete` / `delete_c
 
 ### Agent activity and checkpoints
 
-Claude Code and OpenCode can run a hook after every tool use. `corntchap-cli hook` uses it for two things: it
+Claude Code, OpenCode and (best effort) GitHub Copilot can run a hook after every tool use. `corntchap-cli hook` uses it for two things: it
 snapshots your work tree into a hidden git ref after each edit or command (a fine-grained, revertable history that
 never touches your branch, index or HEAD), and it tells corntchap what happened, so the console shows what each
 station is doing (last tool, files, checkpoint) on the cook's page.
@@ -221,6 +221,7 @@ station is doing (last tool, files, checkpoint) on the cook's page.
 ```bash
 corntchap-cli hook install claude-code            # merges a PostToolUse hook into .claude/settings.json (use --global for ~/.claude)
 corntchap-cli hook install opencode               # writes .opencode/plugins/corntchap.js (--global: ~/.config/opencode/plugins)
+corntchap-cli hook install copilot                # best effort: writes .github/hooks/corntchap.json (see "Other harnesses")
 ```
 
 Install is idempotent and keeps your existing hooks. The session must be a registered station
@@ -237,10 +238,47 @@ Install is idempotent and keeps your existing hooks. The session must be a regis
   Then `git restore --source <sha> -- <path>` brings back one file, `git checkout <sha> -- .` everything (files created
   later stay). `corntchap-cli checkpoints --restore <sha>` does the latter and refuses while the tree has uncommitted
   changes, unless `--force`.
-- **Turn it off:** `corntchap-cli hook uninstall claude-code|opencode` (same `--global`), or set `CORNTCHAP_HOOKS=off` in the
+- **Turn it off:** `corntchap-cli hook uninstall claude-code|opencode|copilot` (same `--global`), or set `CORNTCHAP_HOOKS=off` in the
   environment. Delete the checkpoints with `git for-each-ref --format='delete %(refname)' refs/corntchap | git update-ref --stdin`.
 - **Failures:** a hook never blocks the agent and prints nothing; errors go to `hook.log` in the config dir
   (`~/.config/corntchap/`), and the server call times out after 3 seconds.
+
+### Other harnesses (best effort)
+
+**OpenCode is the recommended, first-class harness**: MCP, wakes through its HTTP server, and hooks all work, and it is the one tested end to end. Claude Code and Codex are supported the same way (above). GitHub Copilot (CLI, desktop app, VS Code agent mode) and Google Antigravity (IDE and the `agy` CLI) are best effort: written against their documentation, not exercised on every platform.
+
+| Harness | MCP | Wakes | Hooks |
+| --- | --- | --- | --- |
+| OpenCode | yes, OAuth or token | yes, through its server | yes (plugin) |
+| Claude Code | yes, OAuth or token | yes (`claude -p --resume`) | yes |
+| Codex | yes, OAuth or token | yes (`codex exec resume`) | no |
+| Copilot CLI and desktop app | yes (`~/.copilot/mcp-config.json`) | yes (`copilot -p … --resume`) | yes (`.github/hooks`) |
+| Copilot in VS Code agent mode | yes (`.vscode/mcp.json`, agent mode only) | no (VS Code has no headless resume) | yes (same hook file, preview in VS Code) |
+| Antigravity `agy` CLI | yes (`mcp_config.json`) | yes (`agy -p … --conversation`), register the id yourself | not known |
+| Antigravity IDE | yes (same file) | not known whether the CLI can resume IDE chats | not known |
+
+**MCP.** Use the pot's URL, so nothing secret is committed; sign in when the client asks (OAuth with dynamic client registration and PKCE). Name the server after the pot (`corntchap-pay`).
+
+```jsonc
+// Copilot in VS Code, .vscode/mcp.json: a "Start" / "Auth" CodeLens appears over the server; tools show in agent mode
+{ "servers": { "corntchap-pay": { "type": "http", "url": "https://corntchap.example.com/mcp/PAY" } } }
+// Copilot CLI and desktop app, ~/.copilot/mcp-config.json (a project's .mcp.json or .github/mcp.json also work)
+{ "mcpServers": { "corntchap-pay": { "type": "http", "url": "https://corntchap.example.com/mcp/PAY", "tools": ["*"] } } }
+// Antigravity, ~/.gemini/config/mcp_config.json or .agents/mcp_config.json in the repo
+{ "mcpServers": { "corntchap-pay": { "serverUrl": "https://corntchap.example.com/mcp/PAY" } } }
+```
+
+`corntchap-cli cook setup <name> --kind copilot|antigravity` creates the cook and prints the same files with a bearer token instead (do not commit those). Make the cook's kind `copilot` or `antigravity` (the console offers both); a client that signs in through OAuth gets its kind guessed from its name.
+
+**Wakes.** The relay resumes a registered station headlessly, in the station's folder, with the prompt as an argument:
+- Copilot: `copilot -p <wake text> --resume=<session> --allow-all-tools --no-ask-user`. `station scan` finds Copilot CLI sessions in `~/.copilot/session-state/<id>/` (`COPILOT_HOME` moves it) by reading the folder the session was started in; the official documentation names only `events.jsonl` in that folder, so the lookup is lenient. If `scan` does not see your session, register it: `corntchap-cli station add --runtime copilot --session <id> --pot PAY` (the id is in the `copilot --resume=<id>` hint a run ends with, and in the folder name). The desktop app runs its sessions through the CLI.
+- Antigravity: `agy -p <wake text> --conversation <id>`. Nothing is scanned: take the id from `agy -p "…" --output-format json` (`conversation_id`) and register it with `station add --runtime antigravity --session <id> --pot PAY`. In headless mode a tool call that needs approval and cannot get it is skipped, so add `permissions.allow` rules to `~/.gemini/antigravity-cli/settings.json`, or, if you trust the folder, give the cook a `[[target]]` whose `command` is `["agy", "-p", "{prompt}", "--conversation={session}", "--dangerously-skip-permissions"]`.
+- A `[[target]]` `command` that contains `{session}` replaces the default; `{prompt}` in a command is replaced by the wake text (and then nothing is piped to stdin).
+- `station open <id> --terminal` runs `copilot --resume` / `agy --conversation`; `fire doctor` checks that `copilot` / `agy` are on PATH.
+
+**Hooks (Copilot).** `corntchap-cli hook install copilot` writes `.github/hooks/corntchap.json` (`--global`: `~/.copilot/hooks/corntchap.json`, CLI only), a `PostToolUse` command hook. It takes the same checkpoints and reports the same activity as the Claude Code hook; `hook uninstall copilot` deletes the file. A `SessionStart` hook is not installed: there is nothing for corntchap to do at session start. Tool names that count as edits or commands (Copilot CLI `edit`, `create`, `bash`; VS Code `editFiles`, `run_in_terminal` and friends) are matched by name, so an unlisted one is reported without a checkpoint. A VS Code chat session is not a station (it cannot be woken), so its activity is dropped by the server; the checkpoints are still taken.
+
+**Not known.** Whether Antigravity has a hook system, whether `agy` can resume a chat started in the IDE, and the exact tool names and payload details of Copilot's hooks in every host. Test those on your machine; `corntchap-cli hook` logs problems to `hook.log`.
 
 ### Comments wake the cook responsible
 

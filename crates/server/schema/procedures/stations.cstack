@@ -5,7 +5,7 @@ part of "../corntchap.cstack"
 
 /// Register an agent session as a station of a cook in a pot.
 /// @param project Pot key, e.g. PAY.
-/// @param runtime opencode, claude-code, codex or other.
+/// @param runtime opencode, claude-code, codex, copilot, antigravity or other.
 /// @param session The runtime's own session id.
 /// @param cook The cook it works as (default: you, when a cook registers its own session).
 /// @param directory Where the session works on its machine.

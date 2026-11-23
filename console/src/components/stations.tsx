@@ -30,6 +30,8 @@ const RUNTIME: Record<string, string> = {
   opencode: "OpenCode",
   "claude-code": "Claude Code",
   codex: "Codex",
+  copilot: "Copilot",
+  antigravity: "Antigravity",
   other: "Other",
 };
 
