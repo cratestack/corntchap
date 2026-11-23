@@ -592,7 +592,7 @@ export function CookDetailsPage() {
             <TeamGroup a={cook} pots={pots} />
 
             <Group title="Connect" hint="The token is shown once. Rotating makes a new one and the old one stops working at once.">
-              <GroupRow icon={<Plug />} label="MCP config" hint="Snippets for Claude Code, Codex and OpenCode" onClick={() => setDialog("mcp")} />
+              <GroupRow icon={<Plug />} label="MCP config" hint="Snippets for OpenCode, Claude Code, Codex, Copilot and Antigravity" onClick={() => setDialog("mcp")} />
               <GroupRow icon={<RotateCw />} label="Rotate token" hint="Make a new token and see the config with it filled in" onClick={() => setDialog("rotate")} />
             </Group>
           </div>

@@ -129,6 +129,16 @@ pub const TEMPLATE: &str = r##"# corntchap relay configuration.
 # cwd     = "~/code/payments"
 # timeout = "45m"
 
+# --- Copilot CLI / Antigravity (best effort): `{prompt}` in the command is replaced by the wake text ---
+# [[target]]
+# agent   = "copilot-laptop"
+# adapter = "exec"
+# command = ["copilot", "-p", "{prompt}", "--continue", "--allow-all-tools", "--no-ask-user"]
+# [[target]]
+# agent   = "agy-laptop"
+# adapter = "exec"
+# command = ["agy", "-p", "{prompt}", "--continue"]
+
 # --- Webhook: POST {agent, project, text} to a URL (e.g. a chat bridge) --------------------------
 # [[target]]
 # agent   = "bridge"
@@ -147,6 +157,12 @@ pub fn target_block(agent: &str, kind: &str) -> String {
         ),
         "claude-code" => format!(
             "# Optional: stations (`corntchap-cli station scan`) wake the exact session; this is only the fallback.\n[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"claude\", \"-p\", \"--continue\"]\n# cwd   = \"~/code/your-project\"\ntimeout = \"45m\"\n"
+        ),
+        "copilot" => format!(
+            "# Optional: stations (`corntchap-cli station scan` / `station add`) wake the exact session; this is only the fallback.\n[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"copilot\", \"-p\", \"{{prompt}}\", \"--continue\", \"--allow-all-tools\", \"--no-ask-user\"]\n# cwd   = \"~/code/your-project\"\ntimeout = \"45m\"\n"
+        ),
+        "antigravity" => format!(
+            "# Optional: stations (`corntchap-cli station add`) wake the exact conversation; this is only the fallback.\n[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"agy\", \"-p\", \"{{prompt}}\", \"--continue\"]\n# cwd   = \"~/code/your-project\"\ntimeout = \"45m\"\n"
         ),
         _ => format!(
             "# Optional: stations (`corntchap-cli station scan`) wake the exact session; this is only the fallback.\n[[target]]\nagent   = \"{agent}\"\nadapter = \"exec\"\ncommand = [\"your-agent-cli\"]   # the prompt arrives on stdin\n# cwd   = \"~/code/your-project\"\ntimeout = \"45m\"\n"
@@ -169,7 +185,7 @@ pub fn init(force: bool) -> Result<()> {
     std::fs::write(&p, TEMPLATE)?;
     crate::ui::ok_line(format!("wrote {}", p.display()));
     println!(
-        "Nothing else is needed: from the folder you run an agent in, `corntchap-cli station scan --pot KEY` registers your agent sessions as stations, then `corntchap-cli fire doctor`.\n[[target]] entries are optional (fallback / webhook); `corntchap-cli cook setup <name> --kind opencode|codex|claude-code` prints a matching block."
+        "Nothing else is needed: from the folder you run an agent in, `corntchap-cli station scan --pot KEY` registers your agent sessions as stations, then `corntchap-cli fire doctor`.\n[[target]] entries are optional (fallback / webhook); `corntchap-cli cook setup <name> --kind opencode|claude-code|codex|copilot|antigravity` prints a matching block."
     );
     Ok(())
 }
@@ -491,6 +507,17 @@ pub fn plan(w: &Wake, targets: &[Target]) -> Plan {
         },
         "claude-code" => exec(&["claude", "-p", "--resume", "{session}"]),
         "codex" => exec(&["codex", "exec", "resume", "{session}", "-"]),
+        // best effort: these take the prompt as an argument, not on stdin ({prompt}); a woken
+        // session has nobody to approve a tool call, so Copilot is told to allow tools
+        "copilot" => exec(&[
+            "copilot",
+            "-p",
+            "{prompt}",
+            "--resume={session}",
+            "--allow-all-tools",
+            "--no-ask-user",
+        ]),
+        "antigravity" => exec(&["agy", "-p", "{prompt}", "--conversation", "{session}"]),
         other => match target {
             Some(t) => Plan::Target(t.clone()),
             None => Plan::Skip(format!(
@@ -748,9 +775,18 @@ async fn exec_command(
     timeout: Option<&str>,
     prompt: &str,
 ) -> Result<i32> {
+    // `{prompt}` in an argument: the prompt goes there (after expansion, so `~` and `$` in the
+    // prompt stay as they are) and nothing is piped to stdin
+    let in_args = cmd.iter().any(|a| a.contains("{prompt}"));
     let mut c = Command::new(program(&expand(&cmd[0])));
-    c.args(cmd[1..].iter().map(|a| expand(a)))
-        .env("PATH", search_path());
+    c.args(cmd[1..].iter().map(|a| {
+        if a.contains("{prompt}") {
+            expand(a).replace("{prompt}", prompt)
+        } else {
+            expand(a)
+        }
+    }))
+    .env("PATH", search_path());
     if let Some(cwd) = cwd {
         let dir = expand(cwd);
         if !std::path::Path::new(&dir).is_dir() {
@@ -760,7 +796,12 @@ async fn exec_command(
         }
         c.current_dir(dir);
     }
-    c.stdin(Stdio::piped()).kill_on_drop(true);
+    c.stdin(if in_args {
+        Stdio::null()
+    } else {
+        Stdio::piped()
+    })
+    .kill_on_drop(true);
     eprintln!(
         "relay: starting {agent}: {}{}",
         cmd.join(" "),
@@ -1612,6 +1653,81 @@ mod tests {
             panic!()
         };
         assert_eq!(command, ["my-claude", "--resume=sess-1"]);
+    }
+
+    #[test]
+    fn copilot_and_antigravity_stations_take_the_prompt_as_an_argument() {
+        let w =
+            wake(json!({"agent": "c", "project": "PAY", "station": st("copilot", Some("/w/pay"))}));
+        let Plan::Exec { command, cwd, .. } = plan(&w, &[]) else {
+            panic!()
+        };
+        assert_eq!(
+            command,
+            [
+                "copilot",
+                "-p",
+                "{prompt}",
+                "--resume=sess-1",
+                "--allow-all-tools",
+                "--no-ask-user"
+            ]
+        );
+        assert_eq!(cwd.as_deref(), Some("/w/pay"));
+        let w = wake(
+            json!({"agent": "c", "project": "PAY", "station": st("antigravity", Some("/w/pay"))}),
+        );
+        let Plan::Exec { command, .. } = plan(&w, &[]) else {
+            panic!()
+        };
+        assert_eq!(
+            command,
+            ["agy", "-p", "{prompt}", "--conversation", "sess-1"]
+        );
+        // a custom command that names {session} replaces the default
+        let mut ex = Target::blank("c", "exec");
+        ex.command = Some(vec![
+            "agy".into(),
+            "-p".into(),
+            "{prompt}".into(),
+            "--conversation={session}".into(),
+            "--dangerously-skip-permissions".into(),
+        ]);
+        let Plan::Exec { command, .. } = plan(&w, &[ex]) else {
+            panic!()
+        };
+        assert_eq!(command[3], "--conversation=sess-1");
+        assert_eq!(command.len(), 5);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_prompt_placeholder_is_filled_and_nothing_is_piped() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("corntchap-fake-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("out.txt");
+        let bin = dir.join("fake-agent");
+        // records its arguments and whatever arrives on stdin
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {o}\nprintf 'stdin:' >> {o}\ncat >> {o}\n",
+                o = out.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cmd: Vec<String> = [bin.to_str().unwrap(), "-p", "{prompt}", "--resume=s1"]
+            .map(String::from)
+            .to_vec();
+        let code = exec_command("c", &cmd, None, None, "wake ~ $HOME text")
+            .await
+            .unwrap();
+        assert_eq!(code, 0);
+        let got = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(got, "-p\nwake ~ $HOME text\n--resume=s1\nstdin:");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

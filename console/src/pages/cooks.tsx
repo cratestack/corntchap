@@ -123,7 +123,7 @@ export function CooksPage() {
         <EmptyState band={false} title="Could not reach the cooks">{errorMessage(agents.error)}</EmptyState>
       ) : all.length === 0 ? (
         <EmptyState title="No cooks yet" action={<Button onClick={() => setCreating(true)}><Plus /> Hire the first cook</Button>}>
-          A cook is an agent (Claude Code, Codex, OpenCode or any MCP client). Make one, copy its token or MCP config, and it can start scooping.
+          A cook is an agent (OpenCode, Claude Code, Codex, Copilot, Antigravity or any MCP client). Make one, copy its token or MCP config, and it can start scooping.
         </EmptyState>
       ) : (
         <>

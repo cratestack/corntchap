@@ -42,7 +42,30 @@ const CHANGING: &[&str] = &[
     "apply_patch",
     "applypatch",
     "shell",
+    // GitHub Copilot (CLI and VS Code agent mode); names as documented or seen, best effort
+    "create",
+    "powershell",
+    "str_replace_editor",
+    "editfiles",
+    "createfile",
+    "create_file",
+    "replace_string_in_file",
+    "multi_replace_string_in_file",
+    "insert_edit_into_file",
+    "run_in_terminal",
+    "runinterminal",
+    "runcommands",
 ];
+/// Tools whose input is a shell command line.
+const SHELLS: &[&str] = &[
+    "bash",
+    "shell",
+    "powershell",
+    "run_in_terminal",
+    "runinterminal",
+];
+const COPILOT_COMMAND: &str = "corntchap-cli hook copilot";
+const COPILOT_FILE: &str = "corntchap.json";
 
 #[derive(Clone, Copy, ValueEnum)]
 pub enum Runtime {
@@ -50,6 +73,8 @@ pub enum Runtime {
     ClaudeCode,
     #[value(name = "opencode")]
     Opencode,
+    #[value(name = "copilot")]
+    Copilot,
 }
 
 #[derive(Subcommand)]
@@ -60,7 +85,10 @@ pub enum HookCmd {
     /// OpenCode hook: reads the event JSON the plugin sends on stdin (installed by `hook install opencode`).
     #[command(name = "opencode")]
     Opencode,
-    /// Install the hook: merge it into .claude/settings.json (Claude Code) or write the OpenCode plugin.
+    /// GitHub Copilot hook (CLI, desktop app, VS Code agent mode): reads the PostToolUse event JSON on stdin (installed by `hook install copilot`). Best effort.
+    #[command(name = "copilot")]
+    Copilot,
+    /// Install the hook: merge it into .claude/settings.json (Claude Code), write the OpenCode plugin or .github/hooks/corntchap.json (Copilot).
     Install {
         runtime: Runtime,
         /// User-wide (~/.claude/settings.json, ~/.config/opencode/plugins) instead of this project.
@@ -79,6 +107,7 @@ pub async fn run(cmd: HookCmd) -> Result<()> {
     match cmd {
         HookCmd::ClaudeCode => event_main("claude-code").await,
         HookCmd::Opencode => event_main("opencode").await,
+        HookCmd::Copilot => event_main("copilot").await,
         HookCmd::Install { runtime, global } => install(runtime, global),
         HookCmd::Uninstall { runtime, global } => uninstall(runtime, global),
     }
@@ -125,21 +154,28 @@ fn rel(cwd: &Path, p: &str) -> String {
 
 /// Parse a hook payload. Claude Code sends `session_id`, `cwd`, `hook_event_name`, `tool_name`,
 /// `tool_input`; the OpenCode plugin sends the same names, and `sessionID`/`tool`/`args` are
-/// accepted too. `None` when it is not a tool event we handle.
+/// accepted too. GitHub Copilot sends the same snake_case names to a hook registered under a
+/// PascalCase event (`PostToolUse`), and `sessionId`/`toolName`/`toolArgs` under a camelCase one
+/// (`toolArgs` may be a JSON string). `None` when it is not a tool event we handle.
 pub fn parse(runtime: &str, v: &Value) -> Option<Event> {
     if let Some(ev) = str_of(v, &["hook_event_name"])
-        && !matches!(ev, "PostToolUse" | "tool.execute.after")
+        && !matches!(ev, "PostToolUse" | "postToolUse" | "tool.execute.after")
     {
         return None;
     }
     let session = str_of(v, &["session_id", "sessionID", "sessionId"])?.to_string();
     let cwd = PathBuf::from(str_of(v, &["cwd", "directory"])?);
-    let tool = str_of(v, &["tool_name", "tool"])?.to_string();
-    let input = v
+    let tool = str_of(v, &["tool_name", "toolName", "tool"])?.to_string();
+    let mut input = v
         .get("tool_input")
+        .or_else(|| v.get("toolArgs"))
+        .or_else(|| v.get("toolInput"))
         .or_else(|| v.get("args"))
         .cloned()
         .unwrap_or(Value::Null);
+    if let Value::String(raw) = &input {
+        input = serde_json::from_str(raw).unwrap_or(Value::Null);
+    }
     let mut files: Vec<String> = vec![];
     for k in [
         "file_path",
@@ -157,7 +193,7 @@ pub fn parse(runtime: &str, v: &Value) -> Option<Event> {
             }
         }
     }
-    let summary = if tool.eq_ignore_ascii_case("bash") || tool.eq_ignore_ascii_case("shell") {
+    let summary = if SHELLS.iter().any(|t| tool.eq_ignore_ascii_case(t)) {
         clip(
             str_of(&input, &["command", "cmd"]).unwrap_or(""),
             MAX_SUMMARY,
@@ -446,6 +482,38 @@ fn claude_settings_path(global: bool) -> Result<PathBuf> {
     })
 }
 
+/// Copilot reads every `*.json` of `.github/hooks` (CLI and VS Code) and of `~/.copilot/hooks`
+/// (`$COPILOT_HOME/hooks`, CLI only); the file is ours alone.
+fn copilot_hook_path(global: bool) -> Result<PathBuf> {
+    Ok(if global {
+        match std::env::var_os("COPILOT_HOME") {
+            Some(d) if !d.is_empty() => PathBuf::from(d),
+            _ => dirs::home_dir()
+                .ok_or_else(|| anyhow!("no home directory"))?
+                .join(".copilot"),
+        }
+        .join("hooks")
+        .join(COPILOT_FILE)
+    } else {
+        PathBuf::from(".github/hooks").join(COPILOT_FILE)
+    })
+}
+
+/// The hook file: a `PostToolUse` command hook. The PascalCase event name is the VS Code spelling
+/// the Copilot CLI accepts as an alias, so one file serves both and the payload is snake_case.
+pub fn copilot_hook_doc() -> Value {
+    json!({
+        "version": 1,
+        "hooks": {
+            "PostToolUse": [{
+                "type": "command",
+                "command": COPILOT_COMMAND,
+                "timeoutSec": 15
+            }]
+        }
+    })
+}
+
 fn opencode_plugin_path(global: bool) -> Result<PathBuf> {
     Ok(if global {
         dirs::home_dir()
@@ -596,6 +664,18 @@ fn install(runtime: Runtime, global: bool) {
             }
             Ok::<_, anyhow::Error>(())
         })(),
+        Runtime::Copilot => (|| {
+            let path = copilot_hook_path(global)?;
+            if let Some(d) = path.parent() {
+                fs::create_dir_all(d)?;
+            }
+            fs::write(
+                &path,
+                serde_json::to_string_pretty(&copilot_hook_doc())? + "\n",
+            )?;
+            ok_line(format!("wrote the Copilot hook {}", path.display()));
+            Ok(())
+        })(),
         Runtime::Opencode => (|| {
             let path = opencode_plugin_path(global)?;
             if let Some(d) = path.parent() {
@@ -627,6 +707,16 @@ fn uninstall(runtime: Runtime, global: bool) {
                 println!("no corntchap hook in {}", path.display());
             }
             Ok::<_, anyhow::Error>(())
+        })(),
+        Runtime::Copilot => (|| {
+            let path = copilot_hook_path(global)?;
+            if path.exists() {
+                fs::remove_file(&path)?;
+                ok_line(format!("removed {}", path.display()));
+            } else {
+                println!("no hook file at {}", path.display());
+            }
+            Ok(())
         })(),
         Runtime::Opencode => (|| {
             let path = opencode_plugin_path(global)?;
@@ -926,6 +1016,54 @@ mod tests {
         let stop = json!({"session_id": "s", "cwd": "/w", "hook_event_name": "Stop"});
         assert!(parse("claude-code", &stop).is_none());
         assert!(parse("claude-code", &json!({"cwd": "/w"})).is_none());
+    }
+
+    #[test]
+    fn parses_copilot_payloads() {
+        // VS Code format (what a PascalCase registration delivers)
+        let v = json!({
+            "hook_event_name": "PostToolUse", "session_id": "cp-1", "cwd": "/w/pay",
+            "tool_name": "edit", "tool_input": {"path": "/w/pay/src/a.rs"}
+        });
+        let e = parse("copilot", &v).unwrap();
+        assert_eq!(e.runtime, "copilot");
+        assert_eq!(e.session, "cp-1");
+        assert_eq!(e.files, vec!["src/a.rs"]);
+        assert!(is_changing(&e.tool));
+        // camelCase format, toolArgs as a JSON string, a shell command
+        let c = json!({
+            "sessionId": "cp-2", "cwd": "/w/pay", "toolName": "bash",
+            "toolArgs": "{\"command\": \"cargo test\"}",
+            "toolResult": {"resultType": "success", "textResultForLlm": "ok"}
+        });
+        let e = parse("copilot", &c).unwrap();
+        assert_eq!(e.session, "cp-2");
+        assert_eq!(e.summary, "cargo test");
+        // SessionStart carries no tool
+        let start = json!({"hook_event_name": "SessionStart", "session_id": "cp-1", "cwd": "/w"});
+        assert!(parse("copilot", &start).is_none());
+        assert!(
+            parse(
+                "copilot",
+                &json!({"sessionId": "x", "cwd": "/w", "source": "new"})
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn copilot_hook_file_names_our_command_under_post_tool_use() {
+        let d = copilot_hook_doc();
+        assert_eq!(d["version"], 1);
+        assert_eq!(
+            d["hooks"]["PostToolUse"][0]["command"],
+            "corntchap-cli hook copilot"
+        );
+        assert_eq!(d["hooks"]["PostToolUse"][0]["type"], "command");
+        assert_eq!(
+            copilot_hook_path(false).unwrap(),
+            PathBuf::from(".github/hooks/corntchap.json")
+        );
     }
 
     #[test]

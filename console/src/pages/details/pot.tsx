@@ -45,6 +45,24 @@ function mcpLines(url: string, key: string) {
       file: "shell",
       body: `codex mcp add ${name} --url ${url} && codex mcp login ${name}`,
     },
+    {
+      id: "copilot",
+      title: "Copilot (VS Code)",
+      file: ".vscode/mcp.json",
+      body: `{ "servers": { "${name}": { "type": "http", "url": "${url}" } } }`,
+    },
+    {
+      id: "copilot-cli",
+      title: "Copilot CLI",
+      file: "~/.copilot/mcp-config.json",
+      body: `{ "mcpServers": { "${name}": { "type": "http", "url": "${url}", "tools": ["*"] } } }`,
+    },
+    {
+      id: "antigravity",
+      title: "Antigravity",
+      file: ".agents/mcp_config.json",
+      body: `{ "mcpServers": { "${name}": { "serverUrl": "${url}" } } }`,
+    },
   ];
 }
 

@@ -1,16 +1,18 @@
-export type CookKind = "claude-code" | "codex" | "opencode" | "other";
+export type CookKind = "claude-code" | "codex" | "opencode" | "copilot" | "antigravity" | "other";
 
 export const KIND_LABEL: Record<string, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
+  copilot: "GitHub Copilot",
+  antigravity: "Antigravity",
   other: "Other MCP client",
 };
 
 export const RUNTIME_LABEL: Record<string, string> = { local: "local", cloud: "cloud" };
 
 export interface Snippet {
-  id: CookKind;
+  id: string;
   title: string;
   file: string;
   body: string;
@@ -58,6 +60,48 @@ http_headers = { Authorization = "Bearer ${t}" }`,
     "corntchap": {
       "type": "remote",
       "url": "${url}",
+      "headers": { "Authorization": "Bearer ${t}" }
+    }
+  }
+}`,
+    },
+    {
+      id: "copilot",
+      title: "Copilot (VS Code)",
+      file: ".vscode/mcp.json",
+      body: `{
+  "servers": {
+    "corntchap": {
+      "type": "http",
+      "url": "${url}",
+      "headers": { "Authorization": "Bearer ${t}" }
+    }
+  }
+}`,
+    },
+    {
+      id: "copilot-cli",
+      title: "Copilot CLI",
+      file: "~/.copilot/mcp-config.json",
+      body: `{
+  "mcpServers": {
+    "corntchap": {
+      "type": "http",
+      "url": "${url}",
+      "headers": { "Authorization": "Bearer ${t}" },
+      "tools": ["*"]
+    }
+  }
+}`,
+    },
+    {
+      id: "antigravity",
+      title: "Antigravity",
+      file: "~/.gemini/config/mcp_config.json",
+      body: `{
+  "mcpServers": {
+    "corntchap": {
+      "serverUrl": "${url}",
       "headers": { "Authorization": "Bearer ${t}" }
     }
   }

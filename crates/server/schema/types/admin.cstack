@@ -61,7 +61,7 @@ type PrincipalView {
   name String
   /// agent or relay.
   kind String
-  /// claude-code, codex, opencode or other (cooks).
+  /// claude-code, codex, opencode, copilot, antigravity or other (cooks).
   agent_kind String?
   /// local or cloud (cooks).
   runtime String?

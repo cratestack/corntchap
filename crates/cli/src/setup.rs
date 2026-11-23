@@ -13,6 +13,12 @@ pub fn mcp_snippet(kind: &str, server: &str, token: &str) -> String {
         "opencode" => format!(
             "OpenCode, opencode.json:\n\n{{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"mcp\": {{\n    \"corntchap\": {{\n      \"type\": \"remote\",\n      \"url\": \"{url}\",\n      \"headers\": {{ \"Authorization\": \"Bearer {token}\" }}\n    }}\n  }}\n}}\n"
         ),
+        "copilot" => format!(
+            "GitHub Copilot, VS Code agent mode, .vscode/mcp.json (do not commit the token):\n\n{{\n  \"servers\": {{\n    \"corntchap\": {{\n      \"type\": \"http\",\n      \"url\": \"{url}\",\n      \"headers\": {{ \"Authorization\": \"Bearer {token}\" }}\n    }}\n  }}\n}}\n\nGitHub Copilot CLI and desktop app, ~/.copilot/mcp-config.json:\n\n{{\n  \"mcpServers\": {{\n    \"corntchap\": {{\n      \"type\": \"http\",\n      \"url\": \"{url}\",\n      \"headers\": {{ \"Authorization\": \"Bearer {token}\" }},\n      \"tools\": [\"*\"]\n    }}\n  }}\n}}\n"
+        ),
+        "antigravity" => format!(
+            "Google Antigravity (IDE and agy), ~/.gemini/config/mcp_config.json or .agents/mcp_config.json in the project (do not commit the token):\n\n{{\n  \"mcpServers\": {{\n    \"corntchap\": {{\n      \"serverUrl\": \"{url}\",\n      \"headers\": {{ \"Authorization\": \"Bearer {token}\" }}\n    }}\n  }}\n}}\n"
+        ),
         _ => format!(
             "Any MCP client (streamable HTTP):\n\n  url:     {url}\n  header:  Authorization: Bearer {token}\n"
         ),
@@ -34,7 +40,14 @@ mod tests {
 
     #[test]
     fn snippets_carry_url_and_token() {
-        for k in ["claude-code", "codex", "opencode", "other"] {
+        for k in [
+            "claude-code",
+            "codex",
+            "opencode",
+            "copilot",
+            "antigravity",
+            "other",
+        ] {
             let s = mcp_snippet(k, "https://x.example/", "ct_abc");
             assert!(
                 s.contains("https://x.example/mcp") && s.contains("Bearer ct_abc"),
@@ -47,5 +60,17 @@ mod tests {
         let s = mcp_snippet("opencode", "http://h", "t");
         let json = &s[s.find('{').unwrap()..];
         serde_json::from_str::<serde_json::Value>(json).unwrap();
+        let s = mcp_snippet("antigravity", "http://h", "t");
+        assert!(s.contains("\"serverUrl\": \"http://h/mcp\""));
+        let json = &s[s.find('{').unwrap()..];
+        serde_json::from_str::<serde_json::Value>(json).unwrap();
+        // copilot prints two files: both blocks parse
+        let s = mcp_snippet("copilot", "http://h", "t");
+        let blocks: Vec<&str> = s.split("\n\n").filter(|b| b.starts_with('{')).collect();
+        assert_eq!(blocks.len(), 2);
+        for b in blocks {
+            serde_json::from_str::<serde_json::Value>(b).unwrap();
+        }
+        assert!(s.contains("\"servers\"") && s.contains("\"mcpServers\""));
     }
 }

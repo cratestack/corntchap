@@ -64,7 +64,7 @@ procedure adminFires(): PrincipalView[]
 
 /// Create a cook (people only). Returns its token once.
 /// @param name Cook name, e.g. codex-laptop.
-/// @param agentKind claude-code, codex, opencode or other.
+/// @param agentKind claude-code, codex, opencode, copilot, antigravity or other.
 /// @param runtime local or cloud.
 /// @param maxLeases Tasks it may hold at once (default 1).
 /// @param owner Owner's login (admins only; default you).

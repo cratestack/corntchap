@@ -667,7 +667,7 @@ async fn device_code(
     .bind(&kind)
     .bind(name)
     .bind(req.runtime.filter(|r| ["cloud", "local"].contains(&r.as_str())))
-    .bind(req.agent_kind.filter(|k| ["claude-code", "codex", "opencode", "other"].contains(&k.as_str())))
+    .bind(req.agent_kind.filter(|k| ["claude-code", "codex", "opencode", "copilot", "antigravity", "other"].contains(&k.as_str())))
     .bind(DEVICE_TTL_SECS as f64)
     .execute(&state.db)
     .await?;

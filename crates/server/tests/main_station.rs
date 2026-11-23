@@ -197,3 +197,55 @@ async fn the_main_station_answers() {
         (&json!("OPS"), &json!(false))
     );
 }
+
+#[tokio::test]
+async fn copilot_and_antigravity_cooks_and_stations_register() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
+    let root = tok.unwrap();
+    app.add_user("alice").await;
+    app.post(&root, "/teams", json!({"name": "acme"})).await;
+    app.post(&root, "/teams/acme/members", json!({"principal": "alice"}))
+        .await;
+    let alice = admin::operator_token(&app.state.db, "alice", None)
+        .await
+        .unwrap();
+    app.post(
+        &root,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "PAY"}),
+    )
+    .await;
+    for (cook, kind) in [("cop", "copilot"), ("agy", "antigravity")] {
+        let (code, v) = app
+            .post(
+                &alice,
+                "/agents",
+                json!({"name": cook, "kind": kind, "runtime": "local"}),
+            )
+            .await;
+        assert_eq!(code, 200, "{v}");
+        assert_eq!(v["agent_kind"], kind, "{v}");
+        app.post(&root, "/teams/acme/members", json!({"principal": cook}))
+            .await;
+        let (code, v) = app
+            .post(
+                &alice,
+                "/stations",
+                json!({"cook": cook, "project": "PAY", "runtime": kind, "session": "sess-1", "directory": "/w/pay"}),
+            )
+            .await;
+        assert_eq!(code, 200, "{kind}: {v}");
+        assert_eq!(v["runtime"], kind);
+    }
+    let (code, v) = app
+        .post(
+            &alice,
+            "/agents",
+            json!({"name": "bad", "kind": "vim", "runtime": "local"}),
+        )
+        .await;
+    assert_ne!(code, 200, "{v}");
+}

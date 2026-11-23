@@ -9,7 +9,7 @@ type StationView {
   cook String
   /// Pot key, e.g. PAY.
   project String
-  /// opencode, claude-code, codex or other.
+  /// opencode, claude-code, codex, copilot, antigravity or other.
   runtime String
   /// The runtime's own session id.
   session String
