@@ -33,6 +33,16 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
   'menu', (select m.key from menus m where m.id = t.menu_id),
   'result', t.result, 'created_at', t.created_at, 'updated_at', t.updated_at)"#;
 
+/// Characters of a task's body or result kept in a list (`list_tasks`); `get_task` has the whole text.
+pub const LIST_CUT: usize = 280;
+
+/// SQL: the column cut to [`LIST_CUT`] characters, with an ellipsis when something was cut.
+fn cut_sql(col: &str) -> String {
+    format!(
+        "case when char_length({col}) > {LIST_CUT} then left({col}, {LIST_CUT}) || '…' else {col} end"
+    )
+}
+
 /// Project visibility predicate; $N = is_admin, $M = principal id.
 fn access_sql(admin: &str, pid: &str) -> String {
     format!(
@@ -251,8 +261,12 @@ pub async fn list_tasks(
 ) -> Result<Value> {
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, project).await?;
+    // A list is for choosing: bodies and results are cut (get_task has them whole). Agents call this
+    // on pots with long histories, where full bodies made one call cost a hundred thousand tokens.
     let sql = format!(
-        "select {TASK_JSON} from tasks t join projects pr on pr.id = t.project_id
+        "select {TASK_JSON} || jsonb_build_object(
+                'body', {body}, 'result', {result})
+         from tasks t join projects pr on pr.id = t.project_id
          where t.project_id = $1
            and ($2::text is null or t.status = $2)
            and ($3::text is null or $3 = any(t.labels))
@@ -260,7 +274,9 @@ pub async fn list_tasks(
                 or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
            and (not $4 or (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
                  where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))))
-         order by t.priority desc, t.number"
+         order by t.priority desc, t.number",
+        body = cut_sql("t.body"),
+        result = cut_sql("t.result"),
     );
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(pr.id)
