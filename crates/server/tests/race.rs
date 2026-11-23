@@ -92,7 +92,7 @@ async fn ten_agents_race_over_fifty_tasks() {
         handles.push(tokio::spawn(async move {
             let mut done = vec![];
             loop {
-                let r = service::claim_next(&pool, &a, "PAY", &[], None, None)
+                let r = service::claim_next(&pool, &a, "PAY", &[], None, None, None)
                     .await
                     .unwrap();
                 if r["none"] == true {
@@ -194,7 +194,7 @@ async fn expired_lease_is_fenced() {
     )
     .await
     .unwrap();
-    let first = service::claim_next(&pool, &ag[0], "PAY", &[], None, None)
+    let first = service::claim_next(&pool, &ag[0], "PAY", &[], None, None, None)
         .await
         .unwrap();
     let e1 = first["lease"]["epoch"].as_i64().unwrap();
@@ -203,7 +203,7 @@ async fn expired_lease_is_fenced() {
         .execute(&pool)
         .await
         .unwrap();
-    let second = service::claim_next(&pool, &ag[1], "PAY", &[], None, None)
+    let second = service::claim_next(&pool, &ag[1], "PAY", &[], None, None, None)
         .await
         .unwrap();
     let e2 = second["lease"]["epoch"].as_i64().unwrap();

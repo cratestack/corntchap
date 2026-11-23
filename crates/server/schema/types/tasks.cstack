@@ -164,3 +164,10 @@ type MarkdownDoc {
 type OkResult {
   ok Boolean
 }
+
+type PotLease {
+  /// Pot key.
+  key String
+  /// The pot's default lease length, in seconds.
+  lease_ttl_s Int
+}

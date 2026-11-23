@@ -223,12 +223,18 @@ enum TaskCmd {
         /// The station (st_…) this session is, as the wake prompt says: records which session holds the task.
         #[arg(long)]
         station: Option<String>,
+        /// Lease length for long work, e.g. 45m or 2h (default: the pot's; at most a day).
+        #[arg(long, value_parser = relay::parse_duration)]
+        lease: Option<std::time::Duration>,
         #[arg(long)]
         json: bool,
     },
     /// Agent mode: claim one task (JSON).
     Claim {
         id: String,
+        /// Lease length for long work, e.g. 45m or 2h (default: the pot's; at most a day).
+        #[arg(long, value_parser = relay::parse_duration)]
+        lease: Option<std::time::Duration>,
         #[arg(long)]
         json: bool,
     },
@@ -380,6 +386,12 @@ enum ProjectCmd {
         /// Do not ask first (required without a terminal).
         #[arg(short = 'y', long)]
         yes: bool,
+    },
+    /// Set a pot's default lease length, e.g. `pot lease PAY 30m` (team owner or admin).
+    Lease {
+        key: String,
+        #[arg(value_parser = relay::parse_duration)]
+        length: std::time::Duration,
     },
 }
 
@@ -994,6 +1006,19 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         Cmd::Project(ProjectCmd::Ls { json }) => {
             show(&api.get("/projects").await?, json, ui::projects_table);
         }
+        Cmd::Project(ProjectCmd::Lease { key, length }) => {
+            let v = api
+                .procedure(
+                    "setLeaseTtl",
+                    json!({"project": key.to_uppercase(), "ttlS": length.as_secs()}),
+                )
+                .await?;
+            ok_line(format!(
+                "pot {} leases now last {}s by default",
+                v["key"].as_str().unwrap_or("?"),
+                v["lease_ttl_s"]
+            ));
+        }
         Cmd::Pantry(p) => pantry::run(p, &api).await?,
         Cmd::Menu(c) => menu::run(c, &api).await?,
         Cmd::File(c) => file::run(c, &api).await?,
@@ -1437,11 +1462,15 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             labels,
             menu,
             station,
+            lease,
             ..
         } => {
             let mut body = menu::claim_next_body(&labels, menu.as_deref());
             if let Some(st) = station {
                 body["station"] = json!(st);
+            }
+            if let Some(l) = lease {
+                body["ttl_s"] = json!(l.as_secs());
             }
             out(&api
                 .post(
@@ -1450,8 +1479,12 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
                 )
                 .await?)
         }
-        TaskCmd::Claim { id, .. } => {
-            out(&api.post(&format!("/tasks/{id}/claim"), json!({})).await?)
+        TaskCmd::Claim { id, lease, .. } => {
+            let body = match lease {
+                Some(l) => json!({"ttl_s": l.as_secs()}),
+                None => json!({}),
+            };
+            out(&api.post(&format!("/tasks/{id}/claim"), body).await?)
         }
         TaskCmd::Check {
             id,

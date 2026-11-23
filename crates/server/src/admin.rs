@@ -856,6 +856,29 @@ pub async fn create_project(
     Ok(json!({"key": key, "name": name, "team": team, "lease_ttl_s": ttl}))
 }
 
+/// A pot's default lease length, for claims that ask for none (10 s to a day). Its team's owner
+/// (or a cook acting for them) and admins may change it; live leases keep their expiry.
+pub async fn set_lease_ttl(db: &PgPool, p: &Principal, key: &str, ttl_s: i64) -> Result<Value> {
+    let p = &acting(db, p).await?;
+    let mut c = db.acquire().await?;
+    let key = key.trim().to_uppercase();
+    let team: Option<String> = sqlx::query_scalar(
+        "select t.name from projects pr join teams t on t.id = pr.team_id where pr.key = $1",
+    )
+    .bind(&key)
+    .fetch_optional(&mut *c)
+    .await?;
+    let team = team.ok_or_else(|| Error::NotFound(format!("pot {key} not found")))?;
+    owned_team(&mut c, p, &team).await?;
+    let ttl = ttl_s.clamp(10, 86_400);
+    sqlx::query("update projects set lease_ttl = make_interval(secs => $2::float8) where key = $1")
+        .bind(&key)
+        .bind(ttl as f64)
+        .execute(&mut *c)
+        .await?;
+    Ok(json!({"key": key, "lease_ttl_s": ttl}))
+}
+
 /// Create an agent (or relay) owned by `owner`; returns its first token, shown once.
 pub async fn create_principal(
     db: &PgPool,

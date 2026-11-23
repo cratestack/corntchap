@@ -313,9 +313,21 @@ impl ProcedureRegistry for Procedures {
                 &csv(&a.labels),
                 a.menu.as_deref(),
                 a.station.as_deref(),
+                a.ttlS.map(|t| t as f64),
             )
             .await,
         )
+    }
+
+    async fn set_lease_ttl(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: set_lease_ttl::Args,
+        _z: set_lease_ttl::Authorized,
+    ) -> Result<set_lease_ttl::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(admin::set_lease_ttl(&self.state.db, &p, &a.project, a.ttlS).await)
     }
 
     async fn claim_task(
@@ -326,7 +338,16 @@ impl ProcedureRegistry for Procedures {
         _z: claim_task::Authorized,
     ) -> Result<claim_task::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::claim_task(&self.state.db, &p, &a.id, a.station.as_deref()).await)
+        typed(
+            service::claim_task(
+                &self.state.db,
+                &p,
+                &a.id,
+                a.station.as_deref(),
+                a.ttlS.map(|t| t as f64),
+            )
+            .await,
+        )
     }
 
     async fn heartbeat(
