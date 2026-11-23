@@ -258,6 +258,18 @@ struct Dispatcher {
     cloud: Vec<(Uuid, Uuid, Value)>,
     /// Cloud targets that asked to wait (HTTP 429): no delivery before then.
     cloud_wait: HashMap<Uuid, Instant>,
+    /// Work wakes in a row that led to no claim, per cook: each one doubles the wait before the
+    /// next (see [`backoff`]); a claim resets it. A cook that cannot claim (a refused tool, a
+    /// broken session) is not woken every 30 seconds forever.
+    misses: HashMap<Uuid, u32>,
+}
+
+/// The wait before waking a cook again for the same work: the coalescing window, doubled for each
+/// wake in a row that led to no claim, at most 30 minutes.
+fn backoff(base: Duration, misses: u32) -> Duration {
+    base.saturating_mul(1u32 << misses.min(10))
+        .min(Duration::from_secs(30 * 60))
+        .max(base)
 }
 
 const TRIGGERS: &[&str] = &[
@@ -277,6 +289,7 @@ impl Dispatcher {
             pending: HashSet::new(),
             cloud: Vec::new(),
             cloud_wait: HashMap::new(),
+            misses: HashMap::new(),
         }
     }
 
@@ -338,6 +351,12 @@ impl Dispatcher {
             }
             return;
         }
+        // a claim means the wakes worked: the next one comes at the normal pace
+        if let Ok(Some((kind, _, Some(actor), _))) = &row
+            && kind == "task.claimed"
+        {
+            self.misses.remove(actor);
+        }
         if let Ok(Some((kind, Some(project), actor, _))) = row
             && TRIGGERS.contains(&kind.as_str())
         {
@@ -387,15 +406,20 @@ impl Dispatcher {
             } else {
                 LOCAL_COALESCE
             };
+            let misses = self.misses.get(&agent).copied().unwrap_or(0);
             let recently = self
                 .last_wake
                 .get(&agent)
-                .map(|t| t.elapsed() < window)
+                .map(|t| t.elapsed() < backoff(window, misses))
                 .unwrap_or(false);
             // Cloud agents are never woken while they hold a lease: their session is already running.
             if recently || (cloud && targets[0].busy > 0) {
                 self.pending.insert((agent, project));
                 continue;
+            }
+            // woken before and no claim since: this wake counts as one more miss
+            if self.last_wake.contains_key(&agent) {
+                *self.misses.entry(agent).or_default() += 1;
             }
             self.last_wake.insert(agent, Instant::now());
             self.pending.remove(&(agent, project));
@@ -586,4 +610,23 @@ async fn record_delivery(
         }
     };
     let _ = emit(c, Some(project), None, kind, None, payload).await;
+}
+
+#[cfg(test)]
+mod backoff_tests {
+    use super::*;
+
+    #[test]
+    fn wakes_without_a_claim_back_off_to_half_an_hour() {
+        let b = Duration::from_secs(30);
+        assert_eq!(backoff(b, 0), b);
+        assert_eq!(backoff(b, 1), Duration::from_secs(60));
+        assert_eq!(backoff(b, 3), Duration::from_secs(240));
+        assert_eq!(backoff(b, 6), Duration::from_secs(30 * 60));
+        assert_eq!(backoff(b, 40), Duration::from_secs(30 * 60));
+        assert_eq!(
+            backoff(Duration::from_secs(300), 2),
+            Duration::from_secs(1200)
+        );
+    }
 }

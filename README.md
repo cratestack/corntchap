@@ -184,6 +184,10 @@ OpenCode v2 runs one shared background service, which the fire finds with `openc
 
 The fire looks for `claude`, `codex` and `opencode` on its own PATH, then on your login shell's PATH (`$SHELL -l`), then in the usual install folders (`~/.local/bin`, `~/.claude/local`, npm, bun, Homebrew). `fire install` also writes the PATH of the shell you run it from into the service, since systemd and launchd start services with a bare PATH. If a wake says `starting claude: No such file or directory`, run `corntchap-cli fire install` again from a terminal where `claude` works, then restart the service.
 
+A woken `claude -p` has nobody to approve a tool call, so the fire allows corntchap's own tools for it: `--allowedTools mcp__<name>` for every MCP server pointing at your corntchap in the station folder's `.mcp.json` (or a parent's) and in `~/.claude.json`. claude.ai connectors are not in those files: if you reach corntchap through one, allow it once in `~/.claude/settings.json`: `{"permissions": {"allow": ["mcp__corntchap-another"]}}` (the connector's name). Other tools follow your own permission settings.
+
+A cook that is woken but claims nothing (a refused tool, a broken session) is not woken every 30 seconds forever: each wake in a row without a claim doubles the wait, up to 30 minutes, and a claim resets it.
+
 The relay remembers the last event id it saw (`relay-state.json` next to `credentials.toml`) and sends it as `Last-Event-ID` on restart, so wakes sent while it was down are replayed.
 
 ### What a cook may do: grants
