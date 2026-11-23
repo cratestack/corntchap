@@ -52,8 +52,22 @@ image tag="dev":
 env-init:
     @python3 scripts/devenv.py --ensure .env.dev
 
+# The corntchap Keycloak login theme (github.com/cratestack/corntchap-keycloak) into .cache/, mounted by compose.
+# Offline it is skipped: Keycloak then shows its built-in login page. KEYCLOAK_THEME_DIR points at another checkout.
+keycloak-theme:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    dir=.cache/corntchap-keycloak
+    if [ -d "$dir/.git" ]; then
+      git -C "$dir" pull -q --ff-only || echo "keycloak theme: could not update $dir (kept as is)"
+    else
+      mkdir -p .cache
+      git clone -q --depth 1 https://github.com/cratestack/corntchap-keycloak "$dir" \
+        || echo "keycloak theme: could not fetch it, Keycloak will use its built-in login page"
+    fi
+
 # Postgres 18 + Keycloak (dev realm) + RustFS (files) via compose, on random loopback ports from .env.dev.
-infra: env-init
+infra: env-init keycloak-theme
     {{load}} docker compose up -d --wait db keycloak rustfs
 
 # Alias kept for muscle memory.

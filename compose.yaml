@@ -18,7 +18,11 @@ services:
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
     ports: ["127.0.0.1:${KC_PORT}:8080"]
-    volumes: ["./deploy/dev/keycloak:/opt/keycloak/data/import:ro"]   # realm `corntchap`: client + users admin/admin, dev/dev
+    volumes:
+      - "./deploy/dev/keycloak:/opt/keycloak/data/import:ro"   # realm `corntchap`: client + users admin/admin, dev/dev
+      # the corntchap login theme (cratestack/corntchap-keycloak), fetched by `just keycloak-theme` (part of `just setup`);
+      # without it Keycloak logs "Failed to find LOGIN theme corntchap" and shows its built-in page
+      - "${KEYCLOAK_THEME_DIR:-./.cache/corntchap-keycloak/themes/corntchap/theme}:/opt/keycloak/themes/corntchap:ro"
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '\"UP\"' <&3"]
       interval: 5s
