@@ -22,14 +22,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useProc, useProcCall, useV1Call } from "@/lib/data";
+import { useProc, useProcCall, useProjects, useV1Call } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { BUCKETS, bucketOf, fmtAgo, useNow, taskNote } from "@/lib/format";
 import { useSession } from "@/lib/session";
 import { useLive } from "@/lib/live";
 import { useIsPhone } from "@/lib/media";
 import { useOpenTask } from "@/lib/nav";
-import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, SectionLabel } from "./bits";
+import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip, SectionLabel } from "./bits";
+import { RepoPicker } from "./repos";
 import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
@@ -236,6 +237,11 @@ function TaskDetailBody({ id }: { id: string }) {
                   disabled={!!busy}
                   save={(menu) => run("move it to that menu", () => call("taskEdit", { id: t.id, menu }), menu ? "Moved to the menu" : "Taken off the menu")}
                 />
+                {t.repos.map((r) => (
+                  <RepoChip key={r} className="h-8 px-3 text-[12.5px]">
+                    {r}
+                  </RepoChip>
+                ))}
                 {t.labels.map((l) => (
                   <LabelChip key={l} className="h-8 px-3 text-[12.5px]">
                     {l}
@@ -542,12 +548,14 @@ function EditForm({
   onDone,
 }: {
   t: TaskDetail;
-  save: (a: { title: string; body: string; priority: number; labels: string }) => Promise<unknown>;
+  save: (a: { title: string; body: string; priority: number; labels: string; repos?: string }) => Promise<unknown>;
   onDone: () => void;
 }) {
   const [title, setTitle] = useState(t.title);
   const [body, setBody] = useState(t.body);
   const [labels, setLabels] = useState<string[]>(t.labels);
+  const potRepos = useProjects().data?.find((p) => p.key === t.project)?.repos ?? [];
+  const [repos, setRepos] = useState<string[]>(t.repos);
   const [priority, setPriority] = useState(String(Math.max(-1, Math.min(2, t.priority))));
   const [busy, setBusy] = useState(false);
   const dirty = useMemo(() => title !== t.title || body !== t.body, [title, body, t.title, t.body]);
@@ -556,7 +564,7 @@ function EditForm({
     e.preventDefault();
     setBusy(true);
     try {
-      await save({ title: title.trim(), body, priority: Number(priority), labels: labels.join(",") });
+      await save({ title: title.trim(), body, priority: Number(priority), labels: labels.join(","), ...(potRepos.length > 0 ? { repos: repos.join(",") } : {}) });
       toast.success(`${t.id} updated`);
       onDone();
     } catch (err) {
@@ -577,6 +585,13 @@ function EditForm({
         <Label htmlFor="e-body">Description (markdown)</Label>
         <Textarea id="e-body" rows={9} value={body} onChange={(e) => setBody(e.target.value)} />
       </div>
+      {potRepos.length > 0 && (
+        <div className="space-y-1.5">
+          <Label>Repositories</Label>
+          <RepoPicker repos={potRepos} value={repos} onChange={setRepos} label="Repositories the task is about" />
+          <p className="text-[12px] text-muted-foreground">None chosen: any repository.</p>
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
         <div className="space-y-1.5">
           <Label>Labels</Label>

@@ -265,6 +265,7 @@ impl ProcedureRegistry for Procedures {
                     parent: a.parent,
                     depends_on: csv(&a.dependsOn),
                     labels: csv(&a.labels),
+                    repos: csv(&a.repos),
                     priority: a.priority.unwrap_or(0),
                     menu: a.menu,
                 },
@@ -282,6 +283,7 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<task_edit::Output, CratestackError> {
         let p = principal(ctx)?;
         let labels = a.labels.as_ref().map(|_| csv(&a.labels));
+        let repos = a.repos.as_ref().map(|_| csv(&a.repos));
         typed(
             service::update_task(
                 &self.state.db,
@@ -291,6 +293,7 @@ impl ProcedureRegistry for Procedures {
                     title: a.title,
                     body: a.body,
                     labels,
+                    repos,
                     priority: a.priority,
                     menu: a.menu,
                 },
@@ -405,7 +408,17 @@ impl ProcedureRegistry for Procedures {
         _z: complete::Authorized,
     ) -> Result<complete::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::complete(&self.state.db, &p, &a.id, a.epoch, &a.result).await)
+        typed(
+            service::complete(
+                &self.state.db,
+                &p,
+                &a.id,
+                a.epoch,
+                &a.result,
+                a.noPropagate.unwrap_or(false),
+            )
+            .await,
+        )
     }
 
     async fn release(
@@ -1040,6 +1053,101 @@ impl ProcedureRegistry for Procedures {
         typed(admin::set_grants(db, &p, &a.name, &csv(&Some(a.grants.clone()))).await)
     }
 
+    async fn task_split_by_repo(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: task_split_by_repo::Args,
+        _z: task_split_by_repo::Authorized,
+    ) -> Result<task_split_by_repo::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::repos::split_by_repo(&self.state.db, &p, &a.id).await)
+    }
+
+    async fn repo_add(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: repo_add::Args,
+        _z: repo_add::Authorized,
+    ) -> Result<repo_add::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            crate::repos::add_repo(
+                &self.state.db,
+                &p,
+                &a.project,
+                &a.url,
+                a.name.as_deref(),
+                a.defaultBranch.as_deref(),
+            )
+            .await,
+        )
+    }
+
+    async fn repo_link(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: repo_link::Args,
+        _z: repo_link::Authorized,
+    ) -> Result<repo_link::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            crate::repos::link_repo(
+                &self.state.db,
+                &p,
+                &a.project,
+                &a.repo,
+                &a.on,
+                a.mode.as_deref(),
+            )
+            .await,
+        )
+    }
+
+    async fn repo_unlink(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: repo_unlink::Args,
+        _z: repo_unlink::Authorized,
+    ) -> Result<repo_unlink::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::repos::unlink_repo(&self.state.db, &p, &a.project, &a.repo, &a.on).await)
+    }
+
+    async fn repo_remove(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: repo_remove::Args,
+        _z: repo_remove::Authorized,
+    ) -> Result<repo_remove::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::repos::remove_repo(&self.state.db, &p, &a.project, &a.name).await)
+    }
+
+    async fn cook_set_repos(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: cook_set_repos::Args,
+        _z: cook_set_repos::Authorized,
+    ) -> Result<cook_set_repos::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            crate::repos::set_cook_repos(
+                &self.state.db,
+                &p,
+                a.cook.as_deref(),
+                &a.project,
+                &csv(&a.repos),
+            )
+            .await,
+        )
+    }
+
     async fn station_register(
         &self,
         _db: &Db,
@@ -1060,6 +1168,7 @@ impl ProcedureRegistry for Procedures {
                     session: a.session,
                     directory: a.directory,
                     label: a.label,
+                    repo: a.repo,
                 },
             )
             .await,

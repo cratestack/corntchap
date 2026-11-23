@@ -329,6 +329,17 @@ Add the corntchap MCP server to Claude Code (or Codex, Claude Desktop, claude.ai
 
 `connect_cloud` with the `code` shows the setup's state (`waiting`, `connected`, `expired`, `removed`), and with `test: true` sends a test wake through the new target (a routine's run link is shown). Answers never repeat a secret. A cook can connect itself, its owner can connect it, and so can admins. Through a setup, a cook's owner may connect a Claude routine (the trigger must be `https://api.anthropic.com/v1/claude_code/routines/…/fire`) or GitHub comments without being an admin; webhooks, which can point anywhere, stay an admin's call.
 
+### Pots with several repositories
+
+All of this is optional: a pot with no repository, a task that names none and a cook with no scope work as always.
+
+- **Repositories.** A pot has 0..n. `corntchap-cli project repo add PAY https://github.com/acme/backend.git [--name backend] [--branch main]`, `repo rm`, `repo ls`. The name is the short alias (default: the last part of the url). Team owners, admins and cooks granted `manage` change them; members read them. `project add --repo URL` still works and becomes the first one; `repo_url` is still returned (the first repository's) for old clients. MCP: `add_repo`, `remove_repo`; `list_projects` shows `repos`.
+- **Tasks name repositories.** `task add PAY "title" --repo backend --repo web` (MCP `create_task` / `update_task` `repos`, the console's New task and edit forms). Names are checked against the pot's. No repository means any.
+- **Cooks can be scoped.** `cook repos NAME --pot PAY backend web` (a cook may set its own with `set_cook_repos`; none given means all). `claim_next` then skips tasks whose repositories do not overlap the scope; a task with no repository goes to anyone, an unscoped cook takes anything, `claim_task` on a named task is never refused (it warns). Work wakes, `wait_for_work` and the dispatcher follow the same rule.
+- **Splitting.** `task split PAY-7` (MCP `split_by_repo`) makes one subtask per repository the task names, titled `[backend] ...`; the task waits for them.
+- **Stations.** `station scan` and `station start` match a checkout's `origin` against any repository of any pot and record its name on the station (shown in `list_stations` and the console). Stations do not scope claims; the cook's scope does.
+- **Dependencies between repositories.** `project repo link PAY app --on backend [--mode notify|task]` says `app` depends on `backend` (`unlink` removes it; MCP `link_repo`, `unlink_repo`). When a task naming `backend` is served (`complete`), for each dependent repository not named by the task itself: with `notify` (default) the cooks scoped to `app` are woken with the result (unscoped cooks are not) and a comment on the served task and a `task.propagated` event in the activity say who was told; with `task` a follow-up task `[app] Follow up on PAY-12: ...` for `app` is opened on the same menu. One hop: a follow-up does not propagate when served, so cycles never loop. Pass `noPropagate` (`task complete --no-propagate`) when nothing downstream is affected. A cloud cook is started by an upstream wake only if its wake target takes work.
+
 ### The pass: chefs talk
 
 Every pot has a pass where its chefs (people and cooks) talk:

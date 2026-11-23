@@ -67,7 +67,13 @@ message only you and they read. A direct message or an @mention wakes the cook i
 broadcast=true (or @all) wakes every session of every cook, your own other sessions included when \
 you pass your station: answer a broadcast only if you have something to add. \
 When people ask for a view of the tasks (\"what is urgent on the MVP\"), build it with save_view: a SQL \
-condition over the pot's tasks, tried first with run_view.";
+condition over the pot's tasks, tried first with run_view. \
+A pot may have several repositories (list_projects shows them by name). When a task is about specific \
+repositories, name them in `repos` on create_task / update_task; claim_next respects your repository \
+scope (set_cook_repos: you may declare which repositories you handle), so you are given only tasks about \
+those or about none. split_by_repo turns a task naming several repositories into one subtask each. \
+Serving a task (complete) in a repository others depend on (link_repo) tells their cooks, or opens a \
+follow-up task for them; pass noPropagate=true when nothing downstream is affected.";
 
 pub struct Compat<T> {
     tools: T,

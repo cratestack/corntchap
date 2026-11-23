@@ -1,0 +1,44 @@
+part of "../corntchap.cstack"
+
+// A pot's repositories and what a cook handles (src/repos.rs). All optional.
+
+/// Add a repository to a pot.
+/// @param project Pot key, e.g. PAY.
+/// @param url The repository's git url (https or ssh): the CLI matches a checkout's origin to it.
+/// @param name Short name tasks and cooks use (default: the url's last segment, e.g. backend).
+/// @param defaultBranch Its default branch, e.g. main.
+mutation procedure repoAdd(project: String, url: String, name: String?, defaultBranch: String?): RepoAdded
+  @allow(auth() != null)
+  @mcp(tool: "add_repo", description: "Add a repository to a pot (owners of its team, admins, and cooks acting for them with `manage`). Tasks can then name it in `repos`, and a cook can be scoped to it (set_cook_repos). The name defaults to the url's last segment.")
+
+/// Remove a repository from a pot.
+/// @param project Pot key, e.g. PAY.
+/// @param name The repository's name.
+mutation procedure repoRemove(project: String, name: String): RepoRemoved
+  @allow(auth() != null)
+  @mcp(tool: "remove_repo", description: "Remove a repository from a pot (owners of its team, admins, and cooks acting for them with `manage`). Open tasks and cook scopes stop naming it.")
+
+/// Say that one repository of a pot depends on another.
+/// @param project Pot key, e.g. PAY.
+/// @param repo The dependent repository's name, e.g. app.
+/// @param on The repository it depends on, e.g. backend.
+/// @param mode notify (default): when a task in `on` is served, the cooks scoped to `repo` are told. task: a follow-up task for `repo` is opened instead.
+mutation procedure repoLink(project: String, repo: String, on: String, mode: String?): ReposView
+  @allow(auth() != null)
+  @mcp(tool: "link_repo", description: "Say that repository `repo` of a pot depends on repository `on` (app on backend); same managers as add_repo. When a task naming `on` is served, the cooks scoped to `repo` are woken with the result (mode notify, the default) or a follow-up task for `repo` is opened (mode task). One hop only; cycles are allowed. Calling it again changes the mode.")
+
+/// Remove a dependency between two repositories of a pot.
+/// @param project Pot key, e.g. PAY.
+/// @param repo The dependent repository's name.
+/// @param on The repository it depended on.
+mutation procedure repoUnlink(project: String, repo: String, on: String): ReposView
+  @allow(auth() != null)
+  @mcp(tool: "unlink_repo", description: "Remove the dependency of repository `repo` on repository `on` in a pot (same managers as add_repo).")
+
+/// Set which of a pot's repositories a cook handles.
+/// @param project Pot key, e.g. PAY.
+/// @param repos Comma-separated repository names; empty: all of the pot's repositories.
+/// @param cook The cook (default: you).
+mutation procedure cookSetRepos(project: String, repos: String?, cook: String?): CookReposView
+  @allow(auth() != null)
+  @mcp(tool: "set_cook_repos", description: "Say which of a pot's repositories a cook handles: claim_next then gives it only tasks about those repositories or about none, and it is woken only for those. A cook may declare its own; its owner and admins set it for their cooks. Empty repos: all of them (the default).")

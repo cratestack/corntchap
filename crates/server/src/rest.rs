@@ -34,6 +34,13 @@ pub fn routes() -> Router<AppState> {
         .route("/projects", get(projects_list).post(projects_add))
         .route("/projects/{key}/tasks", get(tasks_list).post(tasks_add))
         .route("/projects/{key}/claim-next", post(claim_next))
+        .route("/projects/{key}/repos", post(repos_add))
+        .route("/projects/{key}/repos/{name}", delete(repos_remove))
+        .route(
+            "/projects/{key}/repo-links",
+            post(repos_link).delete(repos_unlink),
+        )
+        .route("/projects/{key}/cook-repos", post(cook_repos_set))
         .route("/projects/{key}/digest", get(digest))
         .route("/projects/{key}/board", get(board))
         .route("/projects/{key}/menus", get(menus_list).post(menus_add))
@@ -45,6 +52,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/tasks/{id}", get(task_get).patch(task_patch))
         .route("/tasks/{id}/claim", post(task_claim))
+        .route("/tasks/{id}/split-by-repo", post(task_split))
         .route("/tasks/{id}/heartbeat", post(task_heartbeat))
         .route("/tasks/{id}/check", post(task_check))
         .route("/tasks/{id}/comment", post(task_comment))
@@ -258,6 +266,7 @@ async fn tasks_add(
             parent: s(&b, "parent"),
             depends_on: arr(&b, "depends_on"),
             labels: arr(&b, "labels"),
+            repos: arr(&b, "repos"),
             priority: i(&b, "priority").unwrap_or(0),
             menu: s(&b, "menu"),
         },
@@ -295,6 +304,71 @@ async fn digest(
 }
 async fn board(State(st): State<AppState>, Authn(p): Auth, Path(k): Path<String>) -> J {
     ok(json!({"markdown": service::board_markdown(&st.db, &p.worker()?, &k.to_uppercase()).await?}))
+}
+
+/// `{"url": "...", "name": "backend", "default_branch": "main"}`: add a repository to the pot.
+async fn repos_add(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::repos::add_repo(
+        &st.db,
+        &p,
+        &k,
+        &req_s(&b, "url")?,
+        s(&b, "name").as_deref(),
+        s(&b, "default_branch").as_deref(),
+    )
+    .await?)
+}
+async fn repos_remove(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path((k, name)): Path<(String, String)>,
+) -> J {
+    ok(crate::repos::remove_repo(&st.db, &p, &k, &name).await?)
+}
+/// `{"cook": "name" (default: you), "repos": ["backend"]}`: which of the pot's repositories a cook handles (empty: all).
+async fn cook_repos_set(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(
+        crate::repos::set_cook_repos(&st.db, &p, s(&b, "cook").as_deref(), &k, &arr(&b, "repos"))
+            .await?,
+    )
+}
+/// `{"repo": "app", "on": "backend", "mode": "notify"|"task"}`: `app` depends on `backend`.
+async fn repos_link(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::repos::link_repo(
+        &st.db,
+        &p,
+        &k,
+        &req_s(&b, "repo")?,
+        &req_s(&b, "on")?,
+        s(&b, "mode").as_deref(),
+    )
+    .await?)
+}
+async fn repos_unlink(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::repos::unlink_repo(&st.db, &p, &k, &req_s(&b, "repo")?, &req_s(&b, "on")?).await?)
+}
+async fn task_split(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
+    ok(crate::repos::split_by_repo(&st.db, &p.worker()?, &id).await?)
 }
 
 /// `{"grants": ["plan", "manage"]}`: what a cook may do beyond working its tasks (people only).
@@ -404,6 +478,7 @@ async fn stations_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<
         session: req_s(&b, "session")?,
         directory: s(&b, "directory"),
         label: s(&b, "label"),
+        repo: s(&b, "repo"),
     };
     ok(stations::register(&st.db, &p.worker()?, n).await?)
 }
@@ -639,6 +714,7 @@ async fn task_patch(
     Json(b): Json<Value>,
 ) -> J {
     let labels = b.get("labels").map(|_| arr(&b, "labels"));
+    let repos = b.get("repos").map(|_| arr(&b, "repos"));
     ok(service::update_task(
         &st.db,
         &p.worker()?,
@@ -647,6 +723,7 @@ async fn task_patch(
             title: s(&b, "title"),
             body: s(&b, "body"),
             labels,
+            repos,
             priority: i(&b, "priority"),
             menu: s(&b, "menu"),
         },
@@ -731,6 +808,7 @@ async fn task_complete(
         &id,
         req_epoch(&b)?,
         &s(&b, "result").unwrap_or_default(),
+        b["no_propagate"].as_bool().unwrap_or(false),
     )
     .await?)
 }

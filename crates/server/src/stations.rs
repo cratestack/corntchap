@@ -26,7 +26,7 @@ pub const RUNTIMES: &[&str] = &[
 
 const STATION_JSON: &str = r#"jsonb_build_object(
   'id', st.ref, 'cook', a.name, 'project', pr.key, 'runtime', st.runtime, 'session', st.session_ref,
-  'directory', st.directory, 'label', st.label, 'main', st.main, 'created_at', st.created_at, 'last_woken_at', st.last_woken_at,
+  'directory', st.directory, 'repo', st.repo, 'label', st.label, 'main', st.main, 'created_at', st.created_at, 'last_woken_at', st.last_woken_at,
   'holding', coalesce((select jsonb_agg(pr.key || '-' || t.number order by t.number) from tasks t
       where t.station_id = st.id and t.status = 'claimed' and t.lease_expires_at > now()), '[]'::jsonb),
   'waiting', coalesce((select jsonb_agg(pr.key || '-' || t.number order by t.number) from tasks t
@@ -84,6 +84,8 @@ pub struct NewStation {
     pub session: String,
     pub directory: Option<String>,
     pub label: Option<String>,
+    /// The pot's repository (alias) the folder is a checkout of, when the CLI matched one.
+    pub repo: Option<String>,
 }
 
 /// Register (or move) a session as a station of a cook in a pot. The same session registered
@@ -113,12 +115,19 @@ pub async fn register(db: &PgPool, p: &Principal, n: NewStation) -> Result<Value
                 n.project.to_uppercase()
             ))
         })?;
+    let repo = match n.repo.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => crate::repos::check_aliases(&mut tx, pr.id, &pr.key, &[r.to_string()])
+            .await?
+            .pop(),
+        None => None,
+    };
     let id: Uuid = sqlx::query_scalar(
-        "insert into stations (ref, agent_id, project_id, runtime, session_ref, directory, label, created_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8)
+        "insert into stations (ref, agent_id, project_id, runtime, session_ref, directory, label, created_by, repo)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          on conflict (agent_id, runtime, session_ref) do update
            set project_id = excluded.project_id, directory = coalesce(excluded.directory, stations.directory),
                label = coalesce(excluded.label, stations.label),
+               repo = case when excluded.project_id = stations.project_id then coalesce(excluded.repo, stations.repo) else excluded.repo end,
                main = stations.main and stations.project_id = excluded.project_id
          returning id",
     )
@@ -130,6 +139,7 @@ pub async fn register(db: &PgPool, p: &Principal, n: NewStation) -> Result<Value
     .bind(n.directory.as_deref().map(str::trim).filter(|d| !d.is_empty()))
     .bind(n.label.as_deref().map(str::trim).filter(|l| !l.is_empty()))
     .bind(p.id)
+    .bind(repo)
     .fetch_one(&mut *tx)
     .await?;
     let out = one(&mut tx, id).await?;
@@ -244,8 +254,10 @@ pub async fn start(db: &PgPool, p: &Principal, s: Start) -> Result<Value> {
         });
     let session = Uuid::new_v4().to_string();
     let id: Uuid = sqlx::query_scalar(
-        "insert into stations (ref, agent_id, project_id, runtime, session_ref, directory, label, created_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8) returning id",
+        "insert into stations (ref, agent_id, project_id, runtime, session_ref, directory, label, created_by, repo)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,
+           (select repo from stations where agent_id = $2 and project_id = $3 and directory = $6 and repo is not null limit 1))
+         returning id",
     )
     .bind(new_ref())
     .bind(cook.id)

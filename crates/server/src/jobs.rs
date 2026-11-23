@@ -353,11 +353,15 @@ impl Dispatcher {
                 .as_str()
                 .and_then(|a| a.parse::<Uuid>().ok())
         {
+            // an upstream wake is work, not a call: it starts a cloud run only for targets that take work
+            let work = payload["reason"].as_str() == Some("upstream");
             let has_cloud: bool = sqlx::query_scalar(
-                "select exists (select 1 from wake_targets where agent_id = $1 and type = any($2))",
+                "select exists (select 1 from wake_targets where agent_id = $1 and type = any($2)
+                   and (not $3 or config->>'takes_work' = 'true'))",
             )
             .bind(agent)
             .bind(crate::cloud::CLOUD_TYPES)
+            .bind(work)
             .fetch_one(&self.state.db)
             .await
             .unwrap_or(false);
@@ -382,7 +386,7 @@ impl Dispatcher {
     }
 
     async fn candidates(&self, project: Uuid, except: Option<Uuid>) -> Vec<Candidate> {
-        sqlx::query_as(
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "select wt.id as target_id, a.id as agent_id, a.name as agent, a.runtime, wt.type as typ, wt.config,
                     (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) as busy
              from wake_targets wt
@@ -396,9 +400,12 @@ impl Dispatcher {
                and exists (select 1 from tasks t where t.project_id = pr.id
                       and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
                       and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
-                      and (wt.labels is null or cardinality(wt.labels) = 0 or t.labels && wt.labels))
+                      and (wt.labels is null or cardinality(wt.labels) = 0 or t.labels && wt.labels)
+                      -- a cook scoped to some repositories is woken only for tasks about them (or about none)
+                      and {scope})
                and (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) < a.max_leases",
-        )
+            scope = crate::repos::scope_sql("a.id"),
+        )))
         .bind(project)
         .bind(except)
         .bind(crate::cloud::CLOUD_TYPES)

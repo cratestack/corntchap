@@ -13,6 +13,7 @@ import { useProc, useProjects, useTeamChefs, useV1, type TeamRow } from "@/lib/d
 import { useSession } from "@/lib/session";
 import { fmtAgo, useNow } from "@/lib/format";
 import { lastView } from "@/lib/views";
+import { PotRepos } from "@/components/repos";
 import { Crumb, Quiet, linkClass } from "./common";
 
 const activityLine = (a: ActivityView) => {
@@ -148,11 +149,6 @@ export function PotDetailsPage() {
               <GroupRow label="Team" value={team ?? "none"} {...(team ? { to: `/teams/${team}` } : {})} />
               <GroupRow label="Lease" value={<span className="font-mono">{project.lease_ttl_s >= 120 ? `${Math.round(project.lease_ttl_s / 60)} min` : `${project.lease_ttl_s} s`}</span>} />
               <GroupRow
-                label="Repository"
-                value={project.repo_url ? <span className="font-mono text-[12px]">{project.repo_url.replace(/^https?:\/\//, "")}</span> : "none set"}
-                {...(project.repo_url ? { onClick: () => window.open(project.repo_url!, "_blank", "noreferrer"), chevron: false } : {})}
-              />
-              <GroupRow
                 label="Questions"
                 value={project.open_questions > 0 ? `${project.open_questions} open` : "none open"}
                 {...(project.open_questions > 0 ? { to: `/pots/${project.key}/questions` } : {})}
@@ -179,6 +175,8 @@ export function PotDetailsPage() {
               </ul>
             </Group>
           </div>
+
+          <PotRepos project={project} canManage={canManage} />
 
           <div className="space-y-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-6 lg:space-y-0 lg:gap-y-6">
             <Group title="Cooks who work here" hint={team ? `The cooks of team ${team}, with their stations in ${project.key}.` : "This pot has no team, so no cook sees it."}>

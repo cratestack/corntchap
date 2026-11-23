@@ -39,6 +39,8 @@ type TaskView {
   /// Higher is picked first by claim_next.
   priority Int
   labels String[]
+  /// Aliases of the pot's repositories the task is about (empty: any repository).
+  repos String[]
   /// open, claimed, blocked, done or cancelled (shown to people as "Tossed").
   status String
   /// Parent task id when this is a subtask.
@@ -80,6 +82,8 @@ type TaskDetail {
   /// Higher is picked first by claim_next.
   priority Int
   labels String[]
+  /// Aliases of the pot's repositories the task is about (empty: any repository).
+  repos String[]
   /// open, claimed, blocked, done or cancelled (shown to people as "Tossed").
   status String
   /// Parent task id when this is a subtask.
@@ -128,6 +132,8 @@ type ClaimResult {
   lease LeaseView?
   /// Nothing is ready for you right now.
   none Boolean?
+  /// claim_task only: the task is about repositories outside your scope (it was still given to you).
+  warning String?
   /// What was saved or changed in the pot's pantry since you last read it: read those memories
   /// (get_memory) before you start. Absent when there is nothing new.
   pantry PantryNews?
@@ -170,4 +176,12 @@ type PotLease {
   key String
   /// The pot's default lease length, in seconds.
   lease_ttl_s Int
+}
+
+/// What split_by_repo returns.
+type SplitResult {
+  /// The task that was split: it now waits for its subtasks.
+  parent TaskDetail
+  /// The subtasks created now (none when every repository already had its part).
+  subtasks TaskView[]
 }

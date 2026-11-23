@@ -8,6 +8,7 @@ export function isBaseView(v: string | undefined): v is BaseView {
 }
 
 export interface Filters {
+  repo?: string;
   status?: string;
   label?: string;
   holder?: string;

@@ -12,9 +12,10 @@ part of "../corntchap.cstack"
 /// @param labels Comma-separated labels (claim_next can filter on them).
 /// @param priority Higher is picked first by claim_next (default 0).
 /// @param menu Menu (milestone) key to put the task on, e.g. mvp; see list_menus.
-mutation procedure taskCreate(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?, menu: String?): TaskDetail
+/// @param repos Comma-separated names of the pot's repositories the task is about (list_projects shows them); empty: any.
+mutation procedure taskCreate(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?, menu: String?, repos: String?): TaskDetail
   @allow(auth() != null)
-  @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated. menu: the milestone key (list_menus).")
+  @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated. menu: the milestone key (list_menus). repos: comma-separated repository names of the pot, when the task is about specific repositories (claim_next gives it to cooks that handle one of them); leave out when it is not repo specific.")
 
 /// Edit a task's text, priority or labels.
 /// @param id Task id, e.g. PAY-42.
@@ -23,9 +24,10 @@ mutation procedure taskCreate(project: String, title: String, body: String?, ite
 /// @param priority New priority; higher is picked first.
 /// @param labels Comma-separated; replaces the task's labels.
 /// @param menu Menu key to move the task to; empty string takes it off its menu.
-mutation procedure taskEdit(id: String, title: String?, body: String?, priority: Int?, labels: String?, menu: String?): TaskDetail
+/// @param repos Comma-separated repository names of the pot; replaces the task's; empty string: any repository.
+mutation procedure taskEdit(id: String, title: String?, body: String?, priority: Int?, labels: String?, menu: String?, repos: String?): TaskDetail
   @allow(auth() != null)
-  @mcp(tool: "update_task", description: "Edit title, body, priority or labels (labels is comma-separated and replaces the set). Not status. Agents may only edit a task they currently hold.")
+  @mcp(tool: "update_task", description: "Edit title, body, priority, labels or repos (each comma-separated, replaces the set). Not status. Agents may only edit a task they currently hold.")
 
 /// Take the best ready task in a project.
 /// @param project Project key, e.g. PAY.
@@ -35,7 +37,7 @@ mutation procedure taskEdit(id: String, title: String?, body: String?, priority:
 /// @param ttlS Lease length in seconds for long work (default: the pot's lease TTL; at most 86400).
 mutation procedure claimNext(project: String, labels: String?, menu: String?, station: String?, ttlS: Int?): ClaimResult
   @allow(auth() != null)
-  @mcp(tool: "claim_next", description: "Atomically take the best ready task in a project. Returns the task and a lease {epoch, expires_at}, or {none: true}. Optional labels (comma-separated) restricts which tasks you accept. The lease lasts the pot's lease TTL; for long work pass ttlS (seconds, up to a day), and renew with heartbeat before anything that may outlast it (a long build or test run).")
+  @mcp(tool: "claim_next", description: "Atomically take the best ready task in a project. Returns the task and a lease {epoch, expires_at}, or {none: true}. Optional labels (comma-separated) restricts which tasks you accept. If your owner scoped you to some of the pot's repositories (set_cook_repos), only tasks about those, or about none, come to you. The lease lasts the pot's lease TTL; for long work pass ttlS (seconds, up to a day), and renew with heartbeat before anything that may outlast it (a long build or test run).")
 
 /// Claim one named task.
 /// @param id Task id, e.g. PAY-42.
@@ -43,7 +45,7 @@ mutation procedure claimNext(project: String, labels: String?, menu: String?, st
 /// @param ttlS Lease length in seconds for long work (default: the pot's lease TTL; at most 86400).
 mutation procedure claimTask(id: String, station: String?, ttlS: Int?): ClaimResult
   @allow(auth() != null)
-  @mcp(tool: "claim_task", description: "Claim one named task. Returns the task and a lease {epoch, expires_at}. Pass ttlS (seconds, up to a day) when the work will take longer than the pot's lease TTL.")
+  @mcp(tool: "claim_task", description: "Claim one named task. Returns the task and a lease {epoch, expires_at}. Pass ttlS (seconds, up to a day) when the work will take longer than the pot's lease TTL. A task outside your repository scope is still given to you, with a `warning`.")
 
 /// Extend a lease.
 /// @param id Task id, e.g. PAY-42.
@@ -75,9 +77,10 @@ mutation procedure comment(id: String, body: String, epoch: Int?, station: Strin
 /// @param id Task id, e.g. PAY-42.
 /// @param epoch The lease epoch claim_next / claim_task returned for this task.
 /// @param result What you did and where: summary, PR or commit links, follow-ups.
-mutation procedure complete(id: String, epoch: Int, result: String): TaskView
+/// @param noPropagate true when nothing downstream is affected: do not tell the cooks of repositories that depend on this task's repositories.
+mutation procedure complete(id: String, epoch: Int, result: String, noPropagate: Boolean?): TaskView
   @allow(auth() != null)
-  @mcp(tool: "complete", description: "Mark the task done. Fails with lease_lost if the epoch is stale: then stop and report, your work is not counted.")
+  @mcp(tool: "complete", description: "Mark the task done. Fails with lease_lost if the epoch is stale: then stop and report, your work is not counted. When the task names repositories that others depend on (link_repo), their cooks are told (or a follow-up task is opened for them); pass noPropagate=true when you know nothing downstream is affected.")
 
 /// Give a task back.
 /// @param id Task id, e.g. PAY-42.
@@ -94,3 +97,9 @@ mutation procedure release(id: String, epoch: Int, reason: String): TaskView
 mutation procedure block(id: String, epoch: Int, reason: String): TaskView
   @allow(auth() != null)
   @mcp(tool: "block", description: "Mark the task blocked; it waits for a human to unblock it.")
+
+/// Split a task that names several repositories into one subtask per repository.
+/// @param id Task id, e.g. PAY-42; it must be open and name repositories (repos).
+mutation procedure taskSplitByRepo(id: String): SplitResult
+  @allow(auth() != null)
+  @mcp(tool: "split_by_repo", description: "Split an open task that names several repositories (repos) into one subtask per repository, each with that single repository and the title prefixed [name], so each repository's cook takes its part. The task waits for its subtasks; running it again adds only the missing parts.")

@@ -198,6 +198,8 @@ export interface AgentRow {
   owner: string | null;
   /** Cooks: what a person granted beyond working tasks (plan, manage, admin). */
   grants?: string[];
+  /** Repositories the cook handles per pot (a pot not listed: all of its repositories). */
+  repo_scopes?: { project: string; repos: string[] }[];
   /** Teams the cook is in (empty: it sees no pot). */
   teams?: string[];
   disabled: boolean;

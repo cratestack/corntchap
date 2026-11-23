@@ -17,6 +17,7 @@ pub mod pantry;
 pub mod pass;
 pub mod procs;
 pub mod questions;
+pub mod repos;
 pub mod rest;
 pub mod service;
 pub mod sessions;
