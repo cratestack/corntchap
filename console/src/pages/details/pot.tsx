@@ -17,26 +17,30 @@ const activityLine = (a: ActivityView) => {
   return `${a.tool}${what ? ` ${what}` : ""}`;
 };
 
-/** The one-line config for each client, as in the README ("Connecting agents: one URL per pot, no token"). */
-function mcpLines(url: string) {
+/**
+ * The one-line config for each client, as in the README ("Connecting agents: one URL per pot, no token"). The
+ * server is named after the pot (corntchap-pay), so a repo can carry several pots' servers and each keeps its sign-in.
+ */
+function mcpLines(url: string, key: string) {
+  const name = `corntchap-${key.toLowerCase()}`;
   return [
     {
       id: "opencode",
       title: "OpenCode",
       file: "opencode.json",
-      body: `{ "mcp": { "corntchap": { "type": "remote", "url": "${url}" } } }`,
+      body: `{ "mcp": { "${name}": { "type": "remote", "url": "${url}" } } }`,
     },
     {
       id: "claude",
       title: "Claude Code",
       file: ".mcp.json",
-      body: `{ "mcpServers": { "corntchap": { "type": "http", "url": "${url}" } } }`,
+      body: `{ "mcpServers": { "${name}": { "type": "http", "url": "${url}" } } }`,
     },
     {
       id: "codex",
       title: "Codex",
       file: "shell",
-      body: `codex mcp add corntchap --url ${url} && codex mcp login corntchap`,
+      body: `codex mcp add ${name} --url ${url} && codex mcp login ${name}`,
     },
   ];
 }
@@ -210,7 +214,7 @@ export function PotDetailsPage() {
               <CopyButton text={mcpUrl} label="Copy URL" />
             </div>
             <ul className="mt-3 space-y-3">
-              {mcpLines(mcpUrl).map((s) => (
+              {mcpLines(mcpUrl, key).map((s) => (
                 <li key={s.id}>
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-[12.5px] font-medium">
