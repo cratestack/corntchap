@@ -9,15 +9,15 @@ import type { WakeTargetRow } from "@/lib/data";
 /** "Back to Cooks": the breadcrumb on top of every details page. */
 export function Crumb({ to, parent, here }: { to: string; parent: string; here: string }) {
   return (
-    <nav aria-label="Breadcrumb" className="px-5 pt-5 lg:px-8">
-      <ol className="flex flex-wrap items-center gap-1.5 text-[12.5px] text-muted-foreground">
+    <nav aria-label="Breadcrumb" className="px-3 pt-2 sm:px-5 sm:pt-5 lg:px-8">
+      <ol className="flex flex-wrap items-center gap-1.5 text-[13px] text-muted-foreground sm:text-[12.5px]">
         <li>
-          <Link to={to} className="inline-flex items-center gap-1 rounded-md hover:text-foreground focus-visible:text-foreground">
+          <Link to={to} className="inline-flex h-10 items-center gap-1 rounded-md pr-2 pl-1 hover:text-foreground focus-visible:text-foreground sm:h-auto sm:pl-0">
             <ChevronLeft className="size-3.5" aria-hidden="true" /> Back to {parent}
           </Link>
         </li>
-        <li aria-hidden="true">/</li>
-        <li aria-current="page" className="truncate font-mono text-foreground">
+        <li aria-hidden="true" className="max-sm:hidden">/</li>
+        <li aria-current="page" className="truncate font-mono text-foreground max-sm:sr-only">
           {here}
         </li>
       </ol>

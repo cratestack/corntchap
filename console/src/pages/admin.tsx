@@ -1,30 +1,30 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { Link, Navigate } from "react-router";
-import { Check, ChevronsUpDown, Flame, Loader2, Pencil, Plus, RotateCw, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { useMemo, useState, useEffect, type FormEvent, type ReactNode } from "react";
+import { Link, Navigate, useNavigate } from "react-router";
+import { Check, ChevronRight, Flame, Loader2, Pencil, Plus, Power, RotateCw, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DataTable, PageShell, TD, TH } from "@/components/page";
-import { Avatar, EmptyState, PersonName, RowSkeleton, StateDot, cookState } from "@/components/bits";
-import { CopyButton, TokenDialog } from "@/components/secret-dialog";
-import { DeleteDialog, RenameDialog } from "@/components/rename-delete";
+import {
+  Avatar,
+  EmptyState,
+  FormSheetBody,
+  FormSheetFoot,
+  FormSheetHead,
+  Group,
+  GroupRow,
+  PersonName,
+  RowSkeleton,
+  cookState,
+  formSheetClass,
+} from "@/components/bits";
+import { CopyLine, TokenDialog } from "@/components/secret-dialog";
+import { ConfirmDialog, DeleteDialog, RenameDialog } from "@/components/rename-delete";
 import { PotDeleteDialog, PotRenameDialog } from "@/components/pot-options";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useAgents, useProcCall, useProjects, useTeamChefs, useV1, useV1Call, type AgentRow, type TeamRow, type UserRow } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
@@ -36,6 +36,7 @@ export function AdminOnly({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** A form in a dialog: a bottom sheet on phones (the body scrolls, the button stays put under the keyboard). */
 function FormDialog({
   open,
   onOpenChange,
@@ -59,27 +60,27 @@ function FormDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
+      <DialogContent className={cn(formSheetClass, "sm:max-w-md")}>
         <form
-          className="space-y-4"
+          className="flex min-h-0 flex-1 flex-col"
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
             void onSubmit();
           }}
         >
-          {children}
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={busy || disabled}>
+          <FormSheetHead>
+            <DialogTitle className="text-[22px] leading-tight">{title}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </FormSheetHead>
+          <FormSheetBody className="pb-3">{children}</FormSheetBody>
+          <FormSheetFoot>
+            <Button type="submit" disabled={busy || disabled} className="max-sm:h-11">
               {busy && <Loader2 className="animate-spin" />} {submitLabel}
             </Button>
-          </DialogFooter>
+            <Button type="button" variant="ghost" className="max-sm:h-11" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+          </FormSheetFoot>
         </form>
       </DialogContent>
     </Dialog>
@@ -87,6 +88,132 @@ function FormDialog({
 }
 
 // ------------------------------------------------------------------ Fires (relays)
+
+/** Same rule as the sidebar's fire card: awake within five minutes and not put out is lit. */
+export function fireState(r: AgentRow, now: number) {
+  const st = cookState({ ...r, busy: 0 }, now);
+  const lit = st === "awake";
+  return { lit, label: lit ? "lit" : r.disabled ? "put out" : "banked" };
+}
+
+/** Lit (saffron, pulsing) or not (quiet): the one thing a fire's page has to say. */
+export function FireBadge({ lit, label, className }: { lit: boolean; label: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px] font-semibold uppercase tracking-wider",
+        lit ? "border-corn/60 bg-corn/15 text-corn-text" : label === "put out" ? "border-destructive/40 text-destructive" : "border-border bg-muted/60 text-muted-foreground",
+        className,
+      )}
+    >
+      <span aria-hidden="true" className={cn("size-2 rounded-full", lit ? "live-dot bg-corn" : label === "put out" ? "bg-destructive" : "bg-muted-foreground/50")} />
+      {label}
+    </span>
+  );
+}
+
+export function FireTile({ lit, className }: { lit: boolean; className?: string }) {
+  return (
+    <span className={cn("grid size-11 shrink-0 place-items-center rounded-xl", lit ? "bg-corn/20" : "bg-muted", className)}>
+      <Flame className={cn("size-5", lit ? "text-corn-text" : "text-muted-foreground")} aria-hidden="true" />
+    </span>
+  );
+}
+
+/** Rotate, put out, rename and delete a fire: shared by the fire's own page. */
+export function FireManage({ fire }: { fire: AgentRow }) {
+  const call = useV1Call();
+  const proc = useProcCall();
+  const navigate = useNavigate();
+  const [dlg, setDlg] = useState<"rotate" | "putout" | "rename" | "delete" | null>(null);
+  const [token, setToken] = useState<{ token: string; title: string } | null>(null);
+
+  async function setEnabled(enable: boolean) {
+    try {
+      await call("POST", `/agents/${fire.name}/${enable ? "enable" : "disable"}`);
+      toast.success(enable ? `${fire.name} lit again` : `${fire.name} put out`);
+    } catch (e) {
+      toast.error("Could not change that", { description: errorMessage(e) });
+    }
+  }
+
+  return (
+    <>
+      <Group title="Token" hint="The relay on the machine needs the new token to listen again.">
+        <GroupRow icon={<RotateCw />} label="Rotate token" hint="Make a new token; the old one stops working at once" onClick={() => setDlg("rotate")} />
+      </Group>
+      <Group title="Danger zone" tone="danger">
+        {fire.disabled ? (
+          <GroupRow icon={<Flame />} label="Light again" hint="Let the relay listen for work again" onClick={() => void setEnabled(true)} />
+        ) : (
+          <GroupRow icon={<Power />} label="Put out" hint="The relay stops listening until you light it again" destructive onClick={() => setDlg("putout")} />
+        )}
+        <GroupRow icon={<Pencil />} label="Rename" hint="The relay keeps working: it is known by its token" onClick={() => setDlg("rename")} />
+        <GroupRow icon={<Trash2 />} label="Delete" hint="Its tokens stop working. This cannot be undone" destructive onClick={() => setDlg("delete")} />
+      </Group>
+
+      <ConfirmDialog
+        open={dlg === "rotate"}
+        onOpenChange={(o) => !o && setDlg(null)}
+        title={`Rotate ${fire.name}'s token?`}
+        description="The running relay stops being able to listen until it gets the new token."
+        action="Rotate it"
+        onConfirm={async () => {
+          try {
+            const r = await call<{ token: string }>("POST", `/relays/${fire.name}/rotate`);
+            setToken({ token: r.token, title: `New token for ${fire.name}` });
+          } catch (e) {
+            toast.error("Could not rotate the token", { description: errorMessage(e) });
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={dlg === "putout"}
+        onOpenChange={(o) => !o && setDlg(null)}
+        title={`Put out ${fire.name}?`}
+        description="The relay can no longer listen, so local cooks are not woken by it. You can light it again."
+        action="Put it out"
+        destructive
+        onConfirm={() => setEnabled(false)}
+      />
+      <TokenDialog
+        open={!!token}
+        onOpenChange={(o) => !o && setToken(null)}
+        title={token?.title ?? ""}
+        name={fire.name}
+        token={token?.token ?? null}
+        kind={null}
+        withSnippets={false}
+        hint="Store it as the relay credential: corntchap-cli fire enroll does this for you, or set CORNTCHAP_TOKEN for the relay process."
+      />
+      <RenameDialog
+        open={dlg === "rename"}
+        onOpenChange={(o) => !o && setDlg(null)}
+        title={`Rename ${fire.name}`}
+        description="The relay keeps working: it is known by its token, not by its name."
+        label="New name"
+        current={fire.name}
+        onSave={async (newName) => {
+          await proc("fireRename", { name: fire.name, newName });
+          toast.success(`${fire.name} is now ${newName.toLowerCase()}`);
+          void navigate(`/fires/${newName.toLowerCase()}`, { replace: true });
+        }}
+      />
+      <DeleteDialog
+        open={dlg === "delete"}
+        onOpenChange={(o) => !o && setDlg(null)}
+        title={`Delete ${fire.name}?`}
+        description="Its tokens stop working at once, so the relay on that machine can no longer listen. Enroll a new fire to get going again. This cannot be undone."
+        action="Delete the fire"
+        onConfirm={async () => {
+          await proc("fireDelete", { name: fire.name });
+          toast.success(`${fire.name} deleted`);
+          void navigate("/fires", { replace: true });
+        }}
+      />
+    </>
+  );
+}
 
 export function FiresPage() {
   const relays = useV1<AgentRow[]>("/relays");
@@ -96,9 +223,6 @@ export function FiresPage() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [token, setToken] = useState<{ name: string; token: string; title: string } | null>(null);
-  const [rotating, setRotating] = useState<string | null>(null);
-  const proc = useProcCall();
-  const [fireDialog, setFireDialog] = useState<{ kind: "rename" | "delete"; name: string } | null>(null);
 
   async function create() {
     setBusy(true);
@@ -113,20 +237,24 @@ export function FiresPage() {
       setBusy(false);
     }
   }
-  async function rotate(n: string) {
-    try {
-      const r = await call<{ token: string }>("POST", `/relays/${n}/rotate`);
-      setToken({ name: n, token: r.token, title: `New token for ${n}` });
-    } catch (e) {
-      toast.error("Could not rotate the token", { description: errorMessage(e) });
-    }
-  }
+
+  const rows = relays.data ?? [];
+  const litCount = rows.filter((r) => fireState(r, now).lit).length;
 
   return (
     <PageShell
       eyebrow="Kitchen"
       title="Fires"
-      sub="A fire is a relay running on your laptop: it listens for work and wakes your local cooks. Cloud cooks are woken by a webhook instead."
+      sub={
+        <>
+          A fire is a relay running on your laptop: it listens for work and wakes your local cooks. Cloud cooks are woken by a routine, a GitHub comment or a webhook instead.
+          {rows.length > 0 && (
+            <span className="mt-1 block font-mono text-[12px]">
+              {litCount} of {rows.length} lit
+            </span>
+          )}
+        </>
+      }
       actions={
         <Button onClick={() => setCreating(true)}>
           <Plus /> Light a fire
@@ -135,70 +263,67 @@ export function FiresPage() {
     >
       {relays.isLoading ? (
         <RowSkeleton rows={2} />
-      ) : (relays.data ?? []).length === 0 ? (
+      ) : rows.length === 0 ? (
         <EmptyState title="No fire is lit" action={<Button onClick={() => setCreating(true)}>Light the first fire</Button>}>
-          Enroll a relay on the machine where your cooks live. Run <code className="font-mono">corntchap-cli fire enroll relay-laptop</code> there and approve it in the browser, or make one here.
+          Enroll a relay on the machine where your cooks live: run <code className="font-mono">corntchap-cli fire enroll relay-laptop</code> there and approve it in the browser, or make one here.
         </EmptyState>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-          {relays.data!.map((r) => {
-            const st = cookState({ ...r, busy: 0 }, now);
-            const lit = st === "awake";
-            return (
-              <article key={r.name} className="rounded-[14px] border border-border bg-card p-4" aria-label={`Fire ${r.name}`}>
-                <div className="flex items-start gap-3">
-                  <span className={cn("grid size-10 place-items-center rounded-lg", lit ? "bg-corn/20" : "bg-muted")}>
-                    <Flame className={cn("size-5", lit ? "text-corn-text" : "text-muted-foreground")} aria-hidden="true" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <h2 className="truncate text-[18px] leading-tight"><Link to={`/fires/${r.name}`} className="underline-offset-2 hover:underline focus-visible:underline">{r.name}</Link></h2>
-                    <p className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
-                      <StateDot state={lit ? "cooking" : st} className={lit ? "" : "bg-muted-foreground/50"} />
-                      {lit ? "lit" : r.disabled ? "put out" : "banked"} · seen {fmtAgo(r.last_seen_at, now)}
-                      {r.owner && <> · {r.owner}</>}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-3 flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2">
-                  <code className="min-w-0 flex-1 truncate font-mono text-[11.5px]">corntchap-cli fire enroll {r.name}</code>
-                  <CopyButton size="xs" text={`corntchap-cli fire enroll ${r.name}`} />
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={() => setRotating(r.name)}>
-                    <RotateCw /> Rotate token
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className={r.disabled ? "" : "text-destructive hover:text-destructive"}
-                    onClick={async () => {
-                      try {
-                        await call("POST", `/agents/${r.name}/${r.disabled ? "enable" : "disable"}`);
-                        toast.success(r.disabled ? `${r.name} lit again` : `${r.name} put out`);
-                      } catch (e) {
-                        toast.error("Could not change that", { description: errorMessage(e) });
-                      }
-                    }}
+        <ul className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+          {[...rows]
+            .sort((a, b) => Number(fireState(b, now).lit) - Number(fireState(a, now).lit) || a.name.localeCompare(b.name))
+            .map((r) => {
+              const { lit, label } = fireState(r, now);
+              return (
+                <li key={r.name} className={cn("overflow-hidden rounded-[14px] border bg-card", lit ? "border-corn/50" : "border-border")}>
+                  <Link
+                    to={`/fires/${r.name}`}
+                    aria-label={`Fire ${r.name}, ${label}`}
+                    className="flex min-h-[4.5rem] items-center gap-3 p-4 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/60 active:bg-muted"
                   >
-                    {r.disabled ? "Light again" : "Put out"}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setFireDialog({ kind: "rename", name: r.name })}>
-                    <Pencil /> Rename
-                  </Button>
-                  <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setFireDialog({ kind: "delete", name: r.name })}>
-                    <Trash2 /> Delete
-                  </Button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+                    <FireTile lit={lit} />
+                    <div className="min-w-0 flex-1">
+                      <h2 className="truncate font-display text-[18px] leading-tight">{r.name}</h2>
+                      <p className="mt-0.5 truncate text-[12.5px] text-muted-foreground">
+                        seen {fmtAgo(r.last_seen_at, now)}
+                        {r.owner && <> · {r.owner}</>}
+                      </p>
+                    </div>
+                    <FireBadge lit={lit} label={label} />
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+                  </Link>
+                  <div className="border-t border-border bg-muted/30 p-2.5">
+                    <CopyLine text={`corntchap-cli fire enroll ${r.name}`} />
+                  </div>
+                </li>
+              );
+            })}
+        </ul>
       )}
 
-      <FormDialog open={creating} onOpenChange={setCreating} title="Light a fire" description="Creates a relay and shows its token once. Prefer the device flow on the laptop when you can." onSubmit={create} busy={busy} submitLabel="Light it" disabled={!name}>
+      <FormDialog
+        open={creating}
+        onOpenChange={setCreating}
+        title="Light a fire"
+        description="Creates a relay and shows its token once. Prefer the device flow on the laptop when you can."
+        onSubmit={create}
+        busy={busy}
+        submitLabel="Light it"
+        disabled={!name}
+      >
         <div className="space-y-1.5">
           <Label htmlFor="fire-name">Name</Label>
-          <Input id="fire-name" required autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="relay-laptop" pattern="[A-Za-z0-9][A-Za-z0-9._-]*" />
+          <Input
+            id="fire-name"
+            required
+            autoFocus
+            autoCapitalize="none"
+            spellCheck={false}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="relay-laptop"
+            pattern="[A-Za-z0-9][A-Za-z0-9._-]*"
+            className="h-11 font-mono"
+          />
         </div>
       </FormDialog>
       <TokenDialog
@@ -211,46 +336,13 @@ export function FiresPage() {
         withSnippets={false}
         hint="Store it as the relay credential: corntchap-cli fire enroll does this for you, or set CORNTCHAP_TOKEN for the relay process."
       />
-      <RenameDialog
-        open={fireDialog?.kind === "rename"}
-        onOpenChange={(o) => !o && setFireDialog(null)}
-        title={`Rename ${fireDialog?.name ?? "the fire"}`}
-        description="The relay keeps working: it is known by its token, not by its name."
-        label="New name"
-        current={fireDialog?.name ?? ""}
-        onSave={async (newName) => {
-          await proc("fireRename", { name: fireDialog!.name, newName });
-          toast.success(`${fireDialog!.name} is now ${newName.toLowerCase()}`);
-        }}
-      />
-      <DeleteDialog
-        open={fireDialog?.kind === "delete"}
-        onOpenChange={(o) => !o && setFireDialog(null)}
-        title={`Delete ${fireDialog?.name ?? "the fire"}?`}
-        description="Its tokens stop working at once, so the relay on that machine can no longer listen. Enroll a new fire to get going again. This cannot be undone."
-        action="Delete the fire"
-        onConfirm={async () => {
-          await proc("fireDelete", { name: fireDialog!.name });
-          toast.success(`${fireDialog!.name} deleted`);
-        }}
-      />
-      <AlertDialog open={!!rotating} onOpenChange={(o) => !o && setRotating(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Rotate {rotating}'s token?</AlertDialogTitle>
-            <AlertDialogDescription>The running relay stops being able to listen until it gets the new token.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Not now</AlertDialogCancel>
-            <AlertDialogAction onClick={() => rotating && void rotate(rotating)}>Rotate it</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </PageShell>
   );
 }
 
 // ------------------------------------------------------------------ Pots (admin)
+
+const leaseText = (s: number) => (s >= 120 ? `${Math.round(s / 60)} min` : `${s} s`);
 
 export function PotsAdminPage() {
   const projects = useProjects();
@@ -288,6 +380,8 @@ export function PotsAdminPage() {
     }
   }
 
+  const rows = projects.data ?? [];
+
   return (
     <PageShell
       eyebrow="Admin"
@@ -301,65 +395,101 @@ export function PotsAdminPage() {
     >
       {projects.isLoading ? (
         <RowSkeleton rows={3} />
-      ) : (projects.data ?? []).length === 0 ? (
+      ) : rows.length === 0 ? (
         <EmptyState title="No pots yet" action={<Button onClick={() => setCreating(true)}>Start the first pot</Button>}>
           Make a team first if you have none, then start a pot for it.
         </EmptyState>
       ) : (
-        <DataTable>
-          <thead>
-            <tr>
-              <TH>Key</TH>
-              <TH>Name</TH>
-              <TH>Team</TH>
-              <TH>Lease</TH>
-              <TH className="text-right">Not served</TH>
-              <TH className="text-right">
-                <span className="sr-only">Actions</span>
-              </TH>
-            </tr>
-          </thead>
-          <tbody>
-            {projects.data!.map((p) => (
-              <tr key={p.key}>
-                <TD className="font-mono text-[12.5px] font-bold"><Link to={`/pots/${p.key}/about`} className="underline-offset-2 hover:underline focus-visible:underline">{p.key}</Link></TD>
-                <TD>
-                  {p.name}
-                  {p.repo_url && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{p.repo_url}</span>}
-                </TD>
-                <TD>{p.team ?? "-"}</TD>
-                <TD className="font-mono text-[12px]">{Math.round(p.lease_ttl_s / 60)} min</TD>
-                <TD className="text-right font-mono text-[12.5px]">{p.open + p.claimed + p.blocked}</TD>
-                <TD className="text-right whitespace-nowrap">
-                  <Button size="icon-xs" variant="ghost" aria-label={`Rename ${p.key}`} onClick={() => setPotDialog({ kind: "rename", key: p.key })}>
-                    <Pencil />
-                  </Button>
-                  <Button size="icon-xs" variant="ghost" className="text-destructive hover:text-destructive" aria-label={`Delete ${p.key}`} onClick={() => setPotDialog({ kind: "delete", key: p.key })}>
-                    <Trash2 />
-                  </Button>
-                </TD>
-              </tr>
+        <>
+          {/* phones: two-line rows, a tap opens the pot (rename and delete live there) */}
+          <ul className="divide-y divide-border overflow-hidden rounded-[14px] border border-border bg-card md:hidden">
+            {rows.map((p) => (
+              <li key={p.key}>
+                <Link to={`/pots/${p.key}/about`} className="flex min-h-16 items-center gap-3 px-4 py-3 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/60 active:bg-muted">
+                  <span className="rounded-md bg-muted px-2 py-1 font-mono text-[12.5px] font-bold">{p.key}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[14.5px] font-medium leading-tight">{p.name}</span>
+                    <span className="mt-0.5 block truncate font-mono text-[11.5px] text-muted-foreground">
+                      {p.team ?? "no team"} · lease {leaseText(p.lease_ttl_s)}
+                    </span>
+                  </span>
+                  <span className="text-right font-mono text-[12.5px] leading-tight">
+                    <b>{p.open + p.claimed + p.blocked}</b>
+                    <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">not served</span>
+                  </span>
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+                </Link>
+              </li>
             ))}
-          </tbody>
-        </DataTable>
+          </ul>
+          <DataTable className="max-md:hidden">
+            <thead>
+              <tr>
+                <TH>Key</TH>
+                <TH>Name</TH>
+                <TH>Team</TH>
+                <TH>Lease</TH>
+                <TH className="text-right">Not served</TH>
+                <TH className="text-right">
+                  <span className="sr-only">Actions</span>
+                </TH>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p) => (
+                <tr key={p.key}>
+                  <TD className="font-mono text-[12.5px] font-bold">
+                    <Link to={`/pots/${p.key}/about`} className="underline-offset-2 hover:underline focus-visible:underline">
+                      {p.key}
+                    </Link>
+                  </TD>
+                  <TD>
+                    {p.name}
+                    {p.repo_url && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{p.repo_url}</span>}
+                  </TD>
+                  <TD>{p.team ?? "-"}</TD>
+                  <TD className="font-mono text-[12px]">{Math.round(p.lease_ttl_s / 60)} min</TD>
+                  <TD className="text-right font-mono text-[12.5px]">{p.open + p.claimed + p.blocked}</TD>
+                  <TD className="whitespace-nowrap text-right">
+                    <Button size="icon-sm" variant="ghost" aria-label={`Rename ${p.key}`} onClick={() => setPotDialog({ kind: "rename", key: p.key })}>
+                      <Pencil />
+                    </Button>
+                    <Button size="icon-sm" variant="ghost" className="text-destructive hover:text-destructive" aria-label={`Delete ${p.key}`} onClick={() => setPotDialog({ kind: "delete", key: p.key })}>
+                      <Trash2 />
+                    </Button>
+                  </TD>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        </>
       )}
       {dialogPot && <PotRenameDialog pot={dialogPot} open={potDialog?.kind === "rename"} onOpenChange={(o) => !o && setPotDialog(null)} />}
       {dialogPot && <PotDeleteDialog pot={dialogPot} open={potDialog?.kind === "delete"} onOpenChange={(o) => !o && setPotDialog(null)} />}
-      <FormDialog open={creating} onOpenChange={setCreating} title="New pot" description="A project that tasks live in. Its key prefixes every task id." onSubmit={create} busy={busy} submitLabel="Start the pot" disabled={!key || !name || !(team || teams.data?.[0])}>
-        <div className="grid grid-cols-[7rem_1fr] gap-4">
+      <FormDialog
+        open={creating}
+        onOpenChange={setCreating}
+        title="New pot"
+        description="A project that tasks live in. Its key prefixes every task id."
+        onSubmit={create}
+        busy={busy}
+        submitLabel="Start the pot"
+        disabled={!key || !name || !(team || teams.data?.[0])}
+      >
+        <div className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-3">
           <div className="space-y-1.5">
             <Label htmlFor="pot-key">Key</Label>
-            <Input id="pot-key" required autoFocus value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="PAY" className="font-mono" pattern="[A-Za-z][A-Za-z0-9]{0,9}" />
+            <Input id="pot-key" required autoFocus autoCapitalize="characters" value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="PAY" className="h-11 font-mono" pattern="[A-Za-z][A-Za-z0-9]{0,9}" />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="pot-name">Name</Label>
-            <Input id="pot-name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Payments" />
+            <Input id="pot-name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="Payments" className="h-11" />
           </div>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="pot-team">Team</Label>
           <Select value={team || teams.data?.[0]?.name || ""} onValueChange={setTeam}>
-            <SelectTrigger id="pot-team" className="w-full">
+            <SelectTrigger id="pot-team" className="h-11 w-full">
               <SelectValue placeholder="Make a team first" />
             </SelectTrigger>
             <SelectContent>
@@ -371,15 +501,14 @@ export function PotsAdminPage() {
             </SelectContent>
           </Select>
         </div>
-        <div className="grid grid-cols-[1fr_8rem] gap-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="pot-repo">Repository (optional)</Label>
-            <Input id="pot-repo" type="url" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="https://github.com/acme/payments" />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="pot-ttl">Lease (s)</Label>
-            <Input id="pot-ttl" type="number" min={30} max={86400} value={ttl} onChange={(e) => setTtl(e.target.value)} />
-          </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="pot-repo">Repository (optional)</Label>
+          <Input id="pot-repo" type="url" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="https://github.com/acme/payments" className="h-11" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="pot-ttl">Lease length (seconds)</Label>
+          <Input id="pot-ttl" type="number" inputMode="numeric" min={30} max={86400} value={ttl} onChange={(e) => setTtl(e.target.value)} className="h-11 font-mono" />
+          <p className="text-[12px] text-muted-foreground">How long a scooped task stays held without a heartbeat. 900 is 15 minutes.</p>
         </div>
       </FormDialog>
     </PageShell>
@@ -396,8 +525,6 @@ export function TeamsAdminPage() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
-  const proc = useProcCall();
-  const [teamDialog, setTeamDialog] = useState<{ kind: "rename" | "delete"; team: TeamRow } | null>(null);
 
   async function create() {
     setBusy(true);
@@ -437,124 +564,56 @@ export function TeamsAdminPage() {
           <EmptyState title="No teams">You are in no team yet. An admin creates teams and adds you.</EmptyState>
         )
       ) : (
-        <div className="space-y-4">
+        <ul className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
           {teams.data!.map((t) => (
-            <TeamCard
-              key={t.name}
-              team={t}
-              canManage={me.is_admin || t.role === "owner"}
-              onAdd={() => setAdding(t.name)}
-              onRename={() => setTeamDialog({ kind: "rename", team: t })}
-              onDelete={() => setTeamDialog({ kind: "delete", team: t })}
-            />
+            <TeamCard key={t.name} team={t} canManage={me.is_admin || t.role === "owner"} onAdd={() => setAdding(t.name)} />
           ))}
-        </div>
+        </ul>
       )}
       <FormDialog open={creating} onOpenChange={setCreating} title="New team" description="You become its owner." onSubmit={create} busy={busy} submitLabel="Create team" disabled={!name}>
         <div className="space-y-1.5">
           <Label htmlFor="team-name">Name</Label>
-          <Input id="team-name" required autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="acme" />
+          <Input id="team-name" required autoFocus autoCapitalize="none" value={name} onChange={(e) => setName(e.target.value)} placeholder="acme" className="h-11" />
         </div>
       </FormDialog>
       <AddMember team={adding} onClose={() => setAdding(null)} />
-      <RenameDialog
-        open={teamDialog?.kind === "rename"}
-        onOpenChange={(o) => !o && setTeamDialog(null)}
-        title={`Rename ${teamDialog?.team.name ?? "the team"}`}
-        description="Its pots and chefs stay as they are."
-        label="New name"
-        current={teamDialog?.team.name ?? ""}
-        onSave={async (newName) => {
-          await proc("teamRename", { name: teamDialog!.team.name, newName });
-          toast.success(`${teamDialog!.team.name} is now ${newName.toLowerCase()}`);
-        }}
-      />
-      <DeleteDialog
-        open={teamDialog?.kind === "delete"}
-        onOpenChange={(o) => !o && setTeamDialog(null)}
-        title={`Delete ${teamDialog?.team.name ?? "the team"}?`}
-        description={
-          teamDialog && teamDialog.team.projects.length > 0
-            ? `It still has pots (${teamDialog.team.projects.join(", ")}): delete or empty them first, the server refuses until then.`
-            : "Its memberships go; the people and cooks stay. This cannot be undone."
-        }
-        confirmText={teamDialog?.team.name}
-        action="Delete the team"
-        onConfirm={async () => {
-          await proc("teamDelete", { name: teamDialog!.team.name, confirm: teamDialog!.team.name });
-          toast.success(`${teamDialog!.team.name} deleted`);
-        }}
-      />
     </PageShell>
   );
 }
 
-function TeamCard({
-  team,
-  canManage,
-  onAdd,
-  onRename,
-  onDelete,
-}: {
-  team: TeamRow;
-  canManage: boolean;
-  onAdd: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-}) {
+function TeamCard({ team, canManage, onAdd }: { team: TeamRow; canManage: boolean; onAdd: () => void }) {
   const members = useTeamChefs(team.name);
-  const call = useV1Call();
+  const list = members.data ?? [];
   return (
-    <section className="rounded-[14px] border border-border bg-card" aria-label={`Team ${team.name}`}>
-      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
-        <h2 className="text-[18px]"><Link to={`/teams/${team.name}`} className="underline-offset-2 hover:underline focus-visible:underline">{team.name}</Link></h2>
-        <span className="font-mono text-[11.5px] text-muted-foreground">
-          {team.members} {team.members === 1 ? "chef" : "chefs"} · pots {team.projects.length ? team.projects.join(", ") : "none"}
-        </span>
+    <li className="overflow-hidden rounded-[14px] border border-border bg-card">
+      <Link
+        to={`/teams/${team.name}`}
+        aria-label={`Team ${team.name}`}
+        className="flex min-h-[4.5rem] items-center gap-3 p-4 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/60 active:bg-muted"
+      >
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate font-display text-[18px] leading-tight">{team.name}</h2>
+          <p className="mt-0.5 truncate font-mono text-[11.5px] text-muted-foreground">
+            {team.members} {team.members === 1 ? "chef" : "chefs"} · pots {team.projects.length ? team.projects.join(", ") : "none"}
+          </p>
+        </div>
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+      </Link>
+      <div className="flex min-h-14 items-center justify-between gap-3 border-t border-border px-4 py-2.5">
+        <div className="flex min-w-0 items-center" aria-label={`${team.members} members`}>
+          {list.slice(0, 6).map((m) => (
+            <Avatar key={m.name} name={m.name} className="-ml-1.5 size-7 rounded-full text-[12px] ring-2 ring-card first:ml-0" />
+          ))}
+          {list.length > 6 && <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">+{list.length - 6}</span>}
+          {members.isLoading && <span className="text-[12px] text-muted-foreground">Loading…</span>}
+        </div>
         {canManage && (
-          <div className="ml-auto flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={onAdd}>
-              <UserPlus /> Add chef
-            </Button>
-            <Button size="sm" variant="outline" onClick={onRename}>
-              <Pencil /> Rename
-            </Button>
-            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={onDelete}>
-              <Trash2 /> Delete
-            </Button>
-          </div>
+          <Button variant="outline" size="sm" onClick={onAdd}>
+            <UserPlus /> Add chef
+          </Button>
         )}
       </div>
-      <ul className="divide-y divide-border">
-        {members.isLoading && <li className="px-4 py-3 text-muted-foreground">Loading…</li>}
-        {(members.data ?? []).map((m) => (
-          <li key={m.name} className="flex items-center gap-3 px-4 py-2.5">
-            <Avatar name={m.name} className="size-7 text-[13px]" />
-            <PersonName name={m.name} displayName={m.display_name} />
-            <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{m.kind}</span>
-            <span className="font-mono text-[11px] text-muted-foreground">{m.role === "member" ? "chef" : m.role}</span>
-            {canManage && (
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="ml-auto"
-              aria-label={`Remove ${m.name} from ${team.name}`}
-              onClick={async () => {
-                try {
-                  await call("DELETE", `/teams/${team.name}/members/${m.name}`);
-                  toast.success(`${m.name} left ${team.name}`);
-                } catch (e) {
-                  toast.error("Could not remove them", { description: errorMessage(e) });
-                }
-              }}
-            >
-              <Trash2 />
-            </Button>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
+    </li>
   );
 }
 
@@ -576,11 +635,11 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
   const cooks = useAgents();
   const members = useTeamChefs(team, { enabled: open });
   const [who, setWho] = useState<Candidate | null>(null);
-  const [pick, setPick] = useState(false);
+  const [query, setQuery] = useState("");
   const [role, setRole] = useState("member");
   const [busy, setBusy] = useState(false);
 
-  const { people, cookList } = useMemo(() => {
+  const candidates = useMemo(() => {
     const taken = new Set((members.data ?? []).map((m) => m.name));
     const people: Candidate[] = (users.data ?? [])
       .filter((u) => !u.disabled && !taken.has(u.name))
@@ -588,15 +647,17 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
     const cookList: Candidate[] = (cooks.data ?? [])
       .filter((c) => !c.disabled && !taken.has(c.name))
       .map((c) => ({ principal: c.name, label: c.name, kind: "cook" as const }));
-    return { people, cookList };
+    return [...people, ...cookList];
   }, [users.data, cooks.data, members.data]);
+  const q = query.trim().toLowerCase();
+  const shown = candidates.filter((c) => !q || `${c.label} ${c.display ?? ""} ${c.kind}`.toLowerCase().includes(q));
   const loading = (me.is_admin && users.isLoading) || cooks.isLoading || members.isLoading;
 
   useEffect(() => {
     if (!open) {
       setWho(null);
       setRole("member");
-      setPick(false);
+      setQuery("");
       setHandle("");
     }
   }, [open]);
@@ -626,102 +687,67 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
       }}
     >
       <div className="space-y-1.5">
-        <Label htmlFor="mem-who">Chef</Label>
-        <Popover open={pick} onOpenChange={setPick}>
-          <PopoverTrigger asChild>
-            <Button
-              id="mem-who"
-              type="button"
-              variant="outline"
-              role="combobox"
-              aria-expanded={pick}
-              className="w-full justify-between px-3 font-normal"
-            >
-              {who ? (
-                <span className="flex min-w-0 items-center gap-2">
-                  <Avatar name={who.label} className="size-5 text-[10px]" />
-                  <PersonName name={who.label} displayName={who.display} className="truncate" />
-                  <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{who.kind === "cook" ? "cook" : "person"}</span>
-                </span>
-              ) : (
-                <span className="text-muted-foreground">{loading ? "Loading…" : (me.is_admin ? "Search people and cooks" : "Search your cooks")}</span>
-              )}
-              <ChevronsUpDown className="size-4 shrink-0 opacity-50" aria-hidden="true" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0">
-            <Command>
-              <CommandInput placeholder="Search by name or handle" />
-              <CommandList>
-                <CommandEmpty>{loading ? "Loading…" : "Nobody left to add."}</CommandEmpty>
-                {people.length > 0 && (
-                  <CommandGroup heading="People">
-                    {people.map((c) => (
-                      <CommandItem
-                        key={`u:${c.principal}`}
-                        value={`person ${c.label} ${c.display ?? ""}`}
-                        onSelect={() => {
-                          setWho(c);
-                          setPick(false);
-                        }}
-                      >
-                        <Avatar name={c.label} className="size-5 text-[10px]" />
-                        <PersonName name={c.label} displayName={c.display} className="flex-1 truncate" />
-                        <span className="text-[11px] text-muted-foreground">person</span>
-                        {who?.kind === c.kind && who.principal === c.principal && <Check className="size-4" aria-hidden="true" />}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                )}
-                {cookList.length > 0 && (
-                  <CommandGroup heading="Cooks">
-                    {cookList.map((c) => (
-                      <CommandItem
-                        key={`c:${c.principal}`}
-                        value={`cook ${c.label}`}
-                        onSelect={() => {
-                          setWho(c);
-                          setPick(false);
-                        }}
-                      >
-                        <Avatar name={c.label} className="size-5 text-[10px]" />
-                        <span className="min-w-0 flex-1 truncate">{c.label}</span>
-                        <span className="text-[11px] text-muted-foreground">cook</span>
-                        {who?.kind === c.kind && who.principal === c.principal && <Check className="size-4" aria-hidden="true" />}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                )}
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+        <Label htmlFor="mem-search">Chef</Label>
+        <div className="relative">
+          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <Input
+            id="mem-search"
+            type="search"
+            autoComplete="off"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={me.is_admin ? "Search people and cooks" : "Search your cooks"}
+            className="h-11 pl-9"
+          />
+        </div>
+        <div role="radiogroup" aria-label="Chef" className="scrollbar-thin max-h-56 divide-y divide-border overflow-y-auto rounded-xl border border-border">
+          {loading && <p className="px-3.5 py-3 text-[13px] text-muted-foreground">Loading…</p>}
+          {!loading && shown.length === 0 && <p className="px-3.5 py-3 text-[13px] text-muted-foreground">Nobody left to add.</p>}
+          {shown.map((c) => {
+            const on = who?.kind === c.kind && who.principal === c.principal;
+            return (
+              <button
+                key={`${c.kind}:${c.principal}`}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                onClick={() => setWho(on ? null : c)}
+                className={cn("flex min-h-12 w-full items-center gap-2.5 px-3.5 py-2 text-left transition-colors", on ? "bg-primary/5" : "hover:bg-muted/50")}
+              >
+                <Avatar name={c.label} className="size-7 text-[12px]" />
+                {c.kind === "user" ? <PersonName name={c.label} displayName={c.display} className="min-w-0 flex-1 truncate" /> : <span className="min-w-0 flex-1 truncate font-medium">{c.label}</span>}
+                <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{c.kind === "cook" ? "cook" : "person"}</span>
+                {on && <Check className="size-4 text-primary" aria-hidden="true" />}
+              </button>
+            );
+          })}
+        </div>
       </div>
       {!me.is_admin && (
         <div className="space-y-1.5">
           <Label htmlFor="mem-handle">Or a person's handle</Label>
-          <Input
-            id="mem-handle"
-            value={handle}
-            disabled={!!who}
-            onChange={(e) => setHandle(e.target.value)}
-            placeholder="ada"
-            autoComplete="off"
-            className="font-mono"
-          />
+          <Input id="mem-handle" value={handle} disabled={!!who} onChange={(e) => setHandle(e.target.value)} placeholder="ada" autoComplete="off" autoCapitalize="none" className="h-11 font-mono" />
         </div>
       )}
       <div className="space-y-1.5">
-        <Label htmlFor="mem-role">Role</Label>
-        <Select value={role} onValueChange={setRole}>
-          <SelectTrigger id="mem-role" className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="member">Chef</SelectItem>
-            <SelectItem value="owner">Owner</SelectItem>
-          </SelectContent>
-        </Select>
+        <Label>Role</Label>
+        <div role="radiogroup" aria-label="Role" className="grid grid-cols-2 gap-2">
+          {[
+            { id: "member", label: "Chef" },
+            { id: "owner", label: "Owner" },
+          ].map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              role="radio"
+              aria-checked={role === r.id}
+              onClick={() => setRole(r.id)}
+              className={cn("h-11 rounded-xl border text-[13.5px] font-medium transition-colors", role === r.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50")}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
       </div>
     </FormDialog>
   );
@@ -729,8 +755,21 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
 
 // ------------------------------------------------------------------ Users (admin)
 
+function RoleBadge({ u }: { u: UserRow }) {
+  return u.is_admin ? (
+    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11.5px] font-medium text-primary">
+      <ShieldCheck className="size-3" aria-hidden="true" /> admin
+    </span>
+  ) : (
+    <span className="text-[12.5px] text-muted-foreground">chef</span>
+  );
+}
+
+const signIn = (u: UserRow) => (u.disabled ? "disabled" : u.linked ? "signed in" : "local (no sign-in)");
+
 export function UsersAdminPage() {
   const users = useV1<UserRow[]>("/users");
+  const rows = users.data ?? [];
 
   return (
     <PageShell
@@ -740,39 +779,49 @@ export function UsersAdminPage() {
     >
       {users.isLoading ? (
         <RowSkeleton rows={3} />
+      ) : rows.length === 0 ? (
+        <EmptyState title="No users yet">People show up here after their first sign-in.</EmptyState>
       ) : (
-        <DataTable>
-          <thead>
-            <tr>
-              <TH>User</TH>
-              <TH>Role</TH>
-              <TH>Sign-in</TH>
-            </tr>
-          </thead>
-          <tbody>
-            {(users.data ?? []).map((u) => (
-              <tr key={u.name}>
-                <TD>
-                  <span className="flex items-center gap-2.5">
-                    <Avatar name={u.name} /> <PersonName name={u.name} displayName={u.display_name} />
-                  </span>
-                </TD>
-                <TD>
-                  {u.is_admin ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11.5px] font-medium text-primary">
-                      <ShieldCheck className="size-3" aria-hidden="true" /> admin
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">chef</span>
-                  )}
-                </TD>
-                <TD className="text-[12.5px] text-muted-foreground">
-                  {u.disabled ? "disabled" : u.linked ? "signed in" : "local (no sign-in)"}
-                </TD>
-              </tr>
+        <>
+          <ul className="divide-y divide-border overflow-hidden rounded-[14px] border border-border bg-card md:hidden">
+            {rows.map((u) => (
+              <li key={u.name} className="flex min-h-16 items-center gap-3 px-4 py-3">
+                <Avatar name={u.name} className="size-9 rounded-lg text-[16px]" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[14.5px] leading-tight">
+                    <PersonName name={u.name} displayName={u.display_name} />
+                  </p>
+                  <p className="mt-0.5 text-[12px] text-muted-foreground">{signIn(u)}</p>
+                </div>
+                <RoleBadge u={u} />
+              </li>
             ))}
-          </tbody>
-        </DataTable>
+          </ul>
+          <DataTable className="max-md:hidden">
+            <thead>
+              <tr>
+                <TH>User</TH>
+                <TH>Role</TH>
+                <TH>Sign-in</TH>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((u) => (
+                <tr key={u.name}>
+                  <TD>
+                    <span className="flex items-center gap-2.5">
+                      <Avatar name={u.name} /> <PersonName name={u.name} displayName={u.display_name} />
+                    </span>
+                  </TD>
+                  <TD>
+                    <RoleBadge u={u} />
+                  </TD>
+                  <TD className="text-[12.5px] text-muted-foreground">{signIn(u)}</TD>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        </>
       )}
     </PageShell>
   );

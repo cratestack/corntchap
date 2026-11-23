@@ -1,16 +1,19 @@
-import { useMemo } from "react";
-import { Link, useParams } from "react-router";
+import { useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router";
+import { ChevronRight, Pencil, Trash2 } from "lucide-react";
 import type { ActivityView } from "@corntchap/api";
 import { PageShell } from "@/components/page";
-import { Avatar, EmptyState, IdChip, LabelChip, RowSkeleton } from "@/components/bits";
+import { Avatar, EmptyState, Group, GroupRow, IdChip, LabelChip, RowSkeleton } from "@/components/bits";
+import { PotDeleteDialog, PotRenameDialog } from "@/components/pot-options";
 import { CookUsage, fmtTokens } from "@/components/usage";
-import { CopyButton } from "@/components/secret-dialog";
+import { CodeBlock, CopyButton, CopyLine } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api";
-import { useProc, useProjects, useTeamChefs } from "@/lib/data";
+import { useProc, useProjects, useTeamChefs, useV1, type TeamRow } from "@/lib/data";
+import { useSession } from "@/lib/session";
 import { fmtAgo, useNow } from "@/lib/format";
 import { lastView } from "@/lib/views";
-import { Crumb, Fact, Facts, Quiet, Section, linkClass } from "./common";
+import { Crumb, Quiet, linkClass } from "./common";
 
 const activityLine = (a: ActivityView) => {
   const what = a.files.length > 0 ? `${a.files[0]}${a.files.length > 1 ? ` +${a.files.length - 1}` : ""}` : (a.summary ?? "");
@@ -56,6 +59,11 @@ export function PotDetailsPage() {
   const usage = useProc("usageReport", { project: potKey, days: 7 }, { enabled: !!project });
   const activity = useProc("activityList", { project: potKey, limit: 20 }, { enabled: !!project, refetchMs: 15000 });
   const now = useNow();
+  const me = useSession();
+  const teamsQ = useV1<TeamRow[]>("/teams");
+  const navigate = useNavigate();
+  const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
+  const canManage = me.is_admin || teamsQ.data?.find((t) => t.name === team)?.role === "owner";
 
   const cooks = useMemo(() => (members.data ?? []).filter((m) => m.kind !== "user"), [members.data]);
   const people = useMemo(() => (members.data ?? []).filter((m) => m.kind === "user"), [members.data]);
@@ -67,7 +75,7 @@ export function PotDetailsPage() {
     return (
       <>
         {crumb}
-        <PageShell eyebrow="Pot" title={potKey} className="pt-3">
+        <PageShell eyebrow="Pot" title={potKey} className="pt-2">
           <RowSkeleton rows={3} />
         </PageShell>
       </>
@@ -77,7 +85,7 @@ export function PotDetailsPage() {
     return (
       <>
         {crumb}
-        <PageShell eyebrow="Pot" title={potKey} className="pt-3">
+        <PageShell eyebrow="Pot" title={potKey} className="pt-2">
           <EmptyState title={projects.error ? "Could not reach the pots" : "No such pot"} action={<Button asChild variant="outline"><Link to="/">Back to the kitchen</Link></Button>}>
             {projects.error ? errorMessage(projects.error) : `${potKey} is not a pot you can see.`}
           </EmptyState>
@@ -101,10 +109,10 @@ export function PotDetailsPage() {
       <PageShell
         eyebrow="Pot"
         title={project.name}
-        className="pt-3"
+        className="pt-2 sm:pt-3"
         sub={
           <>
-            <span className="rounded bg-corn px-1.5 py-px font-mono text-[12px] font-bold text-corn-foreground">{project.key}</span>
+            <span className="rounded bg-muted px-1.5 py-px font-mono text-[12px] font-bold text-foreground">{project.key}</span>
             {team && <> · team {team}</>}
           </>
         }
@@ -114,143 +122,143 @@ export function PotDetailsPage() {
           </Button>
         }
       >
-        <div className="space-y-4">
-          <Section title="About">
-            <Facts>
-              <Fact label="Name">{project.name}</Fact>
-              <Fact label="Key">
-                <span className="font-mono font-bold">{project.key}</span>
-              </Fact>
-              <Fact label="Team">
-                {team ? (
-                  <Link to={`/teams/${team}`} className={linkClass}>
-                    {team}
+        <div className="space-y-6">
+          <div className="space-y-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-6 lg:space-y-0 lg:gap-y-6">
+            <Group title="About">
+              <GroupRow label="Name" value={project.name} />
+              <GroupRow label="Key" value={<span className="font-mono font-bold text-foreground">{project.key}</span>} />
+              <GroupRow label="Team" value={team ?? "none"} {...(team ? { to: `/teams/${team}` } : {})} />
+              <GroupRow label="Lease" value={<span className="font-mono">{project.lease_ttl_s >= 120 ? `${Math.round(project.lease_ttl_s / 60)} min` : `${project.lease_ttl_s} s`}</span>} />
+              <GroupRow
+                label="Repository"
+                value={project.repo_url ? <span className="font-mono text-[12px]">{project.repo_url.replace(/^https?:\/\//, "")}</span> : "none set"}
+                {...(project.repo_url ? { onClick: () => window.open(project.repo_url!, "_blank", "noreferrer"), chevron: false } : {})}
+              />
+              <GroupRow
+                label="Questions"
+                value={project.open_questions > 0 ? `${project.open_questions} open` : "none open"}
+                {...(project.open_questions > 0 ? { to: `/pots/${project.key}/questions` } : {})}
+              />
+            </Group>
+
+            <Group
+              title="Tasks"
+              aside={
+                project.unread_pass > 0 ? (
+                  <Link to={`/pots/${project.key}/pass`} className={`text-[12px] ${linkClass}`}>
+                    {project.unread_pass} unread on the pass
                   </Link>
-                ) : (
-                  <span className="text-muted-foreground">none</span>
-                )}
-              </Fact>
-              <Fact label="Lease TTL">
-                <span className="font-mono">{project.lease_ttl_s >= 120 ? `${Math.round(project.lease_ttl_s / 60)} min` : `${project.lease_ttl_s} s`}</span>
-              </Fact>
-              <Fact label="Repository">
-                {project.repo_url ? (
-                  <a href={project.repo_url} target="_blank" rel="noreferrer" className={`font-mono text-[12.5px] ${linkClass}`}>
-                    {project.repo_url}
-                  </a>
-                ) : (
-                  <span className="text-muted-foreground">none set</span>
-                )}
-              </Fact>
-              <Fact label="Questions">
-                {project.open_questions > 0 ? (
-                  <Link to={`/pots/${project.key}/questions`} className={linkClass}>
-                    {project.open_questions} open
-                  </Link>
-                ) : (
-                  <span className="text-muted-foreground">none open</span>
-                )}
-              </Fact>
-            </Facts>
-          </Section>
-
-          <Section title="Tasks" aside={project.unread_pass > 0 ? <Link to={`/pots/${project.key}/pass`} className={`text-[12.5px] ${linkClass}`}>{project.unread_pass} unread on the pass</Link> : undefined}>
-            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              {counts.map((c) => (
-                <li key={c.id} className="rounded-lg border border-border bg-background px-3 py-2">
-                  <p className="font-mono text-[22px] font-bold leading-none tabular-nums">{c.n}</p>
-                  <p className="label-caps mt-1">{c.label}</p>
-                </li>
-              ))}
-            </ul>
-          </Section>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Section title="Cooks who work here" hint={team ? `The cooks of team ${team}, with their stations in ${project.key}.` : "This pot has no team, so no cook sees it."}>
-              {members.isLoading ? (
-                <RowSkeleton rows={2} />
-              ) : cooks.length === 0 ? (
-                <Quiet>No cook is in this pot's team yet.</Quiet>
-              ) : (
-                <ul className="divide-y divide-border">
-                  {cooks.map((c) => {
-                    const mine = (stations.data ?? []).filter((s) => s.cook === c.name);
-                    return (
-                      <li key={c.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
-                        <Avatar name={c.name} className="size-7 text-[13px]" />
-                        <Link to={`/cooks/${c.name}`} className={`text-[13.5px] font-medium ${linkClass}`}>
-                          {c.name}
-                        </Link>
-                        <span className="text-[12px] text-muted-foreground">
-                          {mine.length === 0 ? "no station here" : mine.map((s) => s.label ?? s.directory ?? s.session.slice(0, 8)).join(", ")}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-              {people.length > 0 && (
-                <p className="mt-3 text-[12px] text-muted-foreground">
-                  People: {people.map((p) => p.display_name ?? p.name).join(", ")}
-                </p>
-              )}
-            </Section>
-
-            <Section title="Usage" hint="Estimated tokens corntchap sent for this pot, 7 days.">
-              {usage.data && usage.data.by_cook.length > 0 && (
-                <p className="mb-1 text-[12.5px] text-muted-foreground">
-                  {usage.data.by_cook.slice(0, 4).map((c) => `${c.cook} ~${fmtTokens(c.tokens)}`).join(" · ")}
-                </p>
-              )}
-              <CookUsage report={usage.data} />
-            </Section>
-          </div>
-
-          <Section title="Connect an agent" hint="One URL per pot, no token: the client signs in through your browser on first use.">
-            <div className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2">
-              <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]" aria-label="MCP URL of this pot">
-                {mcpUrl}
-              </code>
-              <CopyButton text={mcpUrl} label="Copy URL" />
-            </div>
-            <ul className="mt-3 space-y-3">
-              {mcpLines(mcpUrl, key).map((s) => (
-                <li key={s.id}>
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-[12.5px] font-medium">
-                      {s.title} <span className="font-mono text-[11.5px] font-normal text-muted-foreground">{s.file}</span>
-                    </p>
-                    <CopyButton size="xs" text={s.body} />
-                  </div>
-                  <pre className="scrollbar-thin mt-1 overflow-x-auto rounded-lg bg-muted/50 px-3 py-2 font-mono text-[11.5px] leading-relaxed">{s.body}</pre>
-                </li>
-              ))}
-            </ul>
-          </Section>
-
-          <Section title="Recent activity" hint="What the stations of this pot reported last.">
-            {activity.isLoading ? (
-              <RowSkeleton rows={2} />
-            ) : (activity.data ?? []).length === 0 ? (
-              <Quiet>Nothing reported yet.</Quiet>
-            ) : (
-              <ul className="space-y-1.5">
-                {activity.data!.map((a) => (
-                  <li key={`${a.station}${a.seq}`} className="flex items-baseline gap-2 text-[12px]">
-                    <LabelChip className="font-mono">{a.cook}</LabelChip>
-                    <span className="min-w-0 flex-1 truncate font-mono" title={a.summary ?? activityLine(a)}>
-                      {activityLine(a)}
-                      {a.count > 1 && <span className="text-muted-foreground"> x{a.count}</span>}
-                    </span>
-                    {a.task && <IdChip id={a.task} className="text-[11px]" />}
-                    <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{fmtAgo(a.at, now)}</span>
+                ) : undefined
+              }
+            >
+              <ul className="grid grid-cols-3 gap-px bg-border">
+                {counts.map((c) => (
+                  <li key={c.id} className="bg-card px-3 py-3">
+                    <p className="font-mono text-[22px] font-bold leading-none tabular-nums">{c.n}</p>
+                    <p className="label-caps mt-1.5">{c.label}</p>
                   </li>
                 ))}
               </ul>
-            )}
-          </Section>
+            </Group>
+          </div>
+
+          <div className="space-y-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-6 lg:space-y-0 lg:gap-y-6">
+            <Group title="Cooks who work here" hint={team ? `The cooks of team ${team}, with their stations in ${project.key}.` : "This pot has no team, so no cook sees it."}>
+              {members.isLoading ? (
+                <div className="p-3">
+                  <RowSkeleton rows={2} />
+                </div>
+              ) : cooks.length === 0 ? (
+                <GroupRow label="No cook yet" hint="No cook is in this pot's team." />
+              ) : (
+                cooks.map((c) => {
+                  const mine = (stations.data ?? []).filter((s) => s.cook === c.name);
+                  return (
+                    <Link
+                      key={c.name}
+                      to={`/cooks/${c.name}`}
+                      className="flex min-h-14 items-center gap-3 px-4 py-2.5 outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted"
+                    >
+                      <Avatar name={c.name} className="size-8 rounded-lg text-[14px]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[14px] font-medium leading-tight">{c.name}</span>
+                        <span className="block truncate text-[12px] text-muted-foreground">
+                          {mine.length === 0 ? "no station here" : mine.map((s) => s.label ?? s.directory ?? s.session.slice(0, 8)).join(", ")}
+                        </span>
+                      </span>
+                      <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+                    </Link>
+                  );
+                })
+              )}
+              {people.length > 0 && <GroupRow label="People" value={people.map((p) => p.display_name ?? p.name).join(", ")} />}
+            </Group>
+
+            <Group title="Usage" hint="Estimated tokens corntchap sent for this pot, 7 days.">
+              <div className="p-3.5 pt-1">
+                {usage.data && usage.data.by_cook.length > 0 && (
+                  <p className="mt-2 font-mono text-[12px] text-muted-foreground">
+                    {usage.data.by_cook.slice(0, 4).map((c) => `${c.cook} ~${fmtTokens(c.tokens)}`).join(" · ")}
+                  </p>
+                )}
+                <CookUsage report={usage.data} />
+              </div>
+            </Group>
+          </div>
+
+          <Group title="Connect an agent" hint="One URL per pot, no token: the client signs in through your browser on first use.">
+            <div className="space-y-4 p-3.5">
+              <CopyLine text={mcpUrl} label="Copy URL" />
+              <ul className="space-y-4">
+                {mcpLines(mcpUrl, key).map((s) => (
+                  <li key={s.id} className="min-w-0">
+                    <p className="text-[13px] font-medium">
+                      {s.title} <span className="font-mono text-[11.5px] font-normal text-muted-foreground">{s.file}</span>
+                    </p>
+                    <CodeBlock label={`${s.title} configuration`} className="mt-1.5">
+                      {s.body}
+                    </CodeBlock>
+                    <CopyButton text={s.body} label={`Copy ${s.title}`} className="mt-2 max-sm:h-11 max-sm:w-full" />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </Group>
+
+          <Group title="Recent activity" hint="What the stations of this pot reported last.">
+            <div className="p-3.5">
+              {activity.isLoading ? (
+                <RowSkeleton rows={2} />
+              ) : (activity.data ?? []).length === 0 ? (
+                <Quiet>Nothing reported yet.</Quiet>
+              ) : (
+                <ul className="space-y-2">
+                  {activity.data!.map((a) => (
+                    <li key={`${a.station}${a.seq}`} className="flex items-baseline gap-2 text-[12px]">
+                      <LabelChip className="font-mono">{a.cook}</LabelChip>
+                      <span className="min-w-0 flex-1 truncate font-mono" title={a.summary ?? activityLine(a)}>
+                        {activityLine(a)}
+                        {a.count > 1 && <span className="text-muted-foreground"> x{a.count}</span>}
+                      </span>
+                      {a.task && <IdChip id={a.task} className="text-[11px]" />}
+                      <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{fmtAgo(a.at, now)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Group>
+
+          {canManage && (
+            <Group title="Danger zone" tone="danger" className="lg:max-w-xl">
+              <GroupRow icon={<Pencil />} label="Rename" hint="The display name only: the key stays" onClick={() => setDialog("rename")} />
+              <GroupRow icon={<Trash2 />} label="Delete" hint="The pot and everything in it, for good" destructive onClick={() => setDialog("delete")} />
+            </Group>
+          )}
         </div>
       </PageShell>
+      <PotRenameDialog pot={project} open={dialog === "rename"} onOpenChange={(o) => !o && setDialog(null)} />
+      <PotDeleteDialog pot={project} open={dialog === "delete"} onOpenChange={(o) => !o && setDialog(null)} onDeleted={() => void navigate("/", { replace: true })} />
     </>
   );
 }

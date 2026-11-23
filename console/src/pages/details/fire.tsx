@@ -1,15 +1,15 @@
 import { useMemo } from "react";
 import { Link, useParams } from "react-router";
-import { Flame } from "lucide-react";
 import { PageShell } from "@/components/page";
-import { Avatar, EmptyState, LabelChip, RowSkeleton, StateDot, cookState } from "@/components/bits";
-import { CopyButton } from "@/components/secret-dialog";
+import { Avatar, EmptyState, Group, GroupRow, RowSkeleton, StatePill, cookState } from "@/components/bits";
+import { CopyLine } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
+import { FireBadge, FireManage, fireState } from "@/pages/admin";
 import { errorMessage } from "@/lib/api";
 import { useAgents, useV1, type AgentRow } from "@/lib/data";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useLive } from "@/lib/live";
-import { Crumb, Fact, Facts, PotLink, Quiet, Section, linkClass, useWakeTargetsOf } from "./common";
+import { Crumb, linkClass, useWakeTargetsOf } from "./common";
 
 export function FireDetailsPage() {
   const { name = "" } = useParams();
@@ -39,7 +39,7 @@ export function FireDetailsPage() {
     return (
       <>
         {crumb}
-        <PageShell eyebrow="Fire" title={name} className="pt-3">
+        <PageShell eyebrow="Fire" title={name} className="pt-2">
           <RowSkeleton rows={3} />
         </PageShell>
       </>
@@ -49,7 +49,7 @@ export function FireDetailsPage() {
     return (
       <>
         {crumb}
-        <PageShell eyebrow="Fire" title={name} className="pt-3">
+        <PageShell eyebrow="Fire" title={name} className="pt-2">
           <EmptyState title={relays.error ? "Could not reach the fires" : "No such fire"} action={<Button asChild variant="outline"><Link to="/fires">Back to Fires</Link></Button>}>
             {relays.error ? errorMessage(relays.error) : `${name} is not a fire you can see.`}
           </EmptyState>
@@ -58,103 +58,96 @@ export function FireDetailsPage() {
     );
   }
 
-  // same rule as the sidebar's fire card: awake within five minutes and not put out
-  const st = cookState({ ...fire, busy: 0 }, now);
-  const lit = st === "awake";
+  const { lit, label } = fireState(fire, now);
   return (
     <>
       {crumb}
       <PageShell
         eyebrow="Fire"
         title={fire.name}
-        className="pt-3"
-        sub="A relay running on a machine of its owner: it listens for work and wakes that owner's local cooks."
-        actions={
-          <Button asChild variant="outline">
-            <Link to="/fires">Manage on Fires</Link>
-          </Button>
+        className="pt-2 sm:pt-3"
+        sub={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <FireBadge lit={lit} label={label} />
+            <span>A relay on a machine of its owner: it listens for work and wakes that owner's local cooks.</span>
+          </span>
         }
       >
-        <div className="space-y-4">
-          <Section title="At a glance">
-            <div className="flex items-start gap-4">
-              <span className={`grid size-12 shrink-0 place-items-center rounded-lg ${lit ? "bg-corn/20" : "bg-muted"}`}>
-                <Flame className={`size-6 ${lit ? "text-corn-text" : "text-muted-foreground"}`} aria-hidden="true" />
-              </span>
-              <Facts>
-                <Fact label="State">
-                  <span className="inline-flex items-center gap-1.5">
-                    <StateDot state={lit ? "cooking" : st} className={lit ? "" : "bg-muted-foreground/50"} />
-                    {lit ? "lit" : fire.disabled ? "put out" : "stale, banked"}
-                  </span>
-                </Fact>
-                <Fact label="Last seen">{fmtAgo(fire.last_seen_at, now)}</Fact>
-                <Fact label="Owner">{fire.owner ?? <span className="text-muted-foreground">none</span>}</Fact>
-                <Fact label="Enroll">
-                  <span className="inline-flex flex-wrap items-center gap-2">
-                    <code className="font-mono text-[11.5px]">corntchap-cli fire enroll {fire.name}</code>
-                    <CopyButton size="xs" text={`corntchap-cli fire enroll ${fire.name}`} />
-                  </span>
-                </Fact>
-              </Facts>
-            </div>
-          </Section>
+        <div className="space-y-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-6 lg:space-y-0 lg:gap-y-6">
+          <div className="space-y-6">
+            <Group title="Overview">
+              <GroupRow
+                label="State"
+                hint={lit ? "Heard from in the last five minutes" : label === "put out" ? "Put out: it cannot listen" : "Not heard from lately"}
+                trailing={<FireBadge lit={lit} label={label} />}
+              />
+              <GroupRow label="Last seen" value={fmtAgo(fire.last_seen_at, now)} />
+              <GroupRow label="Owner" value={fire.owner ?? "none"} />
+            </Group>
 
-          <Section title="Cooks it wakes" hint="The owner's cooks that have a relay wake target.">
-            {agents.isLoading || wake.isLoading ? (
-              <RowSkeleton rows={2} />
-            ) : wakes.length === 0 ? (
-              <Quiet>No cook of {fire.owner ?? "its owner"} has a relay wake target. Add one on the cook, or run corntchap-cli cook setup.</Quiet>
-            ) : (
-              <ul className="divide-y divide-border">
-                {wakes.map((a) => {
+            <Group title="Enroll on a machine" hint="Run it where the cooks live, then approve the device in the browser.">
+              <div className="p-3">
+                <CopyLine text={`corntchap-cli fire enroll ${fire.name}`} />
+              </div>
+            </Group>
+
+            <Group title="Cooks it wakes" hint="The owner's cooks that have a relay wake target.">
+              {agents.isLoading || wake.isLoading ? (
+                <div className="p-3">
+                  <RowSkeleton rows={2} />
+                </div>
+              ) : wakes.length === 0 ? (
+                <GroupRow label="None yet" hint={`No cook of ${fire.owner ?? "its owner"} has a relay wake target. Add one on the cook, or run corntchap-cli cook setup.`} />
+              ) : (
+                wakes.map((a) => {
                   const cs = cookState(a, now);
                   return (
-                    <li key={a.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
-                      <Avatar name={a.name} className="size-7 text-[13px]" />
-                      <Link to={`/cooks/${a.name}`} className={`text-[13.5px] font-medium ${linkClass}`}>
-                        {a.name}
-                      </Link>
-                      <span className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
-                        <StateDot state={cs} /> {cs}
+                    <Link
+                      key={a.name}
+                      to={`/cooks/${a.name}`}
+                      className="flex min-h-14 items-center gap-3 px-4 py-2.5 outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted"
+                    >
+                      <Avatar name={a.name} className="size-8 rounded-lg text-[14px]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[14px] font-medium leading-tight">{a.name}</span>
+                        {(a.teams ?? []).length > 0 && <span className="block truncate font-mono text-[11px] text-muted-foreground">{(a.teams ?? []).join(" · ")}</span>}
                       </span>
-                      {(a.teams ?? []).length > 0 && (
-                        <span className="flex flex-wrap gap-1">
-                          {(a.teams ?? []).map((t) => (
-                            <LabelChip key={t}>{t}</LabelChip>
-                          ))}
-                        </span>
-                      )}
-                    </li>
+                      <StatePill state={cs} />
+                    </Link>
                   );
-                })}
-              </ul>
-            )}
-          </Section>
+                })
+              )}
+            </Group>
+          </div>
 
-          <Section title="Recent runs" hint="Each time the relay started one of these cooks and when it finished.">
-            {runs.length === 0 ? (
-              <Quiet>No run reported since this page's feed began.</Quiet>
-            ) : (
-              <ul className="divide-y divide-border">
-                {runs.map((e) => {
-                  const agent = e.payload.agent ?? e.actor ?? "";
-                  const code = (e.payload as { exit_code?: number | null }).exit_code;
-                  const started = e.kind === "run.started";
-                  return (
-                    <li key={e.seq} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-[13px]">
-                      <Link to={`/cooks/${agent}`} className={`font-medium ${linkClass}`}>
+          <div className="space-y-6">
+            <Group title="Recent runs" hint="Each time the relay started one of these cooks and when it finished.">
+              {runs.length === 0 && <GroupRow label="No run reported" hint="Since this page's feed began." />}
+              {runs.map((e) => {
+                const agent = e.payload.agent ?? e.actor ?? "";
+                const code = (e.payload as { exit_code?: number | null }).exit_code;
+                const started = e.kind === "run.started";
+                return (
+                  <GroupRow
+                    key={e.seq}
+                    label={
+                      <Link to={`/cooks/${agent}`} className={linkClass}>
                         {agent}
                       </Link>
-                      <span className="text-muted-foreground">{started ? "started" : code ? `finished with exit code ${code}` : "finished"}</span>
-                      {e.project && <PotLink pot={e.project} />}
-                      <span className="ml-auto font-mono text-[10.5px] text-muted-foreground">{fmtAgo(e.at, now)}</span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Section>
+                    }
+                    hint={
+                      <>
+                        {started ? "started" : code ? `finished with exit code ${code}` : "finished"}
+                        {e.project && <span className="font-mono"> · {e.project}</span>}
+                      </>
+                    }
+                    value={<span className="font-mono text-[11px]">{fmtAgo(e.at, now)}</span>}
+                  />
+                );
+              })}
+            </Group>
+            <FireManage fire={fire} />
+          </div>
         </div>
       </PageShell>
     </>

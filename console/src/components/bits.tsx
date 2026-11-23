@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router";
+import { ChevronRight } from "lucide-react";
 import type { TaskView } from "@corntchap/api";
 import { cn } from "@/lib/utils";
 import { colorFor, fmtLease, initial, leaseLeftMs, useNow, type Bucket } from "@/lib/format";
@@ -176,6 +178,191 @@ export function RowSkeleton({ rows = 4 }: { rows?: number }) {
           <div className="hidden h-2 w-20 animate-pulse rounded-full bg-muted sm:block" />
         </div>
       ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- settings-style lists (phone first)
+
+/** A titled, grouped list: mono caps label above, one rounded card of rows below (Linear-style settings). */
+export function Group({
+  title,
+  hint,
+  aside,
+  children,
+  className,
+  tone,
+}: {
+  title: string;
+  hint?: ReactNode;
+  aside?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  tone?: "danger";
+}) {
+  return (
+    <section aria-label={title} className={cn("min-w-0", className)}>
+      <div className="mb-1.5 flex items-baseline justify-between gap-3 px-1">
+        <h2 className={cn("label-caps", tone === "danger" && "text-destructive")}>{title}</h2>
+        {aside}
+      </div>
+      <div
+        className={cn(
+          "divide-y divide-border overflow-hidden rounded-[14px] border bg-card",
+          tone === "danger" ? "border-destructive/30 divide-destructive/15" : "border-border",
+        )}
+      >
+        {children}
+      </div>
+      {hint && <p className="mt-1.5 px-1 text-[12px] leading-snug text-muted-foreground">{hint}</p>}
+    </section>
+  );
+}
+
+/**
+ * A row of a Group, at least 48px: icon, label (with an optional second line), a value and a chevron.
+ * With `to` it is a link, with `onClick` a button, otherwise plain.
+ */
+export function GroupRow({
+  icon,
+  label,
+  hint,
+  value,
+  trailing,
+  to,
+  onClick,
+  chevron,
+  destructive,
+  disabled,
+  className,
+}: {
+  icon?: ReactNode;
+  label: ReactNode;
+  hint?: ReactNode;
+  value?: ReactNode;
+  trailing?: ReactNode;
+  to?: string;
+  onClick?: () => void;
+  chevron?: boolean;
+  destructive?: boolean;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const interactive = !!to || !!onClick;
+  const cls = cn(
+    "flex min-h-12 w-full min-w-0 items-center gap-3 px-4 py-2.5 text-left",
+    interactive && "outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted disabled:opacity-50",
+    destructive && "text-destructive",
+    className,
+  );
+  const body = (
+    <>
+      {icon && (
+        <span
+          aria-hidden="true"
+          className={cn("grid size-8 shrink-0 place-items-center rounded-lg [&_svg]:size-4", destructive ? "bg-destructive/10" : "bg-muted text-muted-foreground")}
+        >
+          {icon}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className={cn("block text-[14px] font-medium leading-tight", !destructive && "text-foreground")}>{label}</span>
+        {hint && <span className="mt-0.5 block text-[12px] leading-snug font-normal text-muted-foreground">{hint}</span>}
+      </span>
+      {value !== undefined && value !== null && <span className="ml-auto min-w-0 max-w-[55%] truncate text-right text-[13px] text-muted-foreground">{value}</span>}
+      {trailing}
+      {interactive && chevron !== false && <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />}
+    </>
+  );
+  if (to) {
+    return (
+      <Link to={to} className={cls}>
+        {body}
+      </Link>
+    );
+  }
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} disabled={disabled} className={cls}>
+        {body}
+      </button>
+    );
+  }
+  return <div className={cls}>{body}</div>;
+}
+
+/** Filter chips for a list: one is on; each shows its count in mono. 40px tall on touch. */
+export function FilterChips<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+  className,
+}: {
+  options: { id: T; label: string; count?: number }[];
+  value: T;
+  onChange: (v: T) => void;
+  label: string;
+  className?: string;
+}) {
+  return (
+    <div role="group" aria-label={label} className={cn("flex flex-wrap gap-1.5", className)}>
+      {options.map((o) => {
+        const on = o.id === value;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(o.id)}
+            className={cn(
+              "inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-[13px] font-medium transition-colors pointer-coarse:h-10",
+              on ? "border-foreground bg-foreground text-background" : "border-border bg-card text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {o.label}
+            {o.count !== undefined && <span className={cn("font-mono text-[11px] tabular-nums", on ? "opacity-70" : "opacity-60")}>{o.count}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A cook's state as a pill: saffron only while it is live. */
+export function StatePill({ state, label, className }: { state: CookState; label?: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px] font-medium",
+        state === "cooking" || state === "awake" ? "border-corn/60 bg-corn/15" : "border-border bg-muted/60 text-muted-foreground",
+        state === "disabled" && "border-destructive/40 text-destructive",
+        className,
+      )}
+    >
+      <StateDot state={state} className={state === "idle" ? "bg-muted-foreground/50" : ""} />
+      {label ?? STATE_LABEL[state]}
+    </span>
+  );
+}
+
+/** The parts of a bottom sheet on phones (and a plain dialog above): a fixed head, a body that scrolls, a sticky footer. */
+export const formSheetClass = "flex max-h-[92dvh] flex-col gap-0 overflow-hidden p-0 max-sm:overflow-hidden";
+export function FormSheetHead({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cn("flex flex-col gap-2 px-6 pt-6 pb-3 pr-12 text-left max-sm:pt-7", className)}>{children}</div>;
+}
+export function FormSheetBody({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cn("min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-2", className)}>{children}</div>;
+}
+export function FormSheetFoot({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-2 border-t border-border bg-card px-6 pt-3 pb-[calc(0.875rem+env(safe-area-inset-bottom))] sm:flex-row-reverse sm:justify-start sm:pb-4",
+        className,
+      )}
+    >
+      {children}
     </div>
   );
 }

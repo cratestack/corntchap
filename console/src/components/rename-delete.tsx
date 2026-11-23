@@ -209,3 +209,75 @@ export function DeleteDialog({
     </AlertDialog>
   );
 }
+
+/**
+ * Ask before something with consequences (rotate a token, disable a cook, remove a member): a bottom sheet on phones.
+ * `onConfirm` may throw; its message is shown in the sheet and the sheet stays open.
+ */
+export function ConfirmDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  action,
+  cancel = "Not now",
+  destructive,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  title: string;
+  description: ReactNode;
+  action: string;
+  cancel?: string;
+  destructive?: boolean;
+  onConfirm: () => Promise<void> | void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setError(null);
+  }
+  async function go() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm();
+      onOpenChange(false);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <AlertDialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && (
+          <p role="alert" className="text-[12.5px] text-destructive">
+            {error}
+          </p>
+        )}
+        <AlertDialogFooter className="max-sm:[&>button]:h-11">
+          <AlertDialogCancel disabled={busy}>{cancel}</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={busy}
+            className={destructive ? "bg-destructive text-white hover:bg-destructive/90" : undefined}
+            onClick={(e) => {
+              e.preventDefault();
+              void go();
+            }}
+          >
+            {busy && <Loader2 className="animate-spin" />} {action}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
