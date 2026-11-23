@@ -356,7 +356,7 @@ pub async fn authorize(
             "no such pot, or you are not in its team",
         ));
     }
-    let cooks: Vec<(String, Option<String>, Vec<String>)> = sqlx::query_as(
+    let mut cooks: Vec<(String, Option<String>, Vec<String>)> = sqlx::query_as(
         "select a.name, a.agent_kind,
                 coalesce(array(select t.name from team_members m join teams t on t.id = m.team_id where m.principal_id = a.id order by t.name), '{}')
          from principals a where a.kind = 'agent' and a.owner_id = $1 and a.disabled_at is null order by a.name",
@@ -422,6 +422,15 @@ pub async fn authorize(
                 .as_ref()
                 .is_none_or(|(_, _, team, _, _)| teams.iter().any(|t| t == team))
     };
+    // the cooks that can work in the pot first (the client's kind before others), then the rest
+    let in_pot = |teams: &[String]| {
+        pot_row
+            .as_ref()
+            .is_none_or(|(_, _, team, _, _)| teams.iter().any(|t| t == team))
+    };
+    cooks.sort_by_key(|(name, ak, teams)| {
+        (!in_pot(teams), ak.as_deref() != Some(kind), name.clone())
+    });
     let preselect = cooks.iter().position(|(_, ak, t)| fits(ak, t));
     let mut options = String::new();
     for (i, (name, ak, teams)) in cooks.iter().enumerate() {
@@ -453,7 +462,7 @@ pub async fn authorize(
         .collect::<String>();
     let add_team = match &pot_row {
         Some((_, _, team, _, true)) => format!(
-            "<label class=choice><input type=checkbox name=add_team value=1 checked> Add the cook to team <b>{}</b> if it is not in it</label>",
+            "<label class=choice><input type=checkbox name=add_team value=1 checked><span>Add the cook to team <b>{}</b> if it is not in it</span></label>",
             esc(team)
         ),
         _ => String::new(),

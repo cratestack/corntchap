@@ -73,6 +73,24 @@ code{font:12.5px "Space Mono",ui-monospace,monospace;background:var(--muted);pad
 select{font:13px Inter,sans-serif;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--fg)}
 small{color:var(--fg2)}
 .ok{color:var(--ok)}.bad{color:var(--bad)}
+/* phones: a short indigo band, the form first; full-width actions, 48px targets, safe areas */
+@media (max-width:859px){
+body{grid-template-rows:auto 1fr}
+.side .in{padding:18px 20px 20px;padding-top:max(18px,env(safe-area-inset-top));gap:10px}
+.side h1{font-size:26px;margin-top:6px}
+.side p{font-size:14px;max-width:none}
+.who{padding-top:12px}
+.main{place-items:start center;padding:28px 20px;padding-bottom:max(28px,env(safe-area-inset-bottom))}
+.main h1{font-size:26px}
+.code{font-size:34px}
+.actions{flex-direction:column;align-items:stretch}
+.actions form{display:flex;flex-direction:column}
+button,.btn{min-height:48px;text-align:center;font-size:15px}
+.actions>button,.actions>.btn,.actions form button{width:100%}
+.choice{min-height:48px}
+select,.newcook input.plain{min-height:44px;font-size:16px}
+input[type=text],input:not([type]){font-size:24px}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 "#;
 
@@ -104,7 +122,7 @@ pub fn render(title: &str, left: Left<'_>, right: &str) -> Html<String> {
         })
         .unwrap_or_default();
     Html(format!(
-        "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><meta name=color-scheme content=\"light dark\"><title>{title} · corntchap</title><style>{CSS}</style></head><body>\
+        "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1,viewport-fit=cover\"><meta name=theme-color content=\"#15183a\"><meta name=color-scheme content=\"light dark\"><title>{title} · corntchap</title><style>{CSS}</style></head><body>\
          <aside class=side>{WAX}<div class=in><div class=brand>{LOGO}<span>corntchap</span></div><h1>{headline}</h1><p>{sub}</p>{who}</div></aside>\
          <main class=main><div class=card>{right}</div></main></body></html>",
         title = esc(title),

@@ -23,7 +23,8 @@ if (page.url().includes("/realms/")) {
 }
 await page.waitForSelector("#main", { timeout: 30000 });
 await page.goto(APP + path);
-await page.waitForSelector("#main");
+// server-rendered pages (sign-in, device approval, OAuth consent) have no console shell
+await page.waitForSelector("#main", { timeout: 5000 }).catch(() => {});
 await page.waitForTimeout(1200);
 for (const s of steps) {
   const [k, ...rest] = s.split(":");
