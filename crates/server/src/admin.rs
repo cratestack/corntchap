@@ -1122,3 +1122,348 @@ pub async fn operator_token(db: &PgPool, name: &str, ttl_secs: Option<i64>) -> R
     tx.commit().await?;
     Ok(t)
 }
+
+// ---- rename and delete: cooks, fires, pots, teams ----
+
+/// The cook (`kind = "agent"`) or fire (`"relay"`) `name`, if `p` may manage it: its id.
+async fn manage_target(
+    c: &mut PgConnection,
+    p: &Principal,
+    name: &str,
+    kind: &str,
+) -> Result<Uuid> {
+    let (id, k) = managed(c, p, name).await?;
+    if k != kind {
+        return Err(Error::NotFound(format!(
+            "no {} named {name}",
+            if kind == "agent" { "cook" } else { "fire" }
+        )));
+    }
+    Ok(id)
+}
+
+/// Rename a cook (`kind = "agent"`) or a fire (`"relay"`): its owner or an admin. The id never changes, so
+/// tokens, stations, leases, wake targets and team memberships keep working. What stores the old *name* as
+/// text does not follow: `@old` in comments and pass messages, the old name in earlier events' payloads,
+/// and the `agent = "old"` of a fire's `[[target]]` in config.toml.
+pub async fn rename_principal(
+    db: &PgPool,
+    p: &Principal,
+    kind: &str,
+    name: &str,
+    new_name: &str,
+) -> Result<Value> {
+    let p = &acting(db, p).await?;
+    let new = norm_handle_syntax(new_name)?;
+    let mut tx = db.begin().await?;
+    let id = manage_target(&mut tx, p, name, kind).await?;
+    let old: String = sqlx::query_scalar("select name from principals where id = $1 for update")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if old == new {
+        return Ok(json!({"name": new, "previous": old}));
+    }
+    ensure_not_a_handle(&mut tx, &new).await?;
+    let done = sqlx::query("update principals set name = $2 where id = $1")
+        .bind(id)
+        .bind(&new)
+        .execute(&mut *tx)
+        .await;
+    match done {
+        Ok(_) => {}
+        Err(e) if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("23505") => {
+            return Err(Error::Conflict(format!("the name {new} is already taken")));
+        }
+        Err(e) => return Err(e.into()),
+    }
+    crate::service::emit(
+        &mut tx,
+        None,
+        None,
+        "principal.renamed",
+        Some(id),
+        json!({"from": old, "to": new, "kind": kind}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(json!({"name": new, "previous": old}))
+}
+
+/// Delete a cook or a fire: its owner or an admin, never the caller itself. A cook's live leases go first
+/// (tasks back to `open`, as `release` does, with a `task.released` event); then the principal row goes and
+/// tokens, stations, wake targets, team memberships, cloud setups, messages sent *to* it, usage and OAuth
+/// grants cascade. Rows that only record who did something (comment, task and checklist authors, question
+/// and pass-message authors, uploader) become null (migration 0022), and the events it caused keep its name
+/// in their payload (`actor_name`), so history survives.
+pub async fn delete_principal(db: &PgPool, p: &Principal, kind: &str, name: &str) -> Result<Value> {
+    let caller = p.id;
+    let p = &acting(db, p).await?;
+    let mut tx = db.begin().await?;
+    let id = manage_target(&mut tx, p, name, kind).await?;
+    if id == caller {
+        return Err(Error::Forbidden(
+            "a cook cannot delete itself: ask its owner".into(),
+        ));
+    }
+    let shown: String = sqlx::query_scalar("select name from principals where id = $1 for update")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    // every lease it holds, expired or not
+    let held: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "select id, project_id from tasks where claimed_by = $1 and status = 'claimed' for update",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    for (task, project) in &held {
+        sqlx::query(
+            "update tasks set status = 'open', claimed_by = null, lease_expires_at = null,
+                lease_epoch = lease_epoch + 1, updated_at = now()
+             where id = $1",
+        )
+        .bind(task)
+        .execute(&mut *tx)
+        .await?;
+        crate::service::emit(
+            &mut tx,
+            Some(*project),
+            Some(*task),
+            "task.released",
+            Some(id),
+            json!({"reason": format!("{shown} was deleted")}),
+        )
+        .await?;
+    }
+    sqlx::query(
+        "update events set payload = payload || jsonb_build_object('actor_name', $2::text) where actor_id = $1",
+    )
+    .bind(id)
+    .bind(&shown)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("delete from principals where id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    crate::service::emit(
+        &mut tx,
+        None,
+        None,
+        "principal.deleted",
+        Some(p.id),
+        json!({"name": shown, "kind": kind, "released": held.len()}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(json!({"name": shown, "released": held.len()}))
+}
+
+/// A pot of a team `p` owns (admins: any): (project id, display name).
+async fn owned_project(c: &mut PgConnection, p: &Principal, key: &str) -> Result<(Uuid, String)> {
+    let key = key.trim().to_uppercase();
+    let row: Option<(Uuid, Uuid, String)> =
+        sqlx::query_as("select id, team_id, name from projects where key = $1")
+            .bind(&key)
+            .fetch_optional(&mut *c)
+            .await?;
+    let Some((id, team, name)) = row else {
+        return Err(Error::NotFound(format!("pot {key} not found")));
+    };
+    let (owner, member): (bool, bool) = sqlx::query_as(
+        "select coalesce(bool_or(role = 'owner'), false), count(*) > 0 from team_members
+         where team_id = $1 and principal_id = $2",
+    )
+    .bind(team)
+    .bind(p.id)
+    .fetch_one(c)
+    .await?;
+    if p.is_admin || (owner && p.is_user()) {
+        Ok((id, name))
+    } else if member {
+        Err(Error::Forbidden(
+            "only an owner of the pot's team (or an admin) can do that".into(),
+        ))
+    } else {
+        Err(Error::NotFound(format!("pot {key} not found")))
+    }
+}
+
+/// Change a pot's display name. The key never changes: it is part of every task id (`PAY-12`), of file
+/// references, of saved links and of the `/mcp/<KEY>` URLs agents are configured with, and it is written
+/// into comments, messages and events, so changing it would break all of those at once.
+pub async fn rename_project(db: &PgPool, p: &Principal, key: &str, name: &str) -> Result<Value> {
+    let p = &acting(db, p).await?;
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 120 {
+        return invalid("a pot's name is 1 to 120 characters");
+    }
+    let mut tx = db.begin().await?;
+    let (id, old) = owned_project(&mut tx, p, key).await?;
+    sqlx::query("update projects set name = $2 where id = $1")
+        .bind(id)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+    crate::service::emit(
+        &mut tx,
+        Some(id),
+        None,
+        "project.renamed",
+        Some(p.id),
+        json!({"from": old, "to": name}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(json!({"key": key.trim().to_uppercase(), "name": name, "previous": old}))
+}
+
+/// Delete a pot and everything in it (owners of its team, admins; `confirm` must be the key). The database
+/// cascades (tasks, checklists, comments, pass, pantry, views, menus, questions, stations, files' metadata,
+/// tokens scoped to the pot, usage: migration 0022 adds the task cascade); `events` and its daily counts
+/// carry no foreign key and are deleted here. Stored file objects are removed best effort after the commit.
+pub async fn delete_project(
+    db: &PgPool,
+    storage: Option<&crate::files::Storage>,
+    p: &Principal,
+    key: &str,
+    confirm: &str,
+) -> Result<Value> {
+    let p = &acting(db, p).await?;
+    let key = key.trim().to_uppercase();
+    if confirm.trim().to_uppercase() != key {
+        return invalid(format!(
+            "type the pot's key ({key}) as `confirm` to delete it and everything in it"
+        ));
+    }
+    let mut tx = db.begin().await?;
+    let (id, name) = owned_project(&mut tx, p, &key).await?;
+    let keys: Vec<String> =
+        sqlx::query_scalar("select storage_key from files where project_id = $1")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+    let tasks: i64 = sqlx::query_scalar("select count(*) from tasks where project_id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("delete from events where project_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("delete from event_daily_counts where project_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("delete from projects where id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    crate::service::emit(
+        &mut tx,
+        None,
+        None,
+        "project.deleted",
+        Some(p.id),
+        json!({"key": key, "name": name, "tasks": tasks}),
+    )
+    .await?;
+    tx.commit().await?;
+    let (mut gone, mut left) = (0, 0);
+    for k in &keys {
+        match storage {
+            Some(s) => match s.delete(k).await {
+                Ok(()) => gone += 1,
+                Err(e) => {
+                    tracing::warn!("deleting {k} from storage after deleting pot {key}: {e}");
+                    left += 1;
+                }
+            },
+            None => left += 1,
+        }
+    }
+    Ok(json!({"key": key, "name": name, "tasks": tasks, "files": gone, "files_left": left}))
+}
+
+/// Rename a team: its owners or an admin.
+pub async fn rename_team(db: &PgPool, p: &Principal, name: &str, new_name: &str) -> Result<Value> {
+    let p = &acting(db, p).await?;
+    let new = norm_name(new_name)?;
+    let mut tx = db.begin().await?;
+    let id = owned_team(&mut tx, p, name).await?;
+    let old: String = sqlx::query_scalar("select name from teams where id = $1 for update")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if old != new {
+        sqlx::query("update teams set name = $2 where id = $1")
+            .bind(id)
+            .bind(&new)
+            .execute(&mut *tx)
+            .await
+            .map_err(
+                |e| match e.as_database_error().and_then(|d| d.code()).as_deref() {
+                    Some("23505") => Error::Conflict(format!("a team named {new} already exists")),
+                    _ => e.into(),
+                },
+            )?;
+        crate::service::emit(
+            &mut tx,
+            None,
+            None,
+            "team.renamed",
+            Some(p.id),
+            json!({"from": old, "to": new}),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(json!({"name": new, "previous": old}))
+}
+
+/// Delete a team with no pots (owners, admins; `confirm` must be the team's name). Memberships go with it.
+pub async fn delete_team(db: &PgPool, p: &Principal, name: &str, confirm: &str) -> Result<Value> {
+    let p = &acting(db, p).await?;
+    let name = name.trim().to_lowercase();
+    if confirm.trim().to_lowercase() != name {
+        return invalid(format!(
+            "type the team's name ({name}) as `confirm` to delete it"
+        ));
+    }
+    let mut tx = db.begin().await?;
+    let id = owned_team(&mut tx, p, &name).await?;
+    let pots: Vec<String> =
+        sqlx::query_scalar("select key from projects where team_id = $1 order by key")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+    if !pots.is_empty() {
+        return Err(Error::Conflict(format!(
+            "team {name} still has pots ({}): delete them first",
+            pots.join(", ")
+        )));
+    }
+    sqlx::query("delete from teams where id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(
+            |e| match e.as_database_error().and_then(|d| d.code()).as_deref() {
+                // a pot was created between the check and the delete
+                Some("23503") => Error::Conflict(format!("team {name} still has pots")),
+                _ => e.into(),
+            },
+        )?;
+    crate::service::emit(
+        &mut tx,
+        None,
+        None,
+        "team.deleted",
+        Some(p.id),
+        json!({"name": name}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(json!({"name": name, "released": 0}))
+}

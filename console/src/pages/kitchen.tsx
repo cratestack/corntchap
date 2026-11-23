@@ -36,6 +36,7 @@ import { FilesView } from "@/components/files";
 import { PassView } from "@/components/pass";
 import { AskQuestionDialog, QuestionsView } from "@/components/questions";
 import { DeleteViewDialog, ViewDialog, layoutOf, useViews } from "@/components/views";
+import { PotOptions } from "@/components/pot-options";
 
 /** Tabs before the saved views (just the Board) and after them. */
 const HEAD_VIEWS: { id: BaseView; label: string }[] = [{ id: "board", label: "Board" }];
@@ -375,6 +376,7 @@ function PotHeader({
         <div className="flex items-center gap-2">
           <PaletteButton />
           <RefreshButton />
+          <PotOptions project={project} />
           <Button onClick={onNew}>
             <Plus /> {base === "pantry" ? "Stock the pantry" : base === "menus" ? "New menu" : base === "questions" ? "Ask a question" : "New task"}
           </Button>

@@ -1032,7 +1032,7 @@ pub async fn changes_since(
     let sql = format!(
         "select e.seq, jsonb_build_object('seq', e.seq, 'kind', e.kind, 'project', pr.key,
             'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
-            'actor', (select name from principals where id = e.actor_id), 'at', e.at, 'payload', e.payload)
+            'actor', coalesce((select name from principals where id = e.actor_id), e.payload->>'actor_name'), 'at', e.at, 'payload', e.payload)
          from events e join projects pr on pr.id = e.project_id
          where e.seq > $1 and ($2::uuid is null or e.project_id = $2) and e.kind not like 'wake%' and e.kind <> 'activity'
            and (e.audience is null or $5 = any(e.audience)) and {}

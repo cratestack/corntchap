@@ -904,6 +904,104 @@ impl ProcedureRegistry for Procedures {
         })
     }
 
+    async fn cook_rename(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: cook_rename::Args,
+        _z: cook_rename::Authorized,
+    ) -> Result<cook_rename::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::rename_principal(db, &p, "agent", &a.name, &a.newName).await)
+    }
+
+    async fn cook_delete(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: cook_delete::Args,
+        _z: cook_delete::Authorized,
+    ) -> Result<cook_delete::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::delete_principal(db, &p, "agent", &a.name).await)
+    }
+
+    async fn fire_rename(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: fire_rename::Args,
+        _z: fire_rename::Authorized,
+    ) -> Result<fire_rename::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::rename_principal(db, &p, "relay", &a.name, &a.newName).await)
+    }
+
+    async fn fire_delete(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: fire_delete::Args,
+        _z: fire_delete::Authorized,
+    ) -> Result<fire_delete::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::delete_principal(db, &p, "relay", &a.name).await)
+    }
+
+    async fn pot_rename(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: pot_rename::Args,
+        _z: pot_rename::Authorized,
+    ) -> Result<pot_rename::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::rename_project(db, &p, &a.key, &a.name).await)
+    }
+
+    async fn pot_delete(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: pot_delete::Args,
+        _z: pot_delete::Authorized,
+    ) -> Result<pot_delete::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(
+            admin::delete_project(db, self.state.storage.as_deref(), &p, &a.key, &a.confirm).await,
+        )
+    }
+
+    async fn team_rename(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: team_rename::Args,
+        _z: team_rename::Authorized,
+    ) -> Result<team_rename::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::rename_team(db, &p, &a.name, &a.newName).await)
+    }
+
+    async fn team_delete(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: team_delete::Args,
+        _z: team_delete::Authorized,
+    ) -> Result<team_delete::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let db = &self.state.db;
+        typed(admin::delete_team(db, &p, &a.name, &a.confirm).await)
+    }
+
     async fn admin_set_grants(
         &self,
         _db: &Db,
