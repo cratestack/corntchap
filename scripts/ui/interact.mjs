@@ -6,6 +6,9 @@ import { execSync } from "node:child_process";
 const require = createRequire(execSync("npm root -g").toString().trim() + "/");
 const { chromium, devices } = require("playwright");
 const BASE = process.env.PUBLIC_URL || "http://localhost:41011";
+// pages load from CONSOLE_URL when set (a Vite dev server proxying to the server, see scripts/ui/vite.sh);
+// sign-in always goes through the server, and its session cookie is shared across localhost ports
+const APP = process.env.CONSOLE_URL || BASE;
 const [device, path, out, ...steps] = process.argv.slice(2);
 const opts = { phone: devices["iPhone 13"], tablet: devices["iPad (gen 7)"], desktop: { viewport: { width: 1440, height: 900 } } }[device];
 const b = await chromium.launch();
@@ -19,7 +22,7 @@ if (page.url().includes("/realms/")) {
   await page.click("#kc-login");
 }
 await page.waitForSelector("#main", { timeout: 30000 });
-await page.goto(BASE + path);
+await page.goto(APP + path);
 await page.waitForSelector("#main");
 await page.waitForTimeout(1200);
 for (const s of steps) {

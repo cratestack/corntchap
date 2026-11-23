@@ -9,6 +9,9 @@ const require = createRequire(execSync("npm root -g").toString().trim() + "/");
 const { chromium, devices } = require("playwright");
 
 const BASE = process.env.PUBLIC_URL || "http://localhost:41011";
+// pages load from CONSOLE_URL when set (a Vite dev server proxying to the server, see scripts/ui/vite.sh);
+// sign-in always goes through the server, and its session cookie is shared across localhost ports
+const APP = process.env.CONSOLE_URL || BASE;
 const out = process.argv[2] || "/tmp/corntchap-ui/shots";
 const paths = process.argv.slice(3);
 fs.mkdirSync(out, { recursive: true });
@@ -64,7 +67,7 @@ for (const [name, opts] of sizes) {
   const page = await signIn(ctx);
   if (!seeded) { await seed(page); seeded = true; }
   for (const p of want) {
-    await page.goto(BASE + p);
+    await page.goto(APP + p);
     await page.waitForSelector("#main", { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(1500);
     const file = `${out}/${name}${p.replace(/[/?=&]+/g, "_")}.png`;
