@@ -1,6 +1,6 @@
 //! corntchap app shell.
 //!
-//! One webview. It starts on the bundled server-picker page (`../src`), then navigates to the
+//! One webview. It starts on the bundled server-picker page (the Vite app in `../ui`, built to `../dist`), then navigates to the
 //! console served by the user's own corntchap server, so cookies, OIDC redirects and SSE stay
 //! same-origin with the server. The remote origin gets no IPC (see `capabilities/default.json`).
 
@@ -77,7 +77,18 @@ fn local_base() -> &'static str {
     }
 }
 
-fn is_local(url: &Url) -> bool {
+/// `tauri dev` serves the picker from Vite (`build.devUrl`), not from the bundle.
+#[cfg(debug_assertions)]
+fn dev_origin(app: &AppHandle) -> Option<String> {
+    app.config().build.dev_url.as_ref().and_then(origin_of)
+}
+
+fn is_local(app: &AppHandle, url: &Url) -> bool {
+    #[cfg(debug_assertions)]
+    if dev_origin(app).is_some() && origin_of(url) == dev_origin(app) {
+        return true;
+    }
+    let _ = app;
     match url.scheme() {
         "tauri" | "about" | "data" | "blob" => true,
         "http" | "https" => matches!(url.host_str(), Some("tauri.localhost")),
@@ -110,18 +121,27 @@ fn check_server(origin: &Url) -> Result<(), String> {
         .timeout_global(Some(Duration::from_secs(8)))
         .build()
         .into();
-    let mut last = String::new();
+    let host = origin.host_str().unwrap_or("that address").to_owned();
+    let mut answered = None;
+    let mut transport = String::new();
     for path in ["/healthz", "/.well-known/oauth-authorization-server"] {
         let url = format!("{}{}", origin.as_str().trim_end_matches('/'), path);
         match agent.get(&url).call() {
             Ok(r) if r.status().is_success() => return Ok(()),
-            Ok(r) => last = format!("{path} answered {}", r.status()),
-            Err(e) => last = e.to_string(),
+            // ureq 3 returns Ok for 4xx/5xx too (http_status_as_error is off in some configs).
+            Ok(r) => answered = Some(r.status().to_string()),
+            Err(ureq::Error::StatusCode(code)) => answered = Some(code.to_string()),
+            Err(e) => transport = e.to_string(),
         }
     }
-    Err(format!(
-        "Could not reach a corntchap server there ({last})."
-    ))
+    Err(match answered {
+        Some(status) => format!(
+            "{host} answered ({status}), but it does not look like a corntchap server. Check the address."
+        ),
+        None => format!(
+            "Could not reach {host}. Check the address and your connection. ({transport})"
+        ),
+    })
 }
 
 fn navigate(app: &AppHandle, url: &str) {
@@ -131,7 +151,11 @@ fn navigate(app: &AppHandle, url: &str) {
 }
 
 fn show_picker(app: &AppHandle, query: &str) {
-    navigate(app, &format!("{}/index.html{query}", local_base()));
+    #[cfg(debug_assertions)]
+    let base = dev_origin(app).unwrap_or_else(|| local_base().to_owned());
+    #[cfg(not(debug_assertions))]
+    let base = local_base().to_owned();
+    navigate(app, &format!("{base}/index.html{query}"));
 }
 
 /// `corntchap://server?url=https://...` opens the picker prefilled; `corntchap://server` just opens it.
@@ -185,7 +209,7 @@ async fn set_server(app: AppHandle, url: String) -> Result<(), String> {
 /// Navigation policy: bundled page, the configured server, and the IdP it redirects to.
 /// Anything else opens in the system browser.
 fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
-    if is_local(url) {
+    if is_local(app, url) {
         return true;
     }
     if url.scheme() == "corntchap" {

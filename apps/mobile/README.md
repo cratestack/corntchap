@@ -6,7 +6,7 @@ A thin native shell around the corntchap web console for Android and iOS (macOS,
 
 Each organisation runs its own server (for example https://corntchap.camer.digital), so the app does **not** bundle a copy of the console. It has one webview:
 
-1. On launch it shows a small bundled page (`src/`, plain HTML/CSS/JS) that asks for the server URL.
+1. On launch it shows a small bundled page (`ui/`, a Vite + React + TypeScript app built to `dist/`) that asks for the server URL. It imports the console's tokens (`index.css`), `LogoMark`/`WaxBand`/`Wordmark` and the Button, Input and Label primitives straight from `../../console/src` through the `@console` alias (see `vite.config.ts`); nothing is copied, and `console/` is not a workspace member, so its own CI is unaffected.
 2. Rust (`src-tauri/src/lib.rs`) checks `GET <url>/healthz` (falling back to `/.well-known/oauth-authorization-server`) natively, so there is no CORS issue, saves the origin in the app's config directory (`server.json`), and navigates the webview to `<url>/`.
 3. From then on the app opens straight into the console.
 
@@ -43,8 +43,10 @@ Run from `apps/mobile`:
 pnpm install
 pnpm tauri info          # check the toolchain
 
+pnpm build               # type-check and build the picker UI into dist/
+
 # desktop (bonus)
-pnpm dev
+pnpm desktop:dev
 
 # Android: generate the project once (it lands in src-tauri/gen/android, which is git-ignored)
 pnpm android:init
@@ -64,22 +66,9 @@ pnpm icons
 
 Generated Android and iOS projects stay out of version control (`src-tauri/gen/`). If you start customising them (extra permissions, a network security config, an iOS launch screen), remove the `gen/` line from `.gitignore` and commit them from then on.
 
-## Release signing
+## Release signing and publishing
 
-CI is `.github/workflows/mobile.yml`: run it manually or push a tag `app-v0.1.0`. Without secrets it makes a debug APK and a best-effort iOS simulator build. With secrets it makes signed release builds. Repository secrets:
-
-| platform | secret | content |
-|---|---|---|
-| Android | `ANDROID_KEYSTORE_BASE64` | `base64 -w0 release.keystore` |
-| Android | `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | keystore settings |
-| iOS | `APPLE_CERTIFICATE` | base64 of the Apple Distribution `.p12` |
-| iOS | `APPLE_CERTIFICATE_PASSWORD` | its password |
-| iOS | `APPLE_PROVISIONING_PROFILE` | base64 of the App Store `.mobileprovision` for `digital.camer.corntchap` |
-| iOS | `APPLE_DEVELOPMENT_TEAM` | the 10-character team id |
-
-**Play Store**: create a keystore once (`keytool -genkeypair -v -keystore release.keystore -alias corntchap -keyalg RSA -keysize 2048 -validity 10000`), keep it and its passwords safe (losing it blocks updates unless you use Play App Signing, which is recommended), build the AAB, and upload it in the Play Console. Pin the upload key in Play App Signing.
-
-**App Store**: register the identifier, create an App Store distribution certificate and provisioning profile in the Apple Developer portal, build with `--export-method app-store-connect`, then upload the `.ipa` with Transporter or `xcrun altool`, and submit through App Store Connect / TestFlight.
+CI is `.github/workflows/mobile.yml`: run it manually (optionally with `publish`) or push a tag `app-v0.1.0`. Without secrets it makes a debug APK and a best-effort iOS simulator build. With secrets it makes signed builds and uploads them to Google Play internal testing and TestFlight. The full step-by-step guide, including every secret, is **[PUBLISHING.md](PUBLISHING.md)**.
 
 ## Keycloak / OIDC
 
@@ -92,4 +81,4 @@ Nothing changes in Keycloak. The flow never leaves the server's origin except fo
 - The three-finger gesture and the external-link hook depend on Tauri's navigation handler, which fires for top-level navigations only. Links inside iframes are not intercepted.
 - The IdP host is learned only through a sign-in that begins at `/auth/oidc/login`. An IdP reached any other way opens in the system browser.
 - The Windows and Linux desktop builds are untested. The iOS and Android builds have not been run by the author of this scaffold: CI (`mobile.yml`) and the steps above are the first real test. The iOS simulator CI step is best effort.
-- GitHub Actions in `mobile.yml` that are not already used by other workflows (`setup-java`, `setup-android`, `setup-node`, `pnpm/action-setup`) are pinned to major tags, as `ci.yml` does for pnpm and Node. Pin them to commit SHAs if you want the same strictness as the others.
+- GitHub Actions in `mobile.yml` that are not already used by other workflows (`setup-java`, `setup-node`, `pnpm/action-setup`, `upload-google-play`) are pinned to version tags, as `ci.yml` does for pnpm and Node. Pin them to commit SHAs if you want the same strictness as the others.

@@ -343,7 +343,7 @@ See it in the console on the Cooks page (a "Tokens sent (7 days)" line, and a Us
 
 ## Mobile app
 
-`apps/mobile` is a [Tauri v2](https://tauri.app) shell for Android and iOS (desktop too). It does not bundle the console: it asks for your server's URL once, then loads the console from it, so sign-in, `/api` and live updates behave exactly as in a browser. It is outside the Cargo workspace, so server builds and CI never compile it. Build steps, signing and limitations are in [`apps/mobile/README.md`](apps/mobile/README.md); CI is `.github/workflows/mobile.yml` (manual or `app-v*` tags).
+`apps/mobile` is a [Tauri v2](https://tauri.app) shell for Android and iOS (desktop too). It does not bundle the console: it asks for your server's URL once, then loads the console from it, so sign-in, `/api` and live updates behave exactly as in a browser. It is outside the Cargo workspace, so server builds and CI never compile it. Build steps and limitations are in [`apps/mobile/README.md`](apps/mobile/README.md); getting it onto TestFlight and Google Play is in [`apps/mobile/PUBLISHING.md`](apps/mobile/PUBLISHING.md); CI is `.github/workflows/mobile.yml` (manual or `app-v*` tags).
 
 ## Architecture
 
