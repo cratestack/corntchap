@@ -928,6 +928,7 @@ async fn start_here(api: &Api, a: StartArgs) -> Result<()> {
         .unwrap_or_else(|| "Your chef".into());
     let text = start_text(&who, &pot, &id, task.as_deref(), a.prompt.as_deref());
     let mut c = tokio::process::Command::new(relay::program("claude"));
+    c.env("PATH", relay::search_path());
     c.args(["-p", "--session-id", &session])
         .current_dir(&root)
         .stdin(std::process::Stdio::piped());
