@@ -107,6 +107,7 @@ fn wake_target_views(v: serde_json::Value) -> serde_json::Value {
         rows.into_iter()
             .map(|mut w| {
                 let c = w["config"].take();
+                let takes_work = w["type"] == "relay" || crate::connect::takes_work(&c);
                 let target = c["url"].as_str().map(str::to_string).or_else(|| {
                     c["repo"].as_str().map(|r| match &c["issue"] {
                         serde_json::Value::Null => r.to_string(),
@@ -121,6 +122,7 @@ fn wake_target_views(v: serde_json::Value) -> serde_json::Value {
                 if let Some(o) = w.as_object_mut() {
                     o.remove("config");
                     o.insert("target".into(), serde_json::json!(target));
+                    o.insert("takesWork".into(), serde_json::json!(takes_work));
                     if let Some(id) = o.get("id").and_then(|x| x.as_str()).map(str::to_string) {
                         o.insert("id".into(), serde_json::json!(id));
                     }
@@ -892,6 +894,9 @@ impl ProcedureRegistry for Procedures {
             if let Some(m) = a.mention {
                 config.insert("mention".into(), serde_json::json!(m));
             }
+            if a.takesWork == Some(true) {
+                config.insert("takes_work".into(), serde_json::json!(true));
+            }
             admin::add_wake_target(
                 db,
                 &p,
@@ -1538,6 +1543,7 @@ impl ProcedureRegistry for Procedures {
                     repo: a.repo,
                     issue: a.issue,
                     mention: a.mention,
+                    takes_work: a.takesWork,
                 },
             )
             .await,

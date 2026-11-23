@@ -1,6 +1,8 @@
-//! Cloud cooks: a Claude routine, a GitHub comment (@codex) and a signed webhook get new work and
-//! every message for the cook, each prompt carrying the context a fresh session needs; GitHub
-//! comments carry a pointer, never the messages.
+//! Cloud cooks: a Claude routine, a GitHub comment (@codex) and a signed webhook are on call. They
+//! start for a direct message, an @mention or a comment on their task, and for new work only when
+//! they opted in (takes_work). A broadcast or an answer to their question starts no run. Each
+//! prompt carries the context a fresh session needs; GitHub comments carry a pointer, never the
+//! messages.
 mod common;
 use std::{
     sync::{Arc, Mutex},
@@ -144,7 +146,7 @@ async fn cloud_cooks_get_work_and_messages() {
         .post(
             &root,
             "/agents/claude-web/wake-targets",
-            json!({"type": "claude-routine", "config": {"url": format!("{base}/v1/claude_code/routines/trig_1/fire"), "token": "sk-ant-oat01-x"}}),
+            json!({"type": "claude-routine", "config": {"url": format!("{base}/v1/claude_code/routines/trig_1/fire"), "token": "sk-ant-oat01-x", "takes_work": true}}),
         )
         .await;
     assert_eq!(code, 200, "{added}");
@@ -169,8 +171,20 @@ async fn cloud_cooks_get_work_and_messages() {
     // the token and the secret are never shown back
     let (_, list) = app.get(&root, "/agents/hooked/wake-targets").await;
     assert!(!list.to_string().contains("s3cret"), "{list}");
+    let r = ok(
+        &app.mcp(&root, "list_wake_targets", json!({"cook": "claude-web"}))
+            .await,
+        "list",
+    );
+    assert_eq!(r[0]["takesWork"], true, "{r}");
+    let r = ok(
+        &app.mcp(&root, "list_wake_targets", json!({"cook": "hooked"}))
+            .await,
+        "list",
+    );
+    assert_eq!(r[0]["takesWork"], false, "{r}");
 
-    // new work: each cloud cook is fired, the routine with the work prompt
+    // new work: only the routine opted in, the others are on call
     app.post(
         &root,
         "/projects/PAY/tasks",
@@ -188,6 +202,16 @@ async fn cloud_cooks_get_work_and_messages() {
     assert!(
         text.contains("new work is ready for claude-web in PAY") && text.contains("claim_next"),
         "{text}"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.1.contains("/issues/7/comments") || r.1.contains("/hook")),
+        "on-call cooks get no work wake: {:?}",
+        seen.lock().unwrap()
     );
 
     // claude-web takes the task; then messages arrive for it: a direct message and a comment,
@@ -254,7 +278,7 @@ async fn cloud_cooks_get_work_and_messages() {
             .await,
         "dm codex",
     );
-    let comments = wait_for(&seen, "/repos/acme/pay/issues/7/comments", 2).await;
+    let comments = wait_for(&seen, "/repos/acme/pay/issues/7/comments", 1).await;
     let last = serde_json::from_str::<Value>(&comments.last().unwrap().3).unwrap();
     let body = last["body"].as_str().unwrap();
     assert!(
@@ -276,7 +300,7 @@ async fn cloud_cooks_get_work_and_messages() {
         .await,
         "mention hooked",
     );
-    let hooks = wait_for(&seen, "/hook", 2).await;
+    let hooks = wait_for(&seen, "/hook", 1).await;
     let (_, _, h, body) = hooks.last().unwrap();
     let v: Value = serde_json::from_str(body).unwrap();
     assert_eq!(
@@ -289,4 +313,57 @@ async fn cloud_cooks_get_work_and_messages() {
         hex::encode(corntchap::cloud::hmac_sha256(b"s3cret", body.as_bytes()))
     );
     assert_eq!(sig, want);
+
+    // a broadcast reaches nobody on call, and says so; an answer to a cloud cook's question is
+    // kept for its next run instead of starting one
+    let before = seen.lock().unwrap().len();
+    let sent = ok(
+        &app.mcp(
+            &root,
+            "pass",
+            json!({"project": "PAY", "message": "standup in 5", "broadcast": true}),
+        )
+        .await,
+        "broadcast",
+    );
+    assert!(
+        !sent.to_string().contains("claude-web") && !sent.to_string().contains("hooked"),
+        "{sent}"
+    );
+    let asked = ok(
+        &app.mcp(
+            &tokens["claude-web"],
+            "ask",
+            json!({"project": "PAY", "question": "Refunds in cents or units?"}),
+        )
+        .await,
+        "ask",
+    );
+    let qref = asked["question"]["id"]
+        .as_str()
+        .or(asked["id"].as_str())
+        .unwrap_or_else(|| panic!("{asked}"))
+        .to_string();
+    ok(
+        &app.mcp(
+            &root,
+            "answer_question",
+            json!({"id": qref, "answer": "cents"}),
+        )
+        .await,
+        "answer",
+    );
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        before,
+        "no run for a broadcast or an answer: {:?}",
+        &seen.lock().unwrap()[before..]
+    );
+    let mine = ok(
+        &app.mcp(&tokens["claude-web"], "my_questions", json!({}))
+            .await,
+        "mine",
+    );
+    assert!(mine.to_string().contains("cents"), "{mine}");
 }

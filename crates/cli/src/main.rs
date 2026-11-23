@@ -508,6 +508,10 @@ enum WakeCmd {
         /// github-comment: who the comment mentions, e.g. @codex or @copilot (default: the server's GITHUB_MENTION, @cook)
         #[arg(long)]
         mention: Option<String>,
+        /// cloud targets: also start a run for new ready work (default: on call, started only by a
+        /// direct message, an @mention or a comment on its task). Narrow it with --label.
+        #[arg(long)]
+        takes_work: bool,
     },
     /// List wake targets (of one agent, or of all your agents).
     Ls {
@@ -1305,6 +1309,7 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                 repo,
                 issue,
                 mention,
+                takes_work,
             } => {
                 let mut config = json!({});
                 match typ.as_str() {
@@ -1322,6 +1327,9 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                         }
                     }
                     _ => {}
+                }
+                if takes_work && typ != "relay" {
+                    config["takes_work"] = json!(true);
                 }
                 let r = api.post(&format!("/agents/{agent}/wake-targets"), json!({"type": typ, "projects": projects, "labels": labels, "config": config})).await?;
                 ok_line(format!(

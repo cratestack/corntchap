@@ -21,6 +21,7 @@ mutation procedure cloudConnect(kind: String?, cook: String?, projects: String?,
 /// @param repo github-comment: owner/name.
 /// @param issue github-comment: the issue or PR number.
 /// @param mention github-comment: who each comment mentions, e.g. @codex or @copilot (default: the server's GITHUB_MENTION, @cook).
-mutation procedure cloudConnectSave(code: String, url: String?, token: String?, secret: String?, repo: String?, issue: Int?, mention: String?): CloudSetup
+/// @param takesWork Also wake it for new ready work (default false: it is on call, started only by a direct message, an @mention or an answer to its question).
+mutation procedure cloudConnectSave(code: String, url: String?, token: String?, secret: String?, repo: String?, issue: Int?, mention: String?, takesWork: Boolean?): CloudSetup
   @allow(auth() != null)
   @mcp(tool: "connect_cloud_save", description: "Finish a cloud setup from connect_cloud with its values (trigger URL and token, GitHub repo, issue and token, or webhook URL and secret) and make the wake target. The corntchap form calls it itself; call it only when the user chose to give you the values.")

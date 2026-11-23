@@ -202,15 +202,19 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     }
     let mut reached: Vec<Value> = vec![];
     if broadcast {
+        // cloud cooks are on call (each wake a new, paid run): a broadcast does not start them
         let rows: Vec<(Uuid, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
             "select a.id, a.name, st.id, st.ref from principals a
              join team_members tm on tm.principal_id = a.id and tm.team_id = $1
              left join stations st on st.agent_id = a.id and st.project_id = $2
              where a.kind = 'agent' and a.disabled_at is null
+               and not (exists (select 1 from wake_targets oc where oc.agent_id = a.id and oc.type = any($3))
+                        and not exists (select 1 from wake_targets oc where oc.agent_id = a.id and oc.type <> all($3)))
              order by a.name, st.created_at",
         )
         .bind(pr.team_id)
         .bind(pr.id)
+        .bind(crate::cloud::CLOUD_TYPES)
         .fetch_all(&mut *tx)
         .await?;
         let prompt = format!(
