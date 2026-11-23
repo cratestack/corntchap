@@ -165,9 +165,18 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: apps/mobile/pnpm-lock.yaml
+      # `tauri ios init` needs an Apple team id even for a simulator build: without the secret the job stops
+      # here with a notice instead of failing (Android does not need anything).
+      - name: Apple team id
+        if: env.APPLE_DEVELOPMENT_TEAM == ''
+        run: |
+          echo "::notice title=iOS skipped::Set the APPLE_DEVELOPMENT_TEAM secret (10-character Team ID, see apps/mobile/PUBLISHING.md) to build for iOS."
+          exit 0
       - run: pnpm install --frozen-lockfile
+        if: env.APPLE_DEVELOPMENT_TEAM != ''
       - name: Versions
         id: ver
+        if: env.APPLE_DEVELOPMENT_TEAM != ''
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REF" == refs/tags/app-v* ]]; then
@@ -180,11 +189,13 @@ jobs:
           echo "config={\"version\":\"$v\",\"bundle\":{\"iOS\":{\"bundleVersion\":\"${GITHUB_RUN_NUMBER}\"}}}" >> "$GITHUB_OUTPUT"
           echo "iOS version $v, build ${GITHUB_RUN_NUMBER}"
       - name: Build the picker UI
+        if: env.APPLE_DEVELOPMENT_TEAM != ''
         run: pnpm build
       - name: Generate the Xcode project (not committed)
+        if: env.APPLE_DEVELOPMENT_TEAM != ''
         run: pnpm ios:init --ci
       - name: Simulator build (no signing secrets)
-        if: env.IOS_CERTIFICATE == ''
+        if: env.APPLE_DEVELOPMENT_TEAM != '' && env.IOS_CERTIFICATE == ''
         # Best effort: proves the project and Rust code build for iOS. Nothing installable on a device.
         continue-on-error: true
         run: pnpm ios:build --debug --target aarch64-sim --config '${{ steps.ver.outputs.config }}'
