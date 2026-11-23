@@ -36,6 +36,7 @@ import { FilesView } from "@/components/files";
 import { PassView } from "@/components/pass";
 import { AskQuestionDialog, QuestionsView } from "@/components/questions";
 import { DeleteViewDialog, ViewDialog, layoutOf, useViews } from "@/components/views";
+import { PotOptions } from "@/components/pot-options";
 
 /** Tabs before the saved views (just the Board) and after them. */
 const HEAD_VIEWS: { id: BaseView; label: string }[] = [{ id: "board", label: "Board" }];
@@ -356,7 +357,7 @@ function PotHeader({
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
           <p className="label-caps flex items-center gap-2">
-            <span className="rounded bg-corn px-1.5 py-px font-bold !text-corn-foreground">{project.key}</span>
+            <Link to={`/pots/${project.key}/about`} title={`About ${project.name}`} className="rounded bg-corn px-1.5 py-px font-bold !text-corn-foreground hover:underline focus-visible:underline">{project.key}</Link>
             {project.team && <span>team {project.team}</span>}
           </p>
           <h1 className="mt-1.5 truncate text-[30px] leading-[1.1] sm:text-[34px]">{project.name}</h1>
@@ -375,6 +376,7 @@ function PotHeader({
         <div className="flex items-center gap-2">
           <PaletteButton />
           <RefreshButton />
+          <PotOptions project={project} />
           <Button onClick={onNew}>
             <Plus /> {base === "pantry" ? "Stock the pantry" : base === "menus" ? "New menu" : base === "questions" ? "Ask a question" : "New task"}
           </Button>

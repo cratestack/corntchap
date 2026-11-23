@@ -117,3 +117,34 @@ type GrantsView {
   name String
   grants String[]
 }
+
+/// A cook, fire or team that was renamed.
+type RenamedView {
+  name String
+  previous String
+}
+
+/// A pot that was renamed (its key never changes).
+type PotRenamedView {
+  key String
+  name String
+  previous String
+}
+
+/// A cook, fire or team that was deleted.
+type DeletedView {
+  name String
+  /// Cooks: leases released (tasks put back to open) before it went.
+  released Int
+}
+
+/// A pot that was deleted.
+type PotDeletedView {
+  key String
+  name String
+  /// Tasks that went with it.
+  tasks Int
+  /// Stored file objects removed from storage; `files_left` could not be (the metadata is gone either way).
+  files Int
+  files_left Int
+}

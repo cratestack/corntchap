@@ -126,6 +126,60 @@ mutation procedure adminSetGrants(name: String, grants: String): GrantsView
   @allow(auth() != null)
   @mcp(tool: "set_grants", description: "Set what a cook may do beyond working its tasks: plan, manage, admin (comma-separated; empty for work only). Only a person can, never a cook. A cook never exceeds its owner's rights.")
 
+/// Rename a cook you own (its owner or an admin). Tokens, stations, leases, wake targets and team memberships follow (they point at the cook, not its name).
+/// @param name The cook's current name.
+/// @param newName The new name (a handle: letters, digits, '.', '_' and '-').
+mutation procedure cookRename(name: String, newName: String): RenamedView
+  @allow(auth() != null)
+  @mcp(tool: "rename_cook", description: "Rename a cook you own (admins: any). Its tokens, stations, leases, wake targets and team memberships keep working; text that already names it (@mentions in comments and pass messages, the agent name in a fire's config.toml targets) does not follow.")
+
+/// Delete a cook you own (its owner or an admin).
+/// @param name The cook's name.
+mutation procedure cookDelete(name: String): DeletedView
+  @allow(auth() != null)
+  @mcp(tool: "delete_cook", description: "Delete a cook you own (admins: any). Its leases are released first (tasks go back to open); its tokens, stations, wake targets, team memberships and messages sent to it are deleted; comments, events and tasks it wrote stay without an author. A cook cannot delete itself. Cannot be undone.")
+
+/// Rename a fire (relay) you own (its owner or an admin).
+/// @param name The fire's current name.
+/// @param newName The new name.
+mutation procedure fireRename(name: String, newName: String): RenamedView
+  @allow(auth() != null)
+  @mcp(tool: "rename_fire", description: "Rename a fire (relay) you own (admins: any). Its token keeps working; the machine's config.toml needs no change (a fire is known by its token).")
+
+/// Delete a fire (relay) you own (its owner or an admin).
+/// @param name The fire's name.
+mutation procedure fireDelete(name: String): DeletedView
+  @allow(auth() != null)
+  @mcp(tool: "delete_fire", description: "Delete a fire (relay) you own (admins: any): its tokens stop working at once. Cannot be undone.")
+
+/// Rename a pot (display name only; the key stays).
+/// @param key The pot's key, e.g. PAY.
+/// @param name The new display name.
+mutation procedure potRename(key: String, name: String): PotRenamedView
+  @allow(auth() != null)
+  @mcp(tool: "rename_project", description: "Rename a pot (its display name; the key, which is part of every task id and MCP URL, never changes). Owners of the pot's team and admins.")
+
+/// Delete a pot and everything in it.
+/// @param key The pot's key, e.g. PAY.
+/// @param confirm Must equal the key.
+mutation procedure potDelete(key: String, confirm: String): PotDeletedView
+  @allow(auth() != null)
+  @mcp(tool: "delete_project", description: "Delete a pot and everything in it: tasks, checklists, comments, events, pass, pantry, views, menus, stations, files (metadata and stored objects). Owners of the pot's team and admins; confirm must equal the key. Cannot be undone.")
+
+/// Rename a team.
+/// @param name The team's current name.
+/// @param newName The new name.
+mutation procedure teamRename(name: String, newName: String): RenamedView
+  @allow(auth() != null)
+  @mcp(tool: "rename_team", description: "Rename a team (owners of the team and admins). Pots and members stay.")
+
+/// Delete a team that has no pots.
+/// @param name The team's name.
+/// @param confirm Must equal the name.
+mutation procedure teamDelete(name: String, confirm: String): DeletedView
+  @allow(auth() != null)
+  @mcp(tool: "delete_team", description: "Delete a team (owners of the team and admins); refused while it still has pots. confirm must equal the name. Its memberships go; the people and cooks stay.")
+
 /// Set a pot's default lease length (team owner or admin). A cook can still ask for a longer
 /// lease when it claims (ttlS) or with heartbeat.
 /// @param project Pot key, e.g. PAY.

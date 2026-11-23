@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import type { ActivityView, StationView } from "@corntchap/api";
 import { Activity, AppWindow, ChevronDown, Hourglass, Loader2, Play, SquareTerminal, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -214,7 +215,7 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
                     <span className="inline-flex items-center gap-1 text-muted-foreground">
                       <SquareTerminal className="size-3.5" aria-hidden="true" /> {RUNTIME[s.runtime] ?? s.runtime}
                     </span>
-                    <LabelChip className="font-mono">{s.project}</LabelChip>
+                    <LabelChip className="font-mono"><Link to={`/pots/${s.project}/about`} className="hover:underline focus-visible:underline">{s.project}</Link></LabelChip>
                     {s.main && <span className="label-caps text-primary">main</span>}
                     <span className="font-mono text-[11px] text-muted-foreground" title={`Session ${s.session}`}>
                       {shortSession(s.session)}

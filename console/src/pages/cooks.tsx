@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router";
-import { ChefHat, ChevronDown, Loader2, Minus, Plug, Plus, Power, RotateCw, Trash2, X } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router";
+import { ChefHat, ChevronDown, Loader2, Minus, Pencil, Plug, Plus, Power, RotateCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page";
 import { Avatar, EmptyState, LabelChip, RowSkeleton, StateDot, STATE_LABEL, cookState } from "@/components/bits";
 import { StationList } from "@/components/stations";
+import { DeleteDialog, RenameDialog } from "@/components/rename-delete";
 import { CookUsage, fmtTokens } from "@/components/usage";
 import { McpDialog, TokenDialog } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
@@ -224,7 +225,7 @@ function CookTeams({ a }: { a: AgentRow }) {
     <div className="flex flex-wrap items-center gap-1.5">
       {mine.map((t) => (
         <LabelChip key={t} className="gap-1">
-          {t}
+          <Link to={`/teams/${t}`} className="hover:underline focus-visible:underline">{t}</Link>
           {manageable(t) && (
             <button
               type="button"
@@ -306,7 +307,9 @@ function CookCard({
   const now = useNow();
   const openTask = useOpenTask();
   const call = useV1Call();
+  const proc = useProcCall();
   const [mcp, setMcp] = useState(false);
+  const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
   const [confirm, setConfirm] = useState<"rotate" | "disable" | null>(null);
   const [wakeOpen, setWakeOpen] = useState(false);
   // open by default once the cook has stations; a click overrides
@@ -345,7 +348,9 @@ function CookCard({
       <div className="flex items-start gap-3">
         <Avatar name={a.name} className="size-10 rounded-lg text-[18px]" />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[18px] leading-tight">{a.name}</h2>
+          <h2 className="truncate text-[18px] leading-tight">
+            <Link to={`/cooks/${a.name}`} className="underline-offset-2 hover:underline focus-visible:underline">{a.name}</Link>
+          </h2>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             {KIND_LABEL[a.agent_kind ?? "other"] ?? a.agent_kind} · {a.runtime ?? "local"}
             {a.owner && <> · owned by {a.owner}</>}
@@ -407,6 +412,12 @@ function CookCard({
         >
           <Power /> {a.disabled ? "Enable" : "Disable"}
         </Button>
+        <Button size="sm" variant="outline" onClick={() => setDialog("rename")}>
+          <Pencil /> Rename
+        </Button>
+        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDialog("delete")}>
+          <Trash2 /> Delete
+        </Button>
       </div>
 
       <button
@@ -438,6 +449,29 @@ function CookCard({
       {wakeOpen && <WakeTargets agent={a.name} runtime={a.runtime} />}
 
       <McpDialog open={mcp} onOpenChange={setMcp} name={a.name} kind={a.agent_kind} />
+      <RenameDialog
+        open={dialog === "rename"}
+        onOpenChange={(o) => !o && setDialog(null)}
+        title={`Rename ${a.name}`}
+        description="Its tokens, stations, leases, wake targets and teams keep working. Text that already says the old name (@mentions, and the agent name in a fire's config.toml) does not change: edit the config on the machine."
+        label="New name"
+        current={a.name}
+        onSave={async (newName) => {
+          await proc("cookRename", { name: a.name, newName });
+          toast.success(`${a.name} is now ${newName.toLowerCase()}`);
+        }}
+      />
+      <DeleteDialog
+        open={dialog === "delete"}
+        onOpenChange={(o) => !o && setDialog(null)}
+        title={`Delete ${a.name}?`}
+        description="Any task it holds goes back to open. Its tokens, stations, wake targets and team memberships are deleted, so it can no longer sign in. Comments and tasks it wrote stay, without an author. This cannot be undone."
+        action="Delete the cook"
+        onConfirm={async () => {
+          const out = await proc("cookDelete", { name: a.name });
+          toast.success(`${a.name} deleted`, { description: out.released > 0 ? `${out.released} lease${out.released === 1 ? "" : "s"} released.` : undefined });
+        }}
+      />
       <AlertDialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -460,7 +494,7 @@ function CookCard({
   );
 }
 
-function WakeTargets({ agent, runtime }: { agent: string; runtime: string | null }) {
+export function WakeTargets({ agent, runtime }: { agent: string; runtime: string | null }) {
   const q = useV1<WakeTargetRow[]>(`/agents/${agent}/wake-targets`);
   const call = useV1Call();
   const me = useSession();
