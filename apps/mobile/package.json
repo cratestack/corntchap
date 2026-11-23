@@ -2,11 +2,16 @@
   "name": "corntchap-mobile",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Tauri v2 shell that loads the corntchap console from your server",
+  "packageManager": "pnpm@10.28.0",
   "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
     "tauri": "tauri",
-    "dev": "tauri dev",
-    "build": "tauri build",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
     "android:build": "tauri android build",
@@ -15,7 +20,28 @@
     "ios:build": "tauri ios build",
     "icons": "tauri icon ../../console/public/icons/app-icon-1024.png"
   },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/space-mono": "^5.3.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.77.0",
+    "radix-ui": "^1.8.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^3.7.1"
+  },
   "devDependencies": {
-    "@tauri-apps/cli": "2.12.6"
+    "@tailwindcss/vite": "^4.3.5",
+    "@tauri-apps/cli": "2.12.6",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tailwindcss": "^4.3.5",
+    "tw-animate-css": "^1.4.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.8"
   }
 }
