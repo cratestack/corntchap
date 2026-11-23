@@ -177,6 +177,21 @@ fn usage_pot(args: &Value) -> Option<String> {
 }
 
 /// Characters of text in a tool result's `content` (what the agent reads).
+/// Characters of a tool listing as a model sees it: name, description and input schema. Output
+/// schemas (two thirds of the listing) stay on the wire for clients that validate results, but the
+/// model APIs (Anthropic, OpenAI, the AI SDK) take only the input side, so they are not counted.
+fn catalog_chars(result: &Value) -> u64 {
+    let mut r = result.clone();
+    for t in r["tools"].as_array_mut().into_iter().flatten() {
+        if let Some(o) = t.as_object_mut() {
+            o.remove("outputSchema");
+            o.remove("_meta");
+            o.remove("annotations");
+        }
+    }
+    r.to_string().chars().count() as u64
+}
+
 fn content_chars(result: &Value) -> u64 {
     result["content"]
         .as_array()
@@ -363,7 +378,7 @@ impl<T: McpTools> Compat<T> {
                     current_pot().map(|p| p.key),
                     usage::LIST,
                     "tools/list",
-                    result.to_string().chars().count() as u64,
+                    catalog_chars(result),
                 );
             } else {
                 self.note_call(p.id, params, result);
@@ -725,7 +740,7 @@ impl<T: McpTools> Compat<T> {
                     current_pot().map(|p| p.key),
                     usage::LIST,
                     "tools/list",
-                    l.to_string().chars().count() as u64,
+                    catalog_chars(&l),
                 );
                 rpc_result(id, l)
             }

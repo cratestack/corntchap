@@ -13,8 +13,11 @@ use uuid::Uuid;
 use crate::{admin, error::Result, state::AppState, state::Principal};
 
 /// How the figures are made, shown with every report.
-pub const NOTE: &str = "An estimate: characters of text corntchap sent to agents (tool results, \
-tool listings, wake prompts) divided by 4. The agent's own token usage is not visible to corntchap.";
+pub const NOTE: &str = "An estimate of what corntchap puts in front of models: characters of tool \
+results, tool listings (as models see them: names, descriptions, input schemas) and wake prompts, \
+divided by 4. It is not a bill: a listing is sent once per session, providers cache repeated \
+context (cache reads cost about a tenth), and plans like Claude Pro/Max are not billed per token. \
+The agent's own usage is not visible to corntchap.";
 
 /// Days of usage kept.
 pub const RETAIN_DAYS: i32 = 90;

@@ -187,7 +187,28 @@ async fn usage_is_counted_per_cook_pot_and_kind_and_shown_to_its_owner_only() {
     )
     .await;
     let list = legacy(&app, &c1, "/mcp", "tools/list", json!({})).await;
-    let list_chars = list.to_string().chars().count() as i64;
+    // output schemas still go out (clients validate results with them) but are not counted: a listing
+    // is metered as models see it (name, description, input schema)
+    assert!(
+        list["tools"][0].get("outputSchema").is_some()
+            || list["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t.get("outputSchema").is_some())
+    );
+    let mut seen = list.clone();
+    for t in seen["tools"].as_array_mut().unwrap() {
+        let o = t.as_object_mut().unwrap();
+        o.remove("outputSchema");
+        o.remove("_meta");
+        o.remove("annotations");
+    }
+    let list_chars = seen.to_string().chars().count() as i64;
+    assert!(
+        list_chars * 2 < list.to_string().chars().count() as i64,
+        "the catalog is well under the wire size"
+    );
 
     // --- 2026-07-28 path: every tools/call response is measured, and still arrives intact ---
     let m_board = modern(
