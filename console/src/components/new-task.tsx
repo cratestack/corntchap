@@ -54,7 +54,9 @@ export function NewTaskDialog() {
   }, [newTask.open]);
 
   useEffect(() => {
-    if (newTask.open && !pot && projects.data?.[0]) setPot(projects.data[0].key);
+    // functional: on open this runs in the same commit as the reset above, so `pot` here is still the old ""
+    const first = projects.data?.[0]?.key;
+    if (newTask.open && !pot && first) setPot((p) => p || first);
   }, [newTask.open, pot, projects.data]);
 
   const menus = useMenus(pot, newTask.open);
@@ -107,7 +109,15 @@ export function NewTaskDialog() {
             <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
               <div className="space-y-1.5">
                 <Label htmlFor="nt-pot">Pot</Label>
-                <Select value={pot} onValueChange={(v) => { setPot(v); setMenu("-"); }}>
+                <Select
+                  value={pot}
+                  // Radix reports "" while its options mount: keep the pot the dialog was opened for
+                  onValueChange={(v) => {
+                    if (!v || v === pot) return;
+                    setPot(v);
+                    setMenu("-");
+                  }}
+                >
                   <SelectTrigger id="nt-pot" className="w-full">
                     <SelectValue placeholder="Choose a pot" />
                   </SelectTrigger>

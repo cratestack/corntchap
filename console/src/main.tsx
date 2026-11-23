@@ -50,7 +50,8 @@ function NotFound() {
 
 function ThemedToaster() {
   const { resolved } = useTheme();
-  return <Toaster theme={resolved} position="bottom-right" closeButton />;
+  // phones: above the bottom tab bar
+  return <Toaster theme={resolved} position="bottom-right" closeButton mobileOffset={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom))" }} />;
 }
 
 function Providers() {

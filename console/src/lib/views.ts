@@ -46,3 +46,22 @@ export function forgetView(pot: string, viewKey: string) {
     /* ignore */
   }
 }
+
+const LAST_POT = "corntchap.lastpot";
+
+/** The pot opened last: phones keep their bottom tabs on it while on other pages. */
+export function lastPot(): string | null {
+  try {
+    return localStorage.getItem(LAST_POT);
+  } catch {
+    return null;
+  }
+}
+
+export function rememberPot(pot: string) {
+  try {
+    localStorage.setItem(LAST_POT, pot.toUpperCase());
+  } catch {
+    /* ignore */
+  }
+}
