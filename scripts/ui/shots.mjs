@@ -25,7 +25,7 @@ async function signIn(ctx) {
   if (page.url().includes("/realms/")) {
     await page.fill("#username", process.env.KC_USER || "admin");
     await page.fill("#password", process.env.KC_PASS || "admin");
-    await page.click("#kc-login");
+    await page.locator("#kc-login, [type=submit]").first().click();
   }
   await page.waitForURL((u) => u.toString().startsWith(BASE) && !u.toString().includes("/auth/"), { timeout: 30000 });
   // the console keeps a live event stream open, so "networkidle" never comes: wait for the shell

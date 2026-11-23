@@ -69,6 +69,11 @@ admin (`corntchap-cli user admin <handle> --on`) are never demoted by the IdP. S
 URL than the server does (it is used for the IdP logout redirect). Browser logout (`POST /logout`) also ends the
 Keycloak session.
 
+**Login theme.** [cratestack/corntchap-keycloak](https://github.com/cratestack/corntchap-keycloak) styles Keycloak's
+sign-in pages like corntchap's own (indigo band, cream card, light and dark, phone layout). Copy its jar into
+`/opt/keycloak/providers/`, run `kc.sh build`, and pick **Login theme: `corntchap`** under Realm settings → Themes.
+The dev stack mounts it from a checkout (`just keycloak-theme`, part of `just setup`).
+
 Store the client credentials (the Deployment reads `client-id` and `client-secret` from this secret):
 
 ```sh

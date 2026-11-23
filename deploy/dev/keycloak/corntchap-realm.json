@@ -1,5 +1,6 @@
 {
   "realm": "corntchap",
+  "loginTheme": "corntchap",
   "enabled": true,
   "sslRequired": "none",
   "registrationAllowed": false,
@@ -44,7 +45,7 @@
   ],
   "users": [
     {
-      "username": "admin",
+      "id": "0b8e6f0a-1c2d-4e3f-9a5b-7c6d5e4f3a01", "username": "admin",
       "enabled": true,
       "email": "admin@corntchap.test",
       "emailVerified": true,
@@ -62,7 +63,7 @@
       ]
     },
     {
-      "username": "dev",
+      "id": "0b8e6f0a-1c2d-4e3f-9a5b-7c6d5e4f3a02", "username": "dev",
       "enabled": true,
       "email": "dev@corntchap.test",
       "emailVerified": true,

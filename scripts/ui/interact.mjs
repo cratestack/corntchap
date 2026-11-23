@@ -19,7 +19,7 @@ await page.waitForURL((u) => u.toString().includes("/realms/"), { timeout: 15000
 if (page.url().includes("/realms/")) {
   await page.fill("#username", process.env.KC_USER || "admin");
   await page.fill("#password", process.env.KC_PASS || "admin");
-  await page.click("#kc-login");
+  await page.locator("#kc-login, [type=submit]").first().click();
 }
 await page.waitForSelector("#main", { timeout: 30000 });
 await page.goto(APP + path);
