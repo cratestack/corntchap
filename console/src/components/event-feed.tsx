@@ -24,6 +24,7 @@ import {
   Paperclip,
   FileWarning,
   MessagesSquare,
+  GitBranch,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
@@ -111,6 +112,14 @@ export function describe(e: ChangeView): Described {
         verb: `${p.via ? `(via ${p.via}) ` : ""}${p.to ? `wrote to ${p.to}` : "posted on the pass"}`,
         detail: p.title ?? undefined,
       };
+    case "task.propagated":
+      return { icon: GitBranch, tone: "text-primary", verb: "passed an upstream change on", detail: p.upstream ? `from ${p.upstream}` : undefined };
+    case "project.repo_added":
+      return { icon: GitBranch, tone: "text-primary", verb: "added the repository", detail: p.name ?? undefined };
+    case "project.repo_removed":
+      return { icon: GitBranch, tone: "text-destructive", verb: "removed the repository", detail: p.name ?? undefined };
+    case "project.repo_linked":
+      return { icon: GitBranch, tone: "text-muted-foreground", verb: "linked repositories", detail: p.repo && p.depends_on ? `${p.repo} depends on ${p.depends_on}` : undefined };
     case "task.lease_expired":
       return { icon: Hourglass, tone: "text-corn-text", verb: "lease ran out on" };
     default:

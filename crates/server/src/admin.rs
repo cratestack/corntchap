@@ -840,19 +840,24 @@ pub async fn create_project(
     lease_ttl_s: Option<i64>,
 ) -> Result<Value> {
     let p = &acting(db, p).await?;
-    let mut c = db.acquire().await?;
+    let mut c = db.begin().await?;
     let tid = owned_team(&mut c, p, team).await?;
     let key = key.trim().to_uppercase();
     let ttl = lease_ttl_s.unwrap_or(600).clamp(10, 86_400);
-    sqlx::query("insert into projects (id, team_id, key, name, repo_url, lease_ttl) values ($1,$2,$3,$4,$5,make_interval(secs => $6::float8))")
-        .bind(Uuid::new_v4())
+    let id = Uuid::new_v4();
+    // `repo_url` is the pot's first repository (projects.repo_url follows the repositories table)
+    sqlx::query("insert into projects (id, team_id, key, name, lease_ttl) values ($1,$2,$3,$4,make_interval(secs => $5::float8))")
+        .bind(id)
         .bind(tid)
         .bind(&key)
         .bind(name)
-        .bind(repo_url)
         .bind(ttl as f64)
         .execute(&mut *c)
         .await?;
+    if let Some(url) = repo_url.map(str::trim).filter(|u| !u.is_empty()) {
+        crate::repos::insert_repo(&mut c, id, url, None, None).await?;
+    }
+    c.commit().await?;
     Ok(json!({"key": key, "name": name, "team": team, "lease_ttl_s": ttl}))
 }
 
@@ -964,6 +969,8 @@ pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<V
         "select jsonb_build_object('id', a.id, 'name', a.name, 'kind', a.kind, 'agent_kind', a.agent_kind, 'runtime', a.runtime,
             'max_leases', a.max_leases, 'owner', (select name from principals where id = a.owner_id),
             'grants', to_jsonb(a.grants),
+            'repo_scopes', coalesce((select jsonb_agg(jsonb_build_object('project', rp.key, 'repos', to_jsonb(cr.repos)) order by rp.key)
+                from cook_repos cr join projects rp on rp.id = cr.project_id where cr.agent_id = a.id), '[]'::jsonb),
             'disabled', a.disabled_at is not null, 'last_seen_at', a.last_seen_at,
             'busy', (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()),
             'teams', coalesce((select jsonb_agg(t.name order by t.name) from team_members m join teams t on t.id = m.team_id
@@ -1295,7 +1302,11 @@ pub async fn delete_principal(db: &PgPool, p: &Principal, kind: &str, name: &str
 }
 
 /// A pot of a team `p` owns (admins: any): (project id, display name).
-async fn owned_project(c: &mut PgConnection, p: &Principal, key: &str) -> Result<(Uuid, String)> {
+pub(crate) async fn owned_project(
+    c: &mut PgConnection,
+    p: &Principal,
+    key: &str,
+) -> Result<(Uuid, String)> {
     let key = key.trim().to_uppercase();
     let row: Option<(Uuid, Uuid, String)> =
         sqlx::query_as("select id, team_id, name from projects where key = $1")

@@ -24,7 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import { IdChip, LabelChip } from "./bits";
+import { IdChip, LabelChip, RepoChip } from "./bits";
 
 const RUNTIME: Record<string, string> = {
   opencode: "OpenCode",
@@ -218,6 +218,7 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
                       <SquareTerminal className="size-3.5" aria-hidden="true" /> {RUNTIME[s.runtime] ?? s.runtime}
                     </span>
                     <LabelChip className="font-mono"><Link to={`/pots/${s.project}/about`} className="hover:underline focus-visible:underline">{s.project}</Link></LabelChip>
+                    {s.repo && <RepoChip>{s.repo}</RepoChip>}
                     {s.main && <span className="label-caps text-primary">main</span>}
                     <span className="font-mono text-[11px] text-muted-foreground" title={`Session ${s.session}`}>
                       {shortSession(s.session)}

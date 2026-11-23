@@ -54,7 +54,7 @@ const TAIL_VIEWS: { id: BaseView; label: string }[] = [
 
 function readFilters(p: URLSearchParams): Filters {
   const f: Filters = {};
-  for (const k of ["status", "label", "holder", "menu", "q"] as const) {
+  for (const k of ["status", "label", "repo", "holder", "menu", "q"] as const) {
     const v = p.get(k);
     if (v) f[k] = v;
   }
@@ -66,6 +66,7 @@ function applyFilters(tasks: TaskView[], f: Filters): TaskView[] {
   return tasks.filter((t) => {
     if (f.status && bucketOf(t) !== f.status) return false;
     if (f.label && !t.labels.includes(f.label)) return false;
+    if (f.repo && !t.repos.includes(f.repo)) return false;
     if (f.holder && t.claimed_by !== f.holder) return false;
     if (f.menu && (f.menu === "-" ? !!t.menu : t.menu !== f.menu)) return false;
     if (q && !`${t.id} ${t.title}`.toLowerCase().includes(q)) return false;
@@ -153,7 +154,7 @@ export function KitchenPage() {
     setParams(
       (p) => {
         const n = new URLSearchParams(p);
-        for (const k of ["status", "label", "holder", "menu", "q"]) n.delete(k);
+        for (const k of ["status", "label", "repo", "holder", "menu", "q"]) n.delete(k);
         return n;
       },
       { replace: true },
@@ -480,6 +481,7 @@ function FilterSheet({
   menus: MenuView[];
 }) {
   const labels = useMemo(() => [...new Set(tasks.flatMap((t) => t.labels))].sort(), [tasks]);
+  const repos = useMemo(() => [...new Set([...project.repos.map((r) => r.name), ...tasks.flatMap((t) => t.repos)])], [tasks, project.repos]);
   const holders = useMemo(() => [...new Set(tasks.map((t) => t.claimed_by).filter((h): h is string => !!h))].sort(), [tasks]);
   const toggle = (k: keyof Filters, v: string) => setFilter(k, filters[k] === v ? undefined : v);
   const active = Object.values(filters).some(Boolean);
@@ -529,6 +531,7 @@ function FilterSheet({
             </>,
           )}
           {labels.length > 0 && section("Label", labels.map((l) => <Pill key={l} on={filters.label === l} onClick={() => toggle("label", l)}>{l}</Pill>))}
+          {repos.length > 0 && section("Repository", repos.map((r) => <Pill key={r} on={filters.repo === r} onClick={() => toggle("repo", r)}>{r}</Pill>))}
           {holders.length > 0 && section("Cook", holders.map((h) => <Pill key={h} on={filters.holder === h} onClick={() => toggle("holder", h)}>{h}</Pill>))}
         </div>
         <div className="flex gap-2 border-t border-border bg-card px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
@@ -547,6 +550,7 @@ function FilterSheet({
 function WideHeader({ project, base, viewKey, saved, taskView, onNewView, filters, setFilter, clearFilters, tasks, menus, onNew, openQuestions }: HeaderProps) {
   const loc = useLocation();
   const labels = useMemo(() => [...new Set(tasks.flatMap((t) => t.labels))].sort(), [tasks]);
+  const repos = useMemo(() => [...new Set([...project.repos.map((r) => r.name), ...tasks.flatMap((t) => t.repos)])], [tasks, project.repos]);
   const holders = useMemo(() => [...new Set(tasks.map((t) => t.claimed_by).filter((h): h is string => !!h))].sort(), [tasks]);
   const active = Object.values(filters).some(Boolean);
 
@@ -685,6 +689,17 @@ function WideHeader({ project, base, viewKey, saved, taskView, onNewView, filter
               ))}
             </DropdownMenuRadioGroup>
           </FilterChip>
+          {repos.length > 0 && (
+            <FilterChip label="Repository" value={filters.repo} onClear={() => setFilter("repo", undefined)}>
+              <DropdownMenuRadioGroup value={filters.repo ?? ""} onValueChange={(v) => setFilter("repo", v || undefined)}>
+                {repos.map((r) => (
+                  <DropdownMenuRadioItem key={r} value={r}>
+                    {r}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </FilterChip>
+          )}
           <FilterChip label="Cook" value={filters.holder} onClear={() => setFilter("holder", undefined)} disabled={holders.length === 0}>
             <DropdownMenuRadioGroup value={filters.holder ?? ""} onValueChange={(v) => setFilter("holder", v || undefined)}>
               {holders.map((h) => (

@@ -32,6 +32,13 @@ type ChangePayload {
   file String?
   /// file.ready: the file's permanent link.
   url String?
+  /// project.repo_added / project.repo_removed: the repository's name.
+  name String?
+  /// project.repo_linked: the dependent repository and the one it depends on.
+  repo String?
+  depends_on String?
+  /// task.propagated: the repositories of the served task that others depend on, comma separated.
+  upstream String?
 }
 
 type ChangeView {

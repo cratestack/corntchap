@@ -13,6 +13,7 @@ import { useProc, useProcCall, useProjects } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { lastView } from "@/lib/views";
 import { TagInput } from "./tag-input";
+import { RepoPicker } from "./repos";
 import { useMenus } from "./menus";
 
 export const PRIORITIES = [
@@ -36,6 +37,7 @@ export function NewTaskDialog() {
   const [deps, setDeps] = useState<string[]>([]);
   const [priority, setPriority] = useState("0");
   const [menu, setMenu] = useState("-");
+  const [repos, setRepos] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -46,6 +48,7 @@ export function NewTaskDialog() {
       setItems("");
       setLabels([]);
       setDeps([]);
+      setRepos([]);
       setPriority("0");
       setMenu(newTask.menu && newTask.menu !== "-" ? newTask.menu : "-");
     }
@@ -59,6 +62,7 @@ export function NewTaskDialog() {
     if (newTask.open && !pot && first) setPot((p) => p || first);
   }, [newTask.open, pot, projects.data]);
 
+  const potRepos = projects.data?.find((p) => p.key === pot)?.repos ?? [];
   const menus = useMenus(pot, newTask.open);
   const tasks = useProc("projectTasks", { project: pot }, { enabled: newTask.open && !!pot });
   const depSuggestions = useMemo(
@@ -79,6 +83,7 @@ export function NewTaskDialog() {
         labels: labels.length ? labels.join(",") : null,
         dependsOn: deps.length ? deps.join(",") : null,
         priority: Number(priority),
+        repos: potRepos.length > 0 && repos.length > 0 ? repos.join(",") : null,
         menu: menu !== "-" && menus.open.some((m) => m.key === menu) ? menu : null,
       });
       toast.success(`${t.id} is in the pot`, {
@@ -121,6 +126,7 @@ export function NewTaskDialog() {
                       if (!v || v === pot) return;
                       setPot(v);
                       setMenu("-");
+                      setRepos([]);
                     }}
                   >
                     <SelectTrigger id="nt-pot" className="w-full">
@@ -167,6 +173,13 @@ export function NewTaskDialog() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+              )}
+              {potRepos.length > 0 && (
+                <div className="space-y-1.5">
+                  <Label>Repositories</Label>
+                  <RepoPicker repos={potRepos} value={repos} onChange={setRepos} label="Repositories the task is about" />
+                  <p className="text-[12px] text-muted-foreground">None chosen: any repository. A cook that handles other repositories will not scoop it.</p>
                 </div>
               )}
               <div className="space-y-1.5">

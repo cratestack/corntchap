@@ -25,7 +25,7 @@ use crate::{
 pub enum StationCmd {
     /// Find the agent sessions of this folder (in a git checkout: its root and worktrees) and register them as stations.
     Scan {
-        /// The pot (project key); default: the pot whose repo_url matches this checkout's git `origin`.
+        /// The pot (project key); default: the pot with a repository matching this checkout's git `origin`.
         #[arg(long)]
         pot: Option<String>,
         /// The cook to register the sessions for (default: your cook of the runtime's kind).
@@ -94,7 +94,7 @@ pub enum StationCmd {
         /// A task it should take, e.g. PAY-12.
         #[arg(long)]
         task: Option<String>,
-        /// The pot; default: the pot whose repo_url matches this repo's `origin`.
+        /// The pot; default: the pot with a repository matching this repo's `origin`.
         #[arg(long)]
         pot: Option<String>,
         /// The cook it works as (default: your Claude Code cook).
@@ -230,19 +230,61 @@ pub fn normalize_git_url(url: &str) -> String {
     r.trim_start_matches('/').to_string()
 }
 
-/// Keys of the pots whose `repo_url` is this origin.
+/// A pot's repositories as `(alias, url)`: its `repos`, else (an older server) its single `repo_url`.
+fn pot_repos(p: &Value) -> Vec<(String, String)> {
+    match p["repos"].as_array() {
+        Some(r) => r
+            .iter()
+            .filter_map(|x| {
+                Some((
+                    x["name"].as_str()?.to_string(),
+                    x["url"].as_str()?.to_string(),
+                ))
+            })
+            .collect(),
+        None => p["repo_url"]
+            .as_str()
+            .map(|u| vec![(String::new(), u.to_string())])
+            .unwrap_or_default(),
+    }
+}
+
+/// Keys of the pots that have a repository (any of them) with this origin.
 pub fn match_pots(origin: &str, pots: &Value) -> Vec<String> {
     let want = normalize_git_url(origin);
     pots.as_array()
         .into_iter()
         .flatten()
         .filter(|p| {
-            p["repo_url"]
-                .as_str()
-                .is_some_and(|u| !u.trim().is_empty() && normalize_git_url(u) == want)
+            pot_repos(p)
+                .iter()
+                .any(|(_, u)| !u.trim().is_empty() && normalize_git_url(u) == want)
         })
         .filter_map(|p| p["key"].as_str().map(String::from))
         .collect()
+}
+
+/// The alias of the repository of pot `key` that has this origin, if any.
+pub fn match_repo(origin: &str, pots: &Value, key: &str) -> Option<String> {
+    let want = normalize_git_url(origin);
+    pots.as_array()?
+        .iter()
+        .filter(|p| {
+            p["key"]
+                .as_str()
+                .is_some_and(|k| k.eq_ignore_ascii_case(key))
+        })
+        .flat_map(pot_repos)
+        .find(|(a, u)| !a.is_empty() && !u.trim().is_empty() && normalize_git_url(u) == want)
+        .map(|(a, _)| a)
+}
+
+/// The repository (alias) of `pot` that the folder `dir` is a checkout of, by its `origin`.
+/// Best effort: no origin, no match or no network is simply `None`.
+async fn repo_alias_of(api: &Api, dir: &str, pot: &str) -> Option<String> {
+    let origin = git(Path::new(dir), &["remote", "get-url", "origin"]).ok()?;
+    let pots = api.get("/projects").await.ok()?;
+    match_repo(&origin, &pots, pot)
 }
 
 /// Directories of `git worktree list --porcelain` (bare and prunable entries left out).
@@ -632,7 +674,8 @@ async fn scan(
             root
         );
     }
-    scan_found(api, &dirs, pot, cook, all, dry_run, json).await
+    let repo = repo_alias_of(api, &root, &pot).await;
+    scan_found(api, &dirs, pot, repo, cook, all, dry_run, json).await
 }
 
 /// Where the sessions work: the git checkout's root when there is one (its worktrees are covered
@@ -643,7 +686,7 @@ fn work_folder() -> Result<String> {
     Ok(git(&cwd, &["rev-parse", "--show-toplevel"]).unwrap_or_else(|_| cwd.display().to_string()))
 }
 
-/// The pot of a folder: the one given, else the pot whose repo_url matches its git `origin`.
+/// The pot of a folder: the one given, else the pot with a repository matching its git `origin`.
 async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<String> {
     let pots = api.get("/projects").await?;
     Ok(match pot {
@@ -651,7 +694,7 @@ async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<Strin
         None => {
             let origin = git(Path::new(root), &["remote", "get-url", "origin"]).map_err(|_| {
                 anyhow!(
-                    "which pot? pass --pot KEY (this folder has no git `origin` to match against a pot's repo_url)\n{}",
+                    "which pot? pass --pot KEY (this folder has no git `origin` to match against a pot's repositories)\n{}",
                     pot_list(&pots)
                 )
             })?;
@@ -659,11 +702,11 @@ async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<Strin
             match m.as_slice() {
                 [one] => one.clone(),
                 [] => bail!(
-                    "no pot has repo_url {origin}: pass --pot KEY, or set the pot's repo_url\n{}",
+                    "no pot has a repository {origin}: pass --pot KEY, or add it to the pot (`corntchap-cli pot repo add KEY URL`)\n{}",
                     pot_list(&pots)
                 ),
                 many => bail!(
-                    "several pots have repo_url {origin} ({}): pass --pot KEY",
+                    "several pots have a repository {origin} ({}): pass --pot KEY",
                     many.join(", ")
                 ),
             }
@@ -671,10 +714,12 @@ async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<Strin
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn scan_found(
     api: &Api,
     dirs: &[String],
     pot: String,
+    repo: Option<String>,
     cook: Option<String>,
     all: bool,
     dry_run: bool,
@@ -770,7 +815,7 @@ async fn scan_found(
         };
         let mut row = json!({
             "runtime": f.runtime, "cook": c, "project": pot, "session": f.session,
-            "directory": f.directory, "label": label_for(f), "station": null,
+            "directory": f.directory, "label": label_for(f), "repo": repo, "station": null,
             "dry_run": dry_run,
         });
         if !dry_run {
@@ -779,7 +824,7 @@ async fn scan_found(
                     "/stations",
                     json!({
                         "cook": c, "project": pot, "runtime": f.runtime, "session": f.session,
-                        "directory": f.directory, "label": label_for(f),
+                        "directory": f.directory, "label": label_for(f), "repo": repo,
                     }),
                 )
                 .await
@@ -850,12 +895,13 @@ async fn add(
             .unwrap_or("session")
             .to_string()
     });
+    let repo = repo_alias_of(api, &dir, &pot).await;
     let r = api
         .post(
             "/stations",
             serde_json::json!({
                 "cook": cook, "project": pot, "runtime": runtime, "session": session,
-                "directory": dir, "label": label,
+                "directory": dir, "label": label, "repo": repo,
             }),
         )
         .await?;
@@ -876,10 +922,15 @@ fn pot_list(pots: &Value) -> String {
         .into_iter()
         .flatten()
         .map(|p| {
+            let urls: Vec<String> = pot_repos(p).into_iter().map(|(_, u)| u).collect();
             format!(
                 "  {}  {}",
                 s(p, "key"),
-                p["repo_url"].as_str().unwrap_or("(no repo_url)")
+                if urls.is_empty() {
+                    "(no repositories)".to_string()
+                } else {
+                    urls.join(", ")
+                }
             )
         })
         .collect();
@@ -1101,11 +1152,12 @@ async fn start_here(api: &Api, a: StartArgs) -> Result<()> {
         Some(t) => format!("{base} ({t})"),
         None => format!("{base} (new)"),
     });
+    let repo = repo_alias_of(api, &root, &pot).await;
     let st = api
         .post(
             "/stations",
             json!({"cook": cook, "project": pot, "runtime": "claude-code", "session": session,
-                   "directory": root, "label": label}),
+                   "directory": root, "label": label, "repo": repo}),
         )
         .await
         .context("registering the new session")?;
@@ -1314,15 +1366,50 @@ mod tests {
     #[test]
     fn pots_match_by_normalized_repo_url() {
         let pots = json!([
-            {"key": "PAY", "repo_url": "git@github.com:acme/pay.git"},
-            {"key": "WEB", "repo_url": "https://github.com/acme/web"},
-            {"key": "NOURL", "repo_url": null},
+            {"key": "PAY", "repo_url": "git@github.com:acme/pay.git",
+             "repos": [{"name": "pay", "url": "git@github.com:acme/pay.git"}]},
+            {"key": "WEB", "repo_url": "https://github.com/acme/web",
+             "repos": [{"name": "web", "url": "https://github.com/acme/web"},
+                       {"name": "api", "url": "https://github.com/acme/web-api.git", "default_branch": "main"}]},
+            {"key": "OLD", "repo_url": "https://github.com/acme/old"},
+            {"key": "NOURL", "repo_url": null, "repos": []},
         ]);
         assert_eq!(
             match_pots("https://github.com/Acme/pay.git", &pots),
             ["PAY"]
         );
+        // any repository of a pot matches, not only the first
+        assert_eq!(
+            match_pots("git@github.com:acme/web-api.git", &pots),
+            ["WEB"]
+        );
+        // a server without `repos` still matches on repo_url
+        assert_eq!(
+            match_pots("https://github.com/acme/old.git", &pots),
+            ["OLD"]
+        );
         assert!(match_pots("https://github.com/acme/other", &pots).is_empty());
+    }
+
+    #[test]
+    fn a_checkout_finds_its_repository_alias_in_its_pot() {
+        let pots = json!([
+            {"key": "WEB", "repos": [{"name": "web", "url": "https://github.com/acme/web"},
+                                      {"name": "api", "url": "https://github.com/acme/web-api.git"}]},
+            {"key": "PAY", "repos": [{"name": "pay", "url": "https://github.com/acme/web-api"}]},
+        ]);
+        assert_eq!(
+            match_repo("git@github.com:Acme/web-api.git", &pots, "web").as_deref(),
+            Some("api")
+        );
+        assert_eq!(
+            match_repo("git@github.com:Acme/web-api.git", &pots, "PAY").as_deref(),
+            Some("pay")
+        );
+        assert_eq!(
+            match_repo("https://github.com/acme/none", &pots, "WEB"),
+            None
+        );
     }
 
     #[test]

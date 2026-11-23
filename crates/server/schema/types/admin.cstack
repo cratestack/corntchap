@@ -69,6 +69,8 @@ type PrincipalView {
   owner String?
   /// Cooks: plan, manage and/or admin, granted by a person.
   grants String[]
+  /// Cooks: the repositories it handles per pot (a pot not listed: all of its repositories).
+  repo_scopes CookRepoScope[]
   disabled Boolean
   last_seen_at String?
   /// Leases held right now.
@@ -150,4 +152,10 @@ type PotDeletedView {
   /// Stored file objects removed from storage; `files_left` could not be (the metadata is gone either way).
   files Int
   files_left Int
+}
+
+/// The repositories a cook handles in one pot.
+type CookRepoScope {
+  project String
+  repos String[]
 }

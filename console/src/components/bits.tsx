@@ -91,6 +91,20 @@ export function ProgressBar({ done, total, className }: { done: number; total: n
   );
 }
 
+/** A repository alias on a task or a cook scope: mono, with a primary tint so it does not read as a label. */
+export function RepoChip({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border border-primary/30 bg-primary/5 px-2 py-px font-mono text-[11px] font-medium text-foreground",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
 export function LabelChip({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span

@@ -16,7 +16,7 @@ pub const MAX_TTL_SECS: f64 = 86_400.0;
 /// SQL expression producing the JSON shape of a task. Needs aliases `t` (tasks) and `pr` (projects).
 pub const TASK_JSON: &str = r#"jsonb_build_object(
   'id', pr.key || '-' || t.number, 'project', pr.key, 'number', t.number,
-  'title', t.title, 'body', t.body, 'priority', t.priority, 'labels', to_jsonb(t.labels),
+  'title', t.title, 'body', t.body, 'priority', t.priority, 'labels', to_jsonb(t.labels), 'repos', to_jsonb(t.repos),
   'status', t.status,
   'parent', (select pp.key || '-' || pt.number from tasks pt join projects pp on pp.id = pt.project_id where pt.id = t.parent_id),
   'depends_on', coalesce((select jsonb_agg(dp.key || '-' || dt.number order by dp.key, dt.number)
@@ -152,7 +152,7 @@ pub async fn emit_to(
     Ok(seq)
 }
 
-async fn task_json(c: &mut PgConnection, id: Uuid) -> Result<Value> {
+pub(crate) async fn task_json(c: &mut PgConnection, id: Uuid) -> Result<Value> {
     let sql = format!(
         "select {TASK_JSON} from tasks t join projects pr on pr.id = t.project_id where t.id = $1"
     );
@@ -163,7 +163,7 @@ async fn task_json(c: &mut PgConnection, id: Uuid) -> Result<Value> {
 }
 
 /// Task with its items, comments and dependency states.
-async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
+pub(crate) async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
     let mut t = task_json(c, id).await?;
     let items: Value = sqlx::query_scalar(
         "select coalesce(jsonb_agg(jsonb_build_object('position', i.position, 'text', i.text, 'done', i.done,
@@ -224,6 +224,7 @@ pub async fn get_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
 pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
     let sql = format!(
         "select jsonb_build_object('key', pr.key, 'name', pr.name, 'repo_url', pr.repo_url,
+            'repos', {repos},
             'team', (select name from teams where id = pr.team_id),
             'lease_ttl_s', extract(epoch from pr.lease_ttl)::float8,
             'open', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'open'),
@@ -240,7 +241,8 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
                   and m.seq > coalesce((select r.last_seq from pass_reads r where r.principal_id = $2 and r.project_id = pr.id
                       and r.conversation = case when m.to_principal is null then 'pot' else m.author_id::text end), 0)))
          from projects pr where {} order by pr.key",
-        access_sql("$1", "$2")
+        access_sql("$1", "$2"),
+        repos = crate::repos::repos_json_sql("pr.id"),
     );
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(p.is_admin)
@@ -303,6 +305,8 @@ pub struct NewTask {
     pub parent: Option<String>,
     pub depends_on: Vec<String>,
     pub labels: Vec<String>,
+    /// Aliases of the pot's repositories the task is about (empty: any).
+    pub repos: Vec<String>,
     pub priority: i64,
     /// Menu key (milestone) to put the task on.
     pub menu: Option<String>,
@@ -326,6 +330,7 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
         Some(m) => Some(crate::menus::open_menu_id(&mut tx, pr.id, &pr.key, m).await?),
         None => None,
     };
+    let repos = crate::repos::check_aliases(&mut tx, pr.id, &pr.key, &n.repos).await?;
     let number: i64 = sqlx::query_scalar(
         "update projects set next_number = next_number + 1 where id = $1 returning next_number - 1",
     )
@@ -334,8 +339,8 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     .await?;
     let id = Uuid::new_v4();
     sqlx::query(
-        "insert into tasks (id, project_id, number, title, body, priority, labels, parent_id, status, created_by, menu_id)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10)",
+        "insert into tasks (id, project_id, number, title, body, priority, labels, parent_id, status, created_by, menu_id, repos)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11)",
     )
     .bind(id)
     .bind(pr.id)
@@ -347,6 +352,7 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     .bind(parent)
     .bind(p.id)
     .bind(menu)
+    .bind(&repos)
     .execute(&mut *tx)
     .await?;
     for (i, text) in n.items.iter().enumerate() {
@@ -372,7 +378,7 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
         Some(id),
         "task.created",
         Some(p.id),
-        json!({"title": n.title.trim(), "labels": n.labels, "menu": n.menu.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(crate::menus::slug)}),
+        json!({"title": n.title.trim(), "labels": n.labels, "repos": repos, "menu": n.menu.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(crate::menus::slug)}),
     )
     .await?;
     let out = task_full(&mut tx, id).await?;
@@ -384,6 +390,8 @@ pub struct TaskEdit {
     pub title: Option<String>,
     pub body: Option<String>,
     pub labels: Option<Vec<String>>,
+    /// Some(empty) clears the repositories.
+    pub repos: Option<Vec<String>>,
     pub priority: Option<i64>,
     /// Some("") takes the task off its menu.
     pub menu: Option<String>,
@@ -407,8 +415,12 @@ pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Re
             )));
         }
     }
+    let repos = match &e.repos {
+        Some(r) => Some(crate::repos::check_aliases(&mut tx, t.project_id, &t.key, r).await?),
+        None => None,
+    };
     sqlx::query(
-        "update tasks set title = coalesce($2, title), body = coalesce($3, body), labels = coalesce($4, labels),
+        "update tasks set repos = coalesce($6, repos), title = coalesce($2, title), body = coalesce($3, body), labels = coalesce($4, labels),
             priority = coalesce($5, priority), updated_at = now() where id = $1",
     )
     .bind(t.id)
@@ -416,6 +428,7 @@ pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Re
     .bind(e.body.as_deref())
     .bind(e.labels.as_deref())
     .bind(e.priority)
+    .bind(repos.as_deref())
     .execute(&mut *tx)
     .await?;
     if let Some(m) = e.menu.as_deref().map(str::trim) {
@@ -483,7 +496,7 @@ pub async fn claim_next(
     if live_leases(&mut tx, p.id).await? >= p.max_leases {
         return Err(Error::MaxLeases);
     }
-    let row: Option<(Uuid, i64, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<(Uuid, i64, DateTime<Utc>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "with next as (
            select t.id from tasks t
            where t.project_id = $1
@@ -492,13 +505,15 @@ pub async fn claim_next(
                              where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
              and (cardinality($4::text[]) = 0 or t.labels && $4::text[])
              and ($5::text is null or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
+             and {scope}
            order by t.priority desc, t.created_at
            for update skip locked limit 1)
          update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
             lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $6
          from next where t.id = next.id
          returning t.id, t.lease_epoch, t.lease_expires_at",
-    )
+        scope = crate::repos::scope_sql("$2"),
+    )))
     .bind(pr.id)
     .bind(p.id)
     .bind(ttl)
@@ -590,9 +605,22 @@ pub async fn claim_task(
     )
     .await?;
     let out = task_full(&mut tx, t.id).await?;
+    let task_repos: Vec<String> = out["repos"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let warning = crate::repos::scope_warning(&mut tx, p.id, t.project_id, &task_repos).await?;
     let news = crate::pantry::news(&mut tx, p.id, t.project_id).await?;
     tx.commit().await?;
-    Ok(with_news(lease_view(out, epoch, exp), news))
+    let mut v = with_news(lease_view(out, epoch, exp), news);
+    if let Some(w) = warning {
+        v["warning"] = json!(w);
+    }
+    Ok(v)
 }
 
 /// Fenced lease extension. Returns the new expiry, or lease_lost.
@@ -834,6 +862,7 @@ pub async fn complete(
     r: &str,
     epoch: i64,
     result: &str,
+    no_propagate: bool,
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
@@ -876,6 +905,9 @@ pub async fn complete(
         json!({"result": result}),
     )
     .await?;
+    if !no_propagate {
+        crate::repos::propagate(&mut tx, p, t.id, result).await?;
+    }
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(out)
@@ -1088,13 +1120,14 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
     }
     let sql = format!(
         "select jsonb_build_object('id', pr.key || '-' || t.number, 'project', pr.key, 'title', t.title,
-            'priority', t.priority, 'labels', to_jsonb(t.labels))
+            'priority', t.priority, 'labels', to_jsonb(t.labels), 'repos', to_jsonb(t.repos))
          from tasks t join projects pr on pr.id = t.project_id
-         where ($1::uuid is null or pr.id = $1) and {}
+         where ($1::uuid is null or pr.id = $1) and {} and {}
            and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
            and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
          order by t.priority desc, t.created_at limit 20",
-        access_sql("$2", "$3")
+        access_sql("$2", "$3"),
+        crate::repos::scope_sql("$3"),
     );
     Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(pid)
@@ -1166,6 +1199,15 @@ fn task_markdown(t: &Value) -> String {
         meta.push(format!(
             "labels {}",
             l.iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    if let Some(r) = t["repos"].as_array().filter(|l| !l.is_empty()) {
+        meta.push(format!(
+            "repos {}",
+            r.iter()
                 .filter_map(|x| x.as_str())
                 .collect::<Vec<_>>()
                 .join(",")

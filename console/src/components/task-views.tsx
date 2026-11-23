@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { BUCKETS, bucketOf, fmtLease, leaseLeftMs, taskNote, useNow, type Bucket } from "@/lib/format";
 import { useIsPhone } from "@/lib/media";
 import { MenuChip } from "./menus";
-import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar } from "./bits";
+import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip } from "./bits";
 
 function priorityTag(p: number) {
   if (p >= 2) return "urgent";
@@ -86,6 +86,9 @@ function PhoneRow({ task, selected, onOpen, menus }: { task: TaskView; selected:
             </span>
           )}
           {menuName && <MenuChip name={menuName} />}
+          {task.repos.map((r) => (
+            <RepoChip key={r}>{r}</RepoChip>
+          ))}
           {task.labels.slice(0, 2).map((l) => (
             <LabelChip key={l}>{l}</LabelChip>
           ))}
@@ -137,6 +140,9 @@ export function TaskRow({ task, selected, onOpen, menus }: { task: TaskView; sel
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
           {task.total_items > 0 && <ProgressBar done={done} total={task.total_items} />}
           {menuName && <MenuChip name={menuName} />}
+          {task.repos.map((r) => (
+            <RepoChip key={r}>{r}</RepoChip>
+          ))}
           {task.labels.map((l) => (
             <LabelChip key={l}>{l}</LabelChip>
           ))}
@@ -237,6 +243,13 @@ export function TaskCard({ task, selected, onOpen, menus }: { task: TaskView; se
       </div>
       <p className={cn("mt-1 line-clamp-3 text-[14px] leading-snug font-medium", task.status === "cancelled" && "line-through")}>{task.title}</p>
       {note && <p className="mt-1 line-clamp-1 text-[12px] text-muted-foreground">{note}</p>}
+      {task.repos.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {task.repos.map((r) => (
+            <RepoChip key={r}>{r}</RepoChip>
+          ))}
+        </div>
+      )}
       {(task.total_items > 0 || task.labels.length > 0 || task.claimed_by || live) && (
         <div className="mt-2 flex items-center gap-2 overflow-hidden">
           {task.total_items > 0 && <ProgressBar done={done} total={task.total_items} className="shrink-0 [&>div:first-child]:w-12" />}

@@ -166,6 +166,9 @@ enum TaskCmd {
         /// Put it on this menu (milestone key).
         #[arg(long)]
         menu: Option<String>,
+        /// A repository of the pot the task is about (repeat for several; `project repo ls` lists them).
+        #[arg(long = "repo")]
+        repos: Vec<String>,
     },
     /// Change a task's title, body, labels (replaced), priority or menu.
     Edit {
@@ -184,7 +187,15 @@ enum TaskCmd {
         /// Take it off its menu.
         #[arg(long)]
         no_menu: bool,
+        /// Replace the repositories the task is about (repeat for several).
+        #[arg(long = "repo", conflicts_with = "no_repos")]
+        repos: Vec<String>,
+        /// Make the task not repository specific (any repository).
+        #[arg(long)]
+        no_repos: bool,
     },
+    /// Split a task that names several repositories into one subtask per repository.
+    Split { id: String },
     /// Show one task.
     Show {
         id: String,
@@ -261,6 +272,9 @@ enum TaskCmd {
         epoch: i64,
         #[arg(long, default_value = "")]
         result: String,
+        /// Nothing downstream is affected: do not tell the cooks of repositories that depend on this task's.
+        #[arg(long)]
+        no_propagate: bool,
     },
     /// Agent mode: give a task back (JSON).
     Release {
@@ -387,11 +401,57 @@ enum ProjectCmd {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+    /// A pot's repositories (a pot has none, one or several): add, remove, list, link.
+    #[command(subcommand)]
+    Repo(RepoCmd),
     /// Set a pot's default lease length, e.g. `pot lease PAY 30m` (team owner or admin).
     Lease {
         key: String,
         #[arg(value_parser = relay::parse_duration)]
         length: std::time::Duration,
+    },
+}
+
+#[derive(Subcommand)]
+enum RepoCmd {
+    /// Add a repository to a pot (team owner or admin).
+    Add {
+        pot: String,
+        /// The git url (https or ssh): `station scan` matches a checkout's origin to it.
+        url: String,
+        /// Short name tasks and cooks use (default: the url's last segment, e.g. backend).
+        #[arg(long)]
+        name: Option<String>,
+        /// Its default branch.
+        #[arg(long)]
+        branch: Option<String>,
+    },
+    /// Remove a repository from a pot: open tasks and cook scopes stop naming it.
+    Rm { pot: String, name: String },
+    /// List a pot's repositories.
+    Ls {
+        pot: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Say that a repository depends on another: serving a task in the upstream tells the cooks of the dependent.
+    Link {
+        pot: String,
+        /// The dependent repository, e.g. app.
+        repo: String,
+        /// The repository it depends on, e.g. backend.
+        #[arg(long)]
+        on: String,
+        /// notify: wake the cooks scoped to the dependent; task: open a follow-up task for it.
+        #[arg(long, default_value = "notify", value_parser = ["notify", "task"])]
+        mode: String,
+    },
+    /// Remove a dependency between two repositories.
+    Unlink {
+        pot: String,
+        repo: String,
+        #[arg(long)]
+        on: String,
     },
 }
 
@@ -459,6 +519,13 @@ enum AgentCmd {
         /// Take every grant away (work only).
         #[arg(long, conflicts_with = "grants")]
         none: bool,
+    },
+    /// Which of a pot's repositories a cook handles (claim_next then gives it only tasks about those, or about none). No repositories given: all.
+    Repos {
+        name: String,
+        #[arg(long)]
+        pot: String,
+        repos: Vec<String>,
     },
     /// How many tasks a cook may hold at once (its stations share them). Its owner or an admin.
     #[command(name = "limit", alias = "max-leases")]
@@ -1010,6 +1077,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         Cmd::Project(ProjectCmd::Ls { json }) => {
             show(&api.get("/projects").await?, json, ui::projects_table);
         }
+        Cmd::Project(ProjectCmd::Repo(c)) => repo_cmd(c, &api).await?,
         Cmd::Project(ProjectCmd::Lease { key, length }) => {
             let v = api
                 .procedure(
@@ -1214,6 +1282,32 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
         } => agent_setup(api, &name, &kind, &runtime, team.as_deref()).await?,
         AgentCmd::Enroll { .. } => unreachable!(),
         AgentCmd::Ls { json } => show(&api.get("/agents").await?, json, ui::agents_table),
+        AgentCmd::Repos { name, pot, repos } => {
+            let r = api
+                .post(
+                    &format!("/projects/{}/cook-repos", pot.to_uppercase()),
+                    json!({"cook": name, "repos": repos}),
+                )
+                .await?;
+            let g: Vec<&str> = r["repos"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|x| x.as_str())
+                .collect();
+            if g.is_empty() {
+                ok_line(format!(
+                    "{name} handles every repository of {}",
+                    s(&r, "project")
+                ));
+            } else {
+                ok_line(format!(
+                    "{name} handles {} in {}",
+                    g.join(", "),
+                    s(&r, "project")
+                ));
+            }
+        }
         AgentCmd::Grant { name, grants, none } => {
             if grants.is_empty() && !none {
                 bail!(
@@ -1370,6 +1464,71 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
     Ok(())
 }
 
+async fn repo_cmd(c: RepoCmd, api: &Api) -> Result<()> {
+    match c {
+        RepoCmd::Add {
+            pot,
+            url,
+            name,
+            branch,
+        } => {
+            let v = api
+                .post(
+                    &format!("/projects/{}/repos", pot.to_uppercase()),
+                    json!({"url": url, "name": name, "default_branch": branch}),
+                )
+                .await?;
+            ok_line(format!(
+                "repository {} added to {}",
+                s(&v["added"], "name"),
+                s(&v, "project")
+            ));
+        }
+        RepoCmd::Rm { pot, name } => {
+            let v = api
+                .delete(&format!("/projects/{}/repos/{name}", pot.to_uppercase()))
+                .await?;
+            ok_line(format!(
+                "repository {} removed from {}",
+                s(&v, "removed"),
+                s(&v, "project")
+            ));
+        }
+        RepoCmd::Ls { pot, json } => {
+            let pots = api.get("/projects").await?;
+            let p = pots
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|p| s(p, "key").eq_ignore_ascii_case(&pot))
+                .ok_or_else(|| anyhow!("no pot {pot}"))?;
+            show(&p["repos"], json, ui::repos_table);
+        }
+        RepoCmd::Link {
+            pot,
+            repo,
+            on,
+            mode,
+        } => {
+            api.post(
+                &format!("/projects/{}/repo-links", pot.to_uppercase()),
+                json!({"repo": repo, "on": on, "mode": mode}),
+            )
+            .await?;
+            ok_line(format!("{repo} now depends on {on} ({mode})"));
+        }
+        RepoCmd::Unlink { pot, repo, on } => {
+            let r = api.raw(
+                reqwest::Method::DELETE,
+                &format!("/projects/{}/repo-links", pot.to_uppercase()),
+            );
+            api.send(r.json(&json!({"repo": repo, "on": on}))).await?;
+            ok_line(format!("{repo} no longer depends on {on}"));
+        }
+    }
+    Ok(())
+}
+
 async fn task(t: TaskCmd, api: &Api) -> Result<()> {
     match t {
         TaskCmd::Ls {
@@ -1399,8 +1558,9 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             parent,
             priority,
             menu,
+            repos,
         } => {
-            let v = api.post(&format!("/projects/{}/tasks", project.to_uppercase()), json!({"title": title, "body": body, "items": items, "labels": labels, "depends_on": depends_on, "parent": parent, "priority": priority, "menu": menu})).await?;
+            let v = api.post(&format!("/projects/{}/tasks", project.to_uppercase()), json!({"title": title, "body": body, "items": items, "labels": labels, "depends_on": depends_on, "parent": parent, "priority": priority, "menu": menu, "repos": repos})).await?;
             ok_line(format!("created {}", s(&v, "id")));
         }
         TaskCmd::Edit {
@@ -1411,8 +1571,10 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             priority,
             menu,
             no_menu,
+            repos,
+            no_repos,
         } => {
-            let b = menu::task_edit_body(
+            let mut b = menu::task_edit_body(
                 title.as_deref(),
                 body.as_deref(),
                 &labels,
@@ -1420,9 +1582,12 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
                 menu.as_deref(),
                 no_menu,
             );
+            if no_repos || !repos.is_empty() {
+                b["repos"] = json!(repos);
+            }
             if b.as_object().is_some_and(|m| m.is_empty()) {
                 return Err(anyhow!(
-                    "nothing to change: pass --title, --body, --label, --priority, --menu or --no-menu"
+                    "nothing to change: pass --title, --body, --label, --priority, --menu, --no-menu, --repo or --no-repos"
                 ));
             }
             let v = api.patch(&format!("/tasks/{id}"), b).await?;
@@ -1513,12 +1678,33 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
         TaskCmd::Heartbeat { id, epoch } => out(&api
             .post(&format!("/tasks/{id}/heartbeat"), json!({"epoch": epoch}))
             .await?),
-        TaskCmd::Complete { id, epoch, result } => out(&api
+        TaskCmd::Complete {
+            id,
+            epoch,
+            result,
+            no_propagate,
+        } => out(&api
             .post(
                 &format!("/tasks/{id}/complete"),
-                json!({"epoch": epoch, "result": result}),
+                json!({"epoch": epoch, "result": result, "no_propagate": no_propagate}),
             )
             .await?),
+        TaskCmd::Split { id } => {
+            let v = api
+                .post(&format!("/tasks/{id}/split-by-repo"), json!({}))
+                .await?;
+            let subs: Vec<String> = v["subtasks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|t| s(t, "id"))
+                .collect();
+            if subs.is_empty() {
+                ok_line(format!("{id} already has a subtask for each repository"));
+            } else {
+                ok_line(format!("{id} split: {}", subs.join(", ")));
+            }
+        }
         TaskCmd::Release { id, epoch, reason } => out(&api
             .post(
                 &format!("/tasks/{id}/release"),

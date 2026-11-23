@@ -5,7 +5,10 @@ part of "../corntchap.cstack"
 type ProjectSummary {
   key String
   name String
+  /// The first repository's url (kept for old clients; see repos).
   repo_url String?
+  /// The pot's repositories, first added first. Empty: the pot has none.
+  repos RepoView[]
   team String?
   lease_ttl_s Float
   open Int
@@ -40,4 +43,48 @@ type WhoamiView {
   teams TeamRole[]
   projects String[]
   current_leases TaskView[]
+}
+
+/// One of a pot's repositories.
+type RepoView {
+  /// The short alias tasks and cooks use, e.g. backend.
+  name String
+  url String
+  default_branch String?
+  /// Repositories of the pot this one depends on: serving a task in one of them tells this one's cooks.
+  depends_on RepoLinkView[]
+}
+
+/// A dependency of one repository on another.
+type RepoLinkView {
+  /// The repository depended on.
+  name String
+  /// notify (tell the cooks scoped to the dependent) or task (open a follow-up task).
+  mode String
+}
+
+/// A pot's repositories.
+type ReposView {
+  project String
+  repos RepoView[]
+}
+
+type RepoAdded {
+  project String
+  added RepoView
+  repos RepoView[]
+}
+
+type RepoRemoved {
+  project String
+  removed String
+  repos RepoView[]
+}
+
+/// The repositories a cook handles in a pot.
+type CookReposView {
+  cook String
+  project String
+  /// Aliases; empty means all of the pot's repositories.
+  repos String[]
 }

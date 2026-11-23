@@ -326,6 +326,18 @@ pub fn tasks_table(v: &Value) -> String {
                 plain(t["priority"].to_string()),
                 plain(progress(t)),
                 plain(s(t, "title")),
+                t["repos"]
+                    .as_array()
+                    .filter(|r| !r.is_empty())
+                    .map(|r| {
+                        plain(
+                            r.iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        )
+                    })
+                    .unwrap_or_else(|| dim_cell("-")),
                 t["menu"]
                     .as_str()
                     .map(plain)
@@ -338,9 +350,46 @@ pub fn tasks_table(v: &Value) -> String {
         })
         .collect();
     table(
-        &["id", "status", "pri", "items", "title", "menu", "held by"],
+        &[
+            "id", "status", "pri", "items", "title", "repos", "menu", "held by",
+        ],
         rows,
         "no tasks",
+    )
+}
+
+/// A pot's repositories: name, url, default branch and what each depends on.
+pub fn repos_table(v: &Value) -> String {
+    let rows = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            let deps: Vec<String> = r["depends_on"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|d| format!("{} ({})", s(d, "name"), s(d, "mode")))
+                .collect();
+            vec![
+                plain(s(r, "name")),
+                plain(s(r, "url")),
+                r["default_branch"]
+                    .as_str()
+                    .map(plain)
+                    .unwrap_or_else(|| dim_cell("-")),
+                if deps.is_empty() {
+                    dim_cell("-")
+                } else {
+                    plain(deps.join(", "))
+                },
+            ]
+        })
+        .collect();
+    table(
+        &["name", "url", "branch", "depends on"],
+        rows,
+        "no repositories (add one with `project repo add <POT> <URL>`)",
     )
 }
 
@@ -519,12 +568,16 @@ pub fn stations_table(v: &Value) -> String {
                 plain(s(x, "cook")),
                 plain(s(x, "project")),
                 plain(s(x, "runtime")),
-                plain(
-                    x["label"]
+                plain({
+                    let w = x["label"]
                         .as_str()
                         .or_else(|| x["directory"].as_str())
-                        .unwrap_or("-"),
-                ),
+                        .unwrap_or("-");
+                    match x["repo"].as_str() {
+                        Some(r) => format!("{w} [{r}]"),
+                        None => w.to_string(),
+                    }
+                }),
                 plain(tasks),
                 dim_cell(
                     x["last_woken_at"]
@@ -647,6 +700,15 @@ pub fn task_detail(v: &Value) -> String {
         meta.push(format!(
             "labels {}",
             l.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    if let Some(r) = v["repos"].as_array().filter(|l| !l.is_empty()) {
+        meta.push(format!(
+            "repos {}",
+            r.iter()
                 .filter_map(Value::as_str)
                 .collect::<Vec<_>>()
                 .join(",")

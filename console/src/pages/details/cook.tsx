@@ -21,6 +21,7 @@ import {
   formSheetClass,
 } from "@/components/bits";
 import { StationList } from "@/components/stations";
+import { CookRepoScopes } from "@/components/repos";
 import { CookUsage } from "@/components/usage";
 import { TaskRow } from "@/components/task-views";
 import { McpDialog, TokenDialog } from "@/components/secret-dialog";
@@ -590,6 +591,8 @@ export function CookDetailsPage() {
             </Group>
 
             <TeamGroup a={cook} pots={pots} />
+
+            <CookRepoScopes cook={cook.name} pots={pots} scopes={cook.repo_scopes ?? []} />
 
             <Group title="Connect" hint="The token is shown once. Rotating makes a new one and the old one stops working at once.">
               <GroupRow icon={<Plug />} label="MCP config" hint="Snippets for OpenCode, Claude Code, Codex, Copilot and Antigravity" onClick={() => setDialog("mcp")} />
