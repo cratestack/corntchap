@@ -46,9 +46,10 @@ export function CommandPalette() {
       onOpenChange={setPaletteOpen}
       title="Search or jump"
       description="Jump to a pot, a task or a page, or start something new."
+      className="max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:rounded-none max-sm:border-0 max-sm:pt-[env(safe-area-inset-top)] max-sm:pb-[env(safe-area-inset-bottom)]"
     >
-      <CommandInput placeholder="Jump to a pot, a task, a page…" />
-      <CommandList className="max-h-[min(420px,60vh)]">
+      <CommandInput placeholder="Jump to a pot, a task, a page…" className="max-sm:pr-8 max-sm:text-base" />
+      <CommandList className="max-h-[min(420px,60vh)] max-sm:max-h-none max-sm:flex-1 max-sm:pb-4 max-sm:[&_[cmdk-item]]:min-h-12 max-sm:[&_[cmdk-item]]:text-[15px]">
         <CommandEmpty>Nothing in the pot matches that.</CommandEmpty>
         <CommandGroup heading="Do">
           {pot && (

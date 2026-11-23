@@ -97,100 +97,102 @@ export function NewTaskDialog() {
 
   return (
     <Dialog open={newTask.open} onOpenChange={(o) => !o && closeNewTask()}>
-      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-xl">
-        <DialogHeader>
+      <DialogContent className="max-h-[92dvh] overflow-hidden sm:max-w-xl max-sm:flex max-sm:flex-col max-sm:gap-0 max-sm:p-0 sm:flex sm:flex-col sm:gap-0 sm:p-0">
+        <DialogHeader className="px-5 pt-5 pb-3 text-left max-sm:pt-7 sm:px-6 sm:pt-6">
           <DialogTitle>New task</DialogTitle>
-          <DialogDescription>Add a portion to the pot. A cook scoops it when nothing is in the way.</DialogDescription>
+          <DialogDescription className="max-sm:sr-only">Add a portion to the pot. A cook scoops it when nothing is in the way.</DialogDescription>
         </DialogHeader>
         {noPots ? (
-          <p className="py-4 text-muted-foreground">There is no pot to put it in yet. An admin can start one under Pots.</p>
+          <p className="px-5 py-4 text-muted-foreground">There is no pot to put it in yet. An admin can start one under Pots.</p>
         ) : (
-          <form onSubmit={submit} className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
+          <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto border-t border-border px-5 py-4 sm:px-6">
               <div className="space-y-1.5">
-                <Label htmlFor="nt-pot">Pot</Label>
-                <Select
-                  value={pot}
-                  // Radix reports "" while its options mount: keep the pot the dialog was opened for
-                  onValueChange={(v) => {
-                    if (!v || v === pot) return;
-                    setPot(v);
-                    setMenu("-");
-                  }}
-                >
-                  <SelectTrigger id="nt-pot" className="w-full">
-                    <SelectValue placeholder="Choose a pot" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(projects.data ?? []).map((p) => (
-                      <SelectItem key={p.key} value={p.key}>
-                        <span className="font-mono text-[12px] font-bold">{p.key}</span> {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label htmlFor="nt-title">Title</Label>
+                <Input id="nt-title" autoFocus required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Retry failed webhook deliveries with backoff" />
+              </div>
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,8.5rem)] gap-3 sm:grid-cols-[1fr_9rem] sm:gap-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="nt-pot">Pot</Label>
+                  <Select
+                    value={pot}
+                    // Radix reports "" while its options mount: keep the pot the dialog was opened for
+                    onValueChange={(v) => {
+                      if (!v || v === pot) return;
+                      setPot(v);
+                      setMenu("-");
+                    }}
+                  >
+                    <SelectTrigger id="nt-pot" className="w-full">
+                      <SelectValue placeholder="Choose a pot" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(projects.data ?? []).map((p) => (
+                        <SelectItem key={p.key} value={p.key}>
+                          <span className="font-mono text-[12px] font-bold">{p.key}</span> {p.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="nt-prio">Priority</Label>
+                  <Select value={priority} onValueChange={setPriority}>
+                    <SelectTrigger id="nt-prio" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PRIORITIES.map((p) => (
+                        <SelectItem key={p.v} value={String(p.v)}>
+                          {p.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {menus.open.length > 0 && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="nt-menu">Menu</Label>
+                  <Select value={menu} onValueChange={setMenu}>
+                    <SelectTrigger id="nt-menu" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="-">No menu</SelectItem>
+                      {menus.open.map((m) => (
+                        <SelectItem key={m.key} value={m.key}>
+                          {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="nt-body">Description (markdown)</Label>
+                <Textarea id="nt-body" rows={4} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What done looks like, files to look at, gotchas." />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="nt-prio">Priority</Label>
-                <Select value={priority} onValueChange={setPriority}>
-                  <SelectTrigger id="nt-prio" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PRIORITIES.map((p) => (
-                      <SelectItem key={p.v} value={String(p.v)}>
-                        {p.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label htmlFor="nt-items">Checklist, one item per line</Label>
+                <Textarea id="nt-items" rows={3} value={items} onChange={(e) => setItems(e.target.value)} className="font-mono text-[12.5px]" placeholder={"Write the failing test\nImplement backoff\nUpdate the runbook"} />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Labels</Label>
+                  <TagInput label="Labels" value={labels} onChange={setLabels} placeholder="backend, urgent" normalize={(s) => s.toLowerCase()} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Depends on</Label>
+                  <TagInput label="Depends on" value={deps} onChange={setDeps} placeholder={`${pot || "PAY"}-1`} suggestions={depSuggestions} normalize={(s) => s.toUpperCase()} />
+                </div>
               </div>
             </div>
-            {menus.open.length > 0 && (
-              <div className="space-y-1.5">
-                <Label htmlFor="nt-menu">Menu</Label>
-                <Select value={menu} onValueChange={setMenu}>
-                  <SelectTrigger id="nt-menu" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="-">No menu</SelectItem>
-                    {menus.open.map((m) => (
-                      <SelectItem key={m.key} value={m.key}>
-                        {m.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <Label htmlFor="nt-title">Title</Label>
-              <Input id="nt-title" autoFocus required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Retry failed webhook deliveries with backoff" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="nt-body">Description (markdown)</Label>
-              <Textarea id="nt-body" rows={4} value={body} onChange={(e) => setBody(e.target.value)} placeholder="What done looks like, files to look at, gotchas." />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="nt-items">Checklist, one item per line</Label>
-              <Textarea id="nt-items" rows={3} value={items} onChange={(e) => setItems(e.target.value)} className="font-mono text-[12.5px]" placeholder={"Write the failing test\nImplement backoff\nUpdate the runbook"} />
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>Labels</Label>
-                <TagInput label="Labels" value={labels} onChange={setLabels} placeholder="backend, urgent" normalize={(s) => s.toLowerCase()} />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Depends on</Label>
-                <TagInput label="Depends on" value={deps} onChange={setDeps} placeholder={`${pot || "PAY"}-1`} suggestions={depSuggestions} normalize={(s) => s.toUpperCase()} />
-              </div>
-            </div>
-            <DialogFooter className="gap-2 pt-1">
-              <Button type="button" variant="ghost" onClick={closeNewTask}>
+            <DialogFooter className="shrink-0 flex-row justify-end gap-2 border-t border-border bg-card px-5 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-6 sm:pb-3">
+              <Button type="button" variant="ghost" onClick={closeNewTask} className="max-sm:flex-1">
                 Cancel
               </Button>
-              <Button type="submit" disabled={busy || !title.trim() || !pot}>
+              <Button type="submit" disabled={busy || !title.trim() || !pot} className="max-sm:flex-[2]">
                 {busy && <Loader2 className="animate-spin" />} Add to the pot
               </Button>
             </DialogFooter>
