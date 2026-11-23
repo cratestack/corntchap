@@ -310,6 +310,21 @@ pub fn ref_name(session: &str) -> String {
 }
 
 /// Snapshot the work tree of `cwd` for `session`. `Ok(None)` outside a git work tree.
+/// Copy the user's index for the snapshot, keeping its mtime. Git trusts an entry's cached stat only
+/// when the file is older than the index itself ("racy git"): a fresh copy would look newer than a
+/// file edited in the same second as the real index, and a same-size edit would then be missed.
+fn copy_index(from: &Path, to: &Path) -> bool {
+    let Ok(modified) = fs::metadata(from).and_then(|m| m.modified()) else {
+        return false;
+    };
+    fs::copy(from, to).is_ok()
+        && fs::File::options()
+            .write(true)
+            .open(to)
+            .and_then(|f| f.set_modified(modified))
+            .is_ok()
+}
+
 pub fn checkpoint_for(
     cwd: &Path,
     session: &str,
@@ -349,7 +364,7 @@ pub fn checkpoint_for(
     let result = (|| -> Result<Snapshot> {
         let envs = [("GIT_INDEX_FILE", tmp_s.as_str())];
         // Start from the user's index when there is one: its stat cache keeps `add -A` fast.
-        if real_index.is_file() && fs::copy(&real_index, &tmp).is_ok() {
+        if real_index.is_file() && copy_index(&real_index, &tmp) {
         } else if let Some(h) = &head {
             git_ok(&top, &envs, &["read-tree", h])?;
         }
