@@ -19,7 +19,9 @@ cargo build -q -p corntchap
 # wait for Keycloak's realm before the server discovers it
 for _ in $(seq 1 90); do curl -sf "${OIDC_ISSUER}/.well-known/openid-configuration" >/dev/null && break; sleep 2; done
 if [ -f "$LOG_DIR/server.pid" ] && kill -0 "$(cat "$LOG_DIR/server.pid")" 2>/dev/null; then kill "$(cat "$LOG_DIR/server.pid")"; sleep 1; fi
-AUTO_MIGRATE=1 setsid nohup ./target/debug/corntchap serve >"$LOG_DIR/server.log" 2>&1 < /dev/null &
-echo $! >"$LOG_DIR/server.pid"
+# setsid forks when it leads a process group, so `$!` would be setsid's pid: the child writes its own
+AUTO_MIGRATE=1 PIDFILE="$LOG_DIR/server.pid" setsid nohup sh -c 'echo $$ >"$PIDFILE"; exec ./target/debug/corntchap serve' \
+  >"$LOG_DIR/server.log" 2>&1 < /dev/null &
+sleep 1
 for _ in $(seq 1 60); do curl -sf "$PUBLIC_URL/healthz" >/dev/null 2>&1 || curl -sf -o /dev/null "$PUBLIC_URL/" && break; sleep 1; done
 echo "server up at $PUBLIC_URL (pid $(cat "$LOG_DIR/server.pid")), logs in $LOG_DIR"
