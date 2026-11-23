@@ -233,7 +233,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
               const cur = byCook.get(a.name);
               return (
                 <li key={a.name}>
-                  <NavLink to={`/cooks#${a.name}`} onClick={onNavigate} className={navClass(false)}>
+                  <NavLink to={`/cooks/${a.name}`} onClick={onNavigate} className={navClass(false)}>
                     <StateDot state={st} />
                     <span className="min-w-0 flex-1 truncate">{a.name}</span>
                     <span className="max-w-24 truncate font-mono text-[10.5px] text-sidebar-muted">{cur ?? STATE_LABEL[st]}</span>

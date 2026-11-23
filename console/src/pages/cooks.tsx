@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { ChefHat, ChevronDown, Loader2, Minus, Pencil, Plug, Plus, Power, RotateCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -225,7 +225,7 @@ function CookTeams({ a }: { a: AgentRow }) {
     <div className="flex flex-wrap items-center gap-1.5">
       {mine.map((t) => (
         <LabelChip key={t} className="gap-1">
-          {t}
+          <Link to={`/teams/${t}`} className="hover:underline focus-visible:underline">{t}</Link>
           {manageable(t) && (
             <button
               type="button"
@@ -348,7 +348,9 @@ function CookCard({
       <div className="flex items-start gap-3">
         <Avatar name={a.name} className="size-10 rounded-lg text-[18px]" />
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[18px] leading-tight">{a.name}</h2>
+          <h2 className="truncate text-[18px] leading-tight">
+            <Link to={`/cooks/${a.name}`} className="underline-offset-2 hover:underline focus-visible:underline">{a.name}</Link>
+          </h2>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">
             {KIND_LABEL[a.agent_kind ?? "other"] ?? a.agent_kind} · {a.runtime ?? "local"}
             {a.owner && <> · owned by {a.owner}</>}
@@ -492,7 +494,7 @@ function CookCard({
   );
 }
 
-function WakeTargets({ agent, runtime }: { agent: string; runtime: string | null }) {
+export function WakeTargets({ agent, runtime }: { agent: string; runtime: string | null }) {
   const q = useV1<WakeTargetRow[]>(`/agents/${agent}/wake-targets`);
   const call = useV1Call();
   const me = useSession();

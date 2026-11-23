@@ -16,6 +16,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { KitchenPage, PotRedirect } from "@/pages/kitchen";
 import { CooksPage } from "@/pages/cooks";
 import { ConnectPage } from "@/pages/connect";
+import { CookDetailsPage } from "@/pages/details/cook";
+import { PotDetailsPage } from "@/pages/details/pot";
+import { FireDetailsPage } from "@/pages/details/fire";
+import { TeamDetailsPage } from "@/pages/details/team";
 import { AdminOnly, FiresPage, PotsAdminPage, TeamsAdminPage, UsersAdminPage } from "@/pages/admin";
 import { EmptyState } from "@/components/bits";
 import { Button } from "@/components/ui/button";
@@ -70,6 +74,10 @@ function Providers() {
             <Route element={<AppShell />}>
               <Route index element={<PotRedirect />} />
               <Route path="pots/:key" element={<PotRedirect />} />
+              <Route path="pots/:key/about" element={<PotDetailsPage />} />
+              <Route path="cooks/:name" element={<CookDetailsPage />} />
+              <Route path="fires/:name" element={<FireDetailsPage />} />
+              <Route path="teams/:name" element={<TeamDetailsPage />} />
               <Route path="pots/:key/v/:viewKey" element={<KitchenPage />} />
               <Route path="pots/:key/:view" element={<KitchenPage />} />
               <Route path="cooks" element={<CooksPage />} />

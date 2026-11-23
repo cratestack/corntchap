@@ -357,7 +357,7 @@ function PotHeader({
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
           <p className="label-caps flex items-center gap-2">
-            <span className="rounded bg-corn px-1.5 py-px font-bold !text-corn-foreground">{project.key}</span>
+            <Link to={`/pots/${project.key}/about`} title={`About ${project.name}`} className="rounded bg-corn px-1.5 py-px font-bold !text-corn-foreground hover:underline focus-visible:underline">{project.key}</Link>
             {project.team && <span>team {project.team}</span>}
           </p>
           <h1 className="mt-1.5 truncate text-[30px] leading-[1.1] sm:text-[34px]">{project.name}</h1>
