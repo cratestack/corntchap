@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import type { MemoryRememberArgs, MemoryView } from "@corntchap/api";
-import { ChevronDown, ChevronRight, Link2, Loader2, Pencil, Search, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Link2, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useProc, useProcCall } from "@/lib/data";
@@ -148,9 +148,9 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
 
   return (
     <div className="max-w-5xl">
-      <div className="flex flex-wrap items-center gap-2" role="search" aria-label="Search the pantry">
-        <div className="relative min-w-0 basis-full sm:basis-72">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+      <div role="search" aria-label="Search the pantry" className="space-y-2.5">
+        <div className="relative min-w-0 sm:max-w-md">
+          <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
           <Input
             ref={searchRef}
             type="search"
@@ -158,23 +158,22 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Search keys, titles and bodies…"
-            className="h-9 rounded-full pr-3 pl-9 text-[13px]"
+            className="h-11 rounded-full pr-3 pl-10 text-[14px] md:h-9 md:text-[13px]"
           />
         </div>
-        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Kinds">
+        <div className="scrollbar-none -mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-0.5" role="group" aria-label="Kinds">
+          <KindChip active={!kind} onClick={() => setParam("kind", undefined)} count={(all.data ?? []).length}>
+            All
+          </KindChip>
           {KINDS.map((k) => (
-            <button
+            <KindChip
               key={k.id}
-              type="button"
-              aria-pressed={kind === k.id}
+              active={kind === k.id}
               onClick={() => setParam("kind", kind === k.id ? undefined : k.id)}
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] transition-colors",
-                kind === k.id ? "border-primary/60 bg-primary/10 font-medium" : "border-input bg-card text-muted-foreground hover:border-foreground/30",
-              )}
+              count={(all.data ?? []).filter((r) => r.kind === k.id).length}
             >
               <KindDot kind={k.id} className="size-2" /> {k.label}
-            </button>
+            </KindChip>
           ))}
           <TagFilter
             tags={tagCounts}
@@ -182,14 +181,14 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
             onChange={(next) => setParam("tag", next.length ? next.join(",") : undefined)}
           />
           {filtered && (
-            <button type="button" onClick={clear} className="text-[12.5px] text-primary hover:underline">
-              Clear filters
+            <button type="button" onClick={clear} className="shrink-0 px-1 text-[12.5px] whitespace-nowrap text-primary hover:underline">
+              Clear
             </button>
           )}
         </div>
       </div>
 
-      <div className="mt-5 space-y-2">
+      <div className="mt-4 space-y-2">
         {all.isLoading && <RowSkeleton rows={5} />}
         {!!all.error && !all.isLoading && (
           <EmptyState band={false} title="The pantry would not open">
@@ -224,7 +223,7 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
               {rows.length >= LIMIT && ` (showing the first ${LIMIT})`}
               {filtered && ` · ${(all.data ?? []).length} in the pantry`}
             </p>
-            <ul className="space-y-1.5">
+            <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5 max-md:pb-16 lg:grid-cols-2">
               {rows.map((m) => (
                 <li key={m.key}>
                   <MemoryRow m={m} selected={selected === m.key} onOpen={openMemory} />
@@ -235,8 +234,34 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
         )}
       </div>
 
+      <Button
+        type="button"
+        onClick={onNew}
+        aria-label="Stock the pantry"
+        className="bottom-tabbar fixed right-4 z-30 mb-4 h-12 rounded-full px-5 shadow-lg md:hidden"
+      >
+        <Plus /> Stock
+      </Button>
+
       <MemorySheet potKey={potKey} memoryKey={selected} onClose={closeSheet} />
     </div>
+  );
+}
+
+function KindChip({ active, count, onClick, children }: { active: boolean; count: number; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] whitespace-nowrap transition-colors md:h-8 md:px-3 md:text-[12.5px]",
+        active ? "border-primary/60 bg-primary/10 font-medium text-foreground" : "border-input bg-card text-muted-foreground hover:border-foreground/30",
+      )}
+    >
+      {children}
+      <span className="font-mono text-[10.5px] text-muted-foreground">{count}</span>
+    </button>
   );
 }
 
@@ -255,7 +280,7 @@ function TagFilter({
       <DropdownMenuTrigger
         disabled={tags.length === 0}
         className={cn(
-          "inline-flex h-8 max-w-full items-center gap-1.5 rounded-full border px-3 text-[12.5px] transition-colors disabled:opacity-50",
+          "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] whitespace-nowrap transition-colors disabled:opacity-50 md:h-8 md:px-3 md:text-[12.5px]",
           value ? "border-primary/60 bg-primary/10" : "border-input bg-card hover:border-foreground/30",
         )}
       >
@@ -293,37 +318,32 @@ function MemoryRow({ m, selected, onOpen }: { m: MemoryView; selected: boolean; 
       aria-label={`${m.title} (${kindOf(m.kind).label}, ${m.key})`}
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "group grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 rounded-[10px] border bg-card px-3.5 py-3 text-left transition-colors",
+        "group block w-full min-w-0 rounded-[14px] border bg-card px-3.5 py-3 text-left transition-colors active:bg-muted/60 md:px-4",
         "hover:border-foreground/25 focus-visible:border-foreground/40",
         selected ? "border-primary ring-1 ring-primary/40" : "border-border",
       )}
     >
-      <span className="pt-[5px]" title={kindOf(m.kind).label}>
-        <KindDot kind={m.kind} />
-      </span>
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
-          <span className="text-[14px] font-medium">{m.title}</span>
-          <span className="max-w-full truncate font-mono text-[11.5px] text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
-            {m.key}
-          </span>
-        </div>
-        {excerpt && <p className="mt-1 line-clamp-2 text-[13px] leading-snug text-muted-foreground">{excerpt}</p>}
-        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-          {m.tags.map((t) => (
-            <LabelChip key={t}>{t}</LabelChip>
-          ))}
-          <span className="text-[12px] text-muted-foreground">
-            {who ? `updated by ${who} · ` : "updated "}
-            {fmtAgo(m.updated_at, now)}
-          </span>
-        </div>
-      </div>
-      <div className="flex flex-col items-end justify-between gap-2">
-        <span className="font-mono text-[11px] text-muted-foreground" title="Revision">
+      <div className="flex items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-[11.5px] font-medium">
+          <KindDot kind={m.kind} className="size-2" /> {kindOf(m.kind).label}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">{m.key}</span>
+        <span className="font-mono text-[10.5px] text-muted-foreground" title="Revision">
           r{m.revision}
         </span>
         <ChevronRight className="hidden size-4 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 sm:block" aria-hidden="true" />
+      </div>
+      <h3 className="mt-2 font-display text-[16px] leading-snug">{m.title}</h3>
+      {excerpt && <p className="mt-1 line-clamp-3 text-[13.5px] leading-snug text-muted-foreground">{excerpt}</p>}
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        {who && <Avatar name={who} className="size-5 text-[10px]" />}
+        <span className="text-[12px] text-muted-foreground">
+          {who ? `${who} · ` : ""}
+          {fmtAgo(m.updated_at, now)}
+        </span>
+        {m.tags.map((t) => (
+          <LabelChip key={t}>{t}</LabelChip>
+        ))}
       </div>
     </button>
   );

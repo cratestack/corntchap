@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import type { FileRef } from "@corntchap/api";
-import { FileIcon, Loader2, Paperclip, Search, Trash2, Upload as UploadIcon, X } from "lucide-react";
+import { Camera, FileIcon, Loader2, Paperclip, Search, Trash2, Upload as UploadIcon, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/api";
@@ -243,8 +243,8 @@ function FileRow({ f, compact, onDelete, extra }: { f: AnyFile; compact?: boolea
     </span>
   );
   return (
-    <li className={cn("flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-card", compact ? "px-2 py-1.5" : "px-3 py-2")}>
-      <Thumb f={f} className={compact ? "size-8" : "size-10"} />
+    <li className={cn("flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-card", compact ? "px-2 py-1.5" : "px-3 py-2 pointer-coarse:min-h-16")}>
+      <Thumb f={f} className={compact ? "size-8" : "size-10 pointer-coarse:size-11"} />
       <div className="min-w-0 flex-1">
         {linkable ? (
           <a href={fileHref(f.id, f.name)} target="_blank" rel="noreferrer" className="block min-w-0 rounded underline-offset-2 hover:underline focus-visible:underline">
@@ -264,7 +264,7 @@ function FileRow({ f, compact, onDelete, extra }: { f: AnyFile; compact?: boolea
         type="button"
         onClick={() => onDelete(f)}
         aria-label={`Delete ${f.name}`}
-        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+        className="grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive pointer-coarse:size-11"
       >
         <Trash2 className="size-3.5" aria-hidden="true" />
       </button>
@@ -337,12 +337,13 @@ export function FilesView({ potKey }: { potKey: string }) {
     return needle ? all.filter((f) => f.name.toLowerCase().includes(needle) || f.id.toLowerCase().includes(needle)) : all;
   }, [all, q]);
   const input = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
   const target = { pot: potKey };
 
   return (
     <FileDrop target={target} label="Drop to upload to this pot" className="mx-auto max-w-3xl">
       <div className="flex flex-wrap items-center gap-2" role="search" aria-label="Search files">
-        <div className="relative min-w-0 flex-1 basis-60">
+        <div className="relative min-w-0 flex-1 basis-full sm:basis-60">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
           <Input
             type="search"
@@ -350,7 +351,7 @@ export function FilesView({ potKey }: { potKey: string }) {
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="Filter by name…"
-            className="h-9 rounded-full pr-3 pl-9 text-[13px]"
+            className="h-11 rounded-full pr-3 pl-9 text-[14px] md:h-9 md:text-[13px]"
           />
         </div>
         <RefreshButton />
@@ -362,10 +363,26 @@ export function FilesView({ potKey }: { potKey: string }) {
       <button
         type="button"
         onClick={() => input.current?.click()}
-        className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border px-4 py-5 text-[13px] text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+        className="mt-4 flex min-h-14 w-full items-center justify-center max-md:hidden gap-2 rounded-xl border-2 border-dashed border-border px-4 py-4 text-[13px] text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
       >
-        <UploadIcon className="size-4" aria-hidden="true" /> Drop files anywhere on this page, or click to choose
+        <UploadIcon className="size-4" aria-hidden="true" />
+        Drop files anywhere on this page, or click to choose
       </button>
+      <Button type="button" variant="outline" className="mt-2 w-full md:hidden" onClick={() => camera.current?.click()}>
+        <Camera /> Take a photo
+      </Button>
+      <input
+        ref={camera}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        hidden
+        tabIndex={-1}
+        onChange={(e) => {
+          uploadFiles(Array.from(e.target.files ?? []), target);
+          e.target.value = "";
+        }}
+      />
       <input
         ref={input}
         type="file"
