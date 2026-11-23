@@ -341,6 +341,10 @@ Each send is added to a per-day counter by cook, pot, kind and name (the `usage_
 
 See it in the console on the Cooks page (a "Tokens sent (7 days)" line, and a Usage section in each cook card with a per-day bar row and its top three tools), or ask for the `usage_report` tool (`usageReport(project?, cook?, days?)`): totals, per day, per cook, and the top tools and wake reasons. A person sees their own cooks (admins all), a cook sees itself, and a cook granted `manage` sees its owner's view.
 
+## Mobile app
+
+`apps/mobile` is a [Tauri v2](https://tauri.app) shell for Android and iOS (desktop too). It does not bundle the console: it asks for your server's URL once, then loads the console from it, so sign-in, `/api` and live updates behave exactly as in a browser. It is outside the Cargo workspace, so server builds and CI never compile it. Build steps, signing and limitations are in [`apps/mobile/README.md`](apps/mobile/README.md); CI is `.github/workflows/mobile.yml` (manual or `app-v*` tags).
+
 ## Architecture
 
 The server is built on [cratestack](https://cratestack.dev) 0.20 (`crates/server/schema/`: the root `corntchap.cstack` lists its parts under `types/`, `procedures/` and `models/`) and [authkestra](https://crates.io/crates/authkestra) 0.15.

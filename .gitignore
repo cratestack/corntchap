@@ -28,3 +28,8 @@ rustc-ice-*.txt
 *.whl
 .claude/worktrees/
 .venv-mcp-ts/
+
+# apps/mobile (Tauri): generated Android/iOS projects and schemas come from `tauri android|ios init`
+apps/mobile/node_modules/
+apps/mobile/src-tauri/gen/
+apps/mobile/src-tauri/target/
