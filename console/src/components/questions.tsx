@@ -410,7 +410,10 @@ function QuestionCard({
 
       <Markdown className="text-[14.5px]">{q.body}</Markdown>
 
-      <Attachments compact target={{ pot: projectOfTask(q.id), question: q.id }} files={q.files} />
+      {/* an empty drop zone on every card is noise on a phone: there it shows only once files exist */}
+      <div className={cn(q.files.length === 0 && "max-md:hidden")}>
+        <Attachments compact target={{ pot: projectOfTask(q.id), question: q.id }} files={q.files} />
+      </div>
 
       {q.options.length > 0 && (
         <div role="group" aria-label={`Suggested answers for ${q.id}`} className="flex flex-wrap gap-2">
@@ -557,9 +560,6 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
             </button>
           ))}
         </div>
-        <Button variant="outline" size="icon" onClick={onAsk} aria-label="Ask a question" className="shrink-0 sm:ml-auto sm:w-auto sm:px-3">
-          <Plus /> <span className="max-sm:sr-only">Ask a question</span>
-        </Button>
       </div>
 
       {filter === "open" ? (
