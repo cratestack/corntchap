@@ -156,10 +156,14 @@ pub async fn nudge_unanswered(state: &AppState) -> Result<u64, crate::error::Err
     )
     .execute(&mut *tx)
     .await?;
-    let due: Vec<(Uuid, Uuid, Uuid, Uuid, String, i64, String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
+    #[allow(clippy::type_complexity)]
+    let due: Vec<(Uuid, Uuid, Uuid, Uuid, String, i64, String, String, Option<String>, chrono::DateTime<chrono::Utc>, bool)> =
         sqlx::query_as(
+            // the last column: the cook is on call (only cloud targets, no relay)
             "select r.comment_id, r.agent_id, r.task_id, r.project_id, pr.key, t.number, t.title, cm.body,
-                    (select name from principals where id = r.author_id), r.created_at
+                    (select name from principals where id = r.author_id), r.created_at,
+                    (exists (select 1 from wake_targets oc where oc.agent_id = r.agent_id and oc.type = any($2))
+                     and not exists (select 1 from wake_targets oc where oc.agent_id = r.agent_id and oc.type <> all($2)))
              from comment_replies r
              join tasks t on t.id = r.task_id join projects pr on pr.id = r.project_id
              join comments cm on cm.id = r.comment_id
@@ -168,10 +172,20 @@ pub async fn nudge_unanswered(state: &AppState) -> Result<u64, crate::error::Err
              for update of r skip locked",
         )
         .bind(state.config.comment_nudge_minutes as i32)
+        .bind(crate::cloud::CLOUD_TYPES)
         .fetch_all(&mut *tx)
         .await?;
     let n = due.len() as u64;
-    for (comment, agent, task, project, key, number, title, body, author, at) in due {
+    for (comment, agent, task, project, key, number, title, body, author, at, on_call) in due {
+        // a cloud cook is not reminded: the comment already started a run, another would be a new session
+        if on_call {
+            sqlx::query("update comment_replies set nudged_at = now() where comment_id = $1 and agent_id = $2")
+                .bind(comment)
+                .bind(agent)
+                .execute(&mut *tx)
+                .await?;
+            continue;
+        }
         let main: Option<Uuid> = sqlx::query_scalar(
             "select id from stations where agent_id = $1 and project_id = $2 and main",
         )
@@ -334,6 +348,7 @@ impl Dispatcher {
         if let Ok(Some((kind, Some(project), _, payload))) = &row
             && kind == "wake"
             && payload["reason"].is_string()
+            && !crate::cloud::NOT_ON_CALL.contains(&payload["reason"].as_str().unwrap_or(""))
             && let Some(agent) = payload["agent_id"]
                 .as_str()
                 .and_then(|a| a.parse::<Uuid>().ok())
@@ -376,6 +391,8 @@ impl Dispatcher {
              where exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = a.id)
                and ($2::uuid is null or a.id <> $2)
                and (wt.projects is null or cardinality(wt.projects) = 0 or pr.key = any(wt.projects))
+               -- cloud targets are on call: new work wakes them only when they opted in
+               and (wt.type <> all($3) or wt.config->>'takes_work' = 'true')
                and exists (select 1 from tasks t where t.project_id = pr.id
                       and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
                       and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
@@ -384,6 +401,7 @@ impl Dispatcher {
         )
         .bind(project)
         .bind(except)
+        .bind(crate::cloud::CLOUD_TYPES)
         .fetch_all(&self.state.db)
         .await
         .unwrap_or_default()

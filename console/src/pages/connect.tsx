@@ -8,6 +8,7 @@ import { EmptyState, RowSkeleton } from "@/components/bits";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useProcCall } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
@@ -40,6 +41,7 @@ export function ConnectPage() {
   const [setup, setSetup] = useState<CloudSetup | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [takesWork, setTakesWork] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
 
@@ -82,6 +84,7 @@ export function ConnectPage() {
         repo: v("repo"),
         issue: issueRaw === null ? null : Number(issueRaw),
         mention: v("mention"),
+        takesWork,
       });
       setValues({});
       setSetup(next);
@@ -216,6 +219,15 @@ export function ConnectPage() {
                 </div>
               );
             })}
+            <div className="flex items-start gap-2.5 rounded-md border border-border bg-muted/40 p-3">
+              <Checkbox id="connect-takes-work" checked={takesWork} onCheckedChange={(c) => setTakesWork(c === true)} className="mt-0.5" />
+              <div className="space-y-0.5">
+                <Label htmlFor="connect-takes-work" className="text-[12.5px]">Also start it for new work</Label>
+                <p className="text-[12px] text-muted-foreground">
+                  Off: {s.cook} is on call. A direct message, an @mention or a comment on its task starts a run; broadcasts and answers to its questions do not (it reads answers on its next run). On: every ready task in its pots starts a run too.
+                </p>
+              </div>
+            </div>
             <Button type="submit" disabled={saving || !canSave}>
               {saving && <Loader2 className="size-4 animate-spin" />} Connect
             </Button>

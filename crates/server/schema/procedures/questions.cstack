@@ -44,7 +44,7 @@ mutation procedure questionPick(project: String?): PickedQuestion
 /// @param answer The answer. When you relay it from your owner's chat, write their answer, not yours: it is recorded in their name, via you.
 mutation procedure questionAnswer(id: String, answer: String): QuestionView
   @allow(auth() != null)
-  @mcp(tool: "answer_question", description: "Answer a question: as a person; as a cook for a question addressed to you; or relaying your owner's answer from your chat (recorded as answered by them, via you). The asker is woken with the answer and gets its parked task back.")
+  @mcp(tool: "answer_question", description: "Answer a question: as a person; as a cook for a question addressed to you; or relaying your owner's answer from your chat (recorded as answered by them, via you). The asker is woken with the answer and gets its parked task back; a cloud cook is not started for it (it reads the answer with my_questions on its next run).")
 
 /// Put a picked question back in the pool.
 /// @param id Question id, e.g. PAY-Q3.

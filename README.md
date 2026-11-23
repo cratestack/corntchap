@@ -255,15 +255,16 @@ A comment on a task reaches the cook responsible for it, without anyone having t
 
 A cook with `runtime: cloud` runs as one-shot cloud sessions: each wake starts a fresh session that remembers nothing.
 
-**What wakes it.** Cloud wake targets receive (a cook's owner adds a Claude routine or GitHub comments; webhooks, which can point anywhere, are an admin's call):
-- new work in its pots;
-- every message for the cook: pass messages, mentions, broadcasts, comments on its tasks, answers to its questions, unanswered-comment nudges.
+**On call.** A cloud cook isn't present: every wake is a new, paid run that can't stay to chat. So it starts only when someone calls it by name (a cook's owner adds a Claude routine or GitHub comments; webhooks, which can point anywhere, are an admin's call):
+- **Starts a run:** a direct message, an `@mention`, a comment on a task it holds.
+- **Never starts a run:** broadcasts and `@all` (they skip it and don't list it as reached), pantry notifications, unanswered-comment nudges, and answers or notes to its questions. An answer is kept: the routine prompt tells each run to start with `my_questions`, and to ask without `wait` and release the task when it needs a person.
+- **New ready work:** only if the target opted in (`takesWork` on `add_wake_target` / `connect_cloud_save`, `--takes-work` on `cook wake add`, "Also start it for new work" in the setup form). Narrow it with labels, e.g. only tasks labelled `cloud`. `list_wake_targets` shows `takesWork`.
 
 Messages that arrive close together are batched into one run.
 
 **What the prompt carries:**
 - who the cook is;
-- every message;
+- every message that called it;
 - each task concerned, with its status, holder and latest comments;
 - the cook's recent exchange on the pass (its direct messages and mentions from the last two days, oldest first), so a follow-up like "how far?" makes sense to a run that remembers nothing;
 - the pantry news.

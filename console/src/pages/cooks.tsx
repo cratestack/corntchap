@@ -506,14 +506,21 @@ export function WakeTargets({ agent, runtime }: { agent: string; runtime: string
       {rows.length === 0 && (
         <p className="text-[12.5px] text-muted-foreground">
           {runtime === "cloud"
-            ? "No wake target. Cloud cooks are woken by a webhook."
+            ? "No wake target. A cloud cook is started by a routine, a GitHub comment or a webhook, when someone calls it."
             : "No wake target. A relay (fire) on your laptop wakes local cooks."}
         </p>
       )}
       {rows.map((w) => (
         <div key={w.id} className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-[12.5px]">
           <div className="min-w-0 flex-1">
-            <p className="font-medium">{w.type}</p>
+            <p className="font-medium">
+              {w.type}
+              {w.type !== "relay" && (
+                <span className="ml-1.5 font-normal text-muted-foreground">
+                  {w.config.takes_work === true ? "· on call, and takes new work" : "· on call: started by name only"}
+                </span>
+              )}
+            </p>
             <p className="truncate font-mono text-[11px] text-muted-foreground">
               {w.type === "webhook"
                 ? String(w.config.url ?? "")

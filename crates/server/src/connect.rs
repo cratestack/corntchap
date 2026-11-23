@@ -164,6 +164,7 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 format!("Give the routine the corntchap MCP server as a connector, signed in with {cook}'s token."),
                 "Add an API trigger to the routine and copy its URL and its token (the token is shown once).".into(),
                 "Know that each wake starts a new session of the routine: it cannot resume or reach an existing session, so it works from what corntchap sends and keeps (task comments, the pass, the pantry). Do not change the routine's prompt to forward wakes elsewhere.".into(),
+                "It is on call: a direct message, an @mention or a comment on its task starts a run; broadcasts and answers to its questions do not (it reads answers on its next run). Tick \"new work\" only if it should also start for every ready task.".into(),
                 "Enter both here. corntchap keeps the token and never shows it again.".into(),
             ],
             vec![
@@ -288,6 +289,7 @@ pub struct Save {
     pub repo: Option<String>,
     pub issue: Option<i64>,
     pub mention: Option<String>,
+    pub takes_work: Option<bool>,
 }
 
 fn opt(s: &Option<String>) -> Option<&str> {
@@ -299,6 +301,23 @@ fn opt(s: &Option<String>) -> Option<&str> {
 /// (Anthropic's trigger host) or GitHub comments; anything that can point elsewhere (a webhook,
 /// another trigger host, a GitHub API URL) is an admin's call.
 pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
+    let mut out = kind_config(kind, c, is_admin)?;
+    // a cloud cook is on call: woken by name only, unless it should also pick up new work by itself
+    if let Some(o) = out.as_object_mut() {
+        o.remove("takes_work");
+        if c["takes_work"].as_bool() == Some(true) || c["takes_work"].as_str() == Some("true") {
+            o.insert("takes_work".into(), json!(true));
+        }
+    }
+    Ok(out)
+}
+
+/// Pick up new work by itself: cloud targets that opted in (relays always do).
+pub fn takes_work(config: &Value) -> bool {
+    config["takes_work"].as_bool() == Some(true)
+}
+
+fn kind_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
     let get = |k: &str| c[k].as_str().map(str::trim).filter(|s| !s.is_empty());
     match kind {
         "claude-routine" => {
@@ -402,6 +421,9 @@ pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Resul
     }
     if let Some(i) = a.issue {
         raw["issue"] = json!(i);
+    }
+    if a.takes_work == Some(true) {
+        raw["takes_work"] = json!(true);
     }
     let config = cloud_config(&s.kind, &raw, is_admin)?;
     let mut tx = db.begin().await?;

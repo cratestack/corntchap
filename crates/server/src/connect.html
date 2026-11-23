@@ -45,6 +45,9 @@
   .note { color: var(--muted); font-size: 11.5px; margin-top: 10px; }
   a { color: var(--accent); }
   .hidden { display: none; }
+  label.check { display: flex; gap: 8px; align-items: center; text-transform: none; letter-spacing: 0;
+                font-size: 13px; color: var(--fg); margin-top: 14px; }
+  label.check input { width: auto; }
 </style>
 </head>
 <body>
@@ -55,6 +58,8 @@
   <div class="row"><button type="button" id="copy-prompt">Copy the prompt</button></div></details>
 <form id="form" class="hidden" autocomplete="off">
   <div id="fields"></div>
+  <label class="check"><input type="checkbox" id="takes-work"> Also start it for new work</label>
+  <div class="help">Off: it is on call. A direct message, an @mention or a comment on its task starts a run; broadcasts and answers do not (it reads answers on its next run).</div>
   <div class="row">
     <button type="submit" class="primary" id="save">Connect</button>
     <button type="button" id="open-link">Open in corntchap instead</button>
@@ -142,6 +147,7 @@
       if (!i.value.trim()) continue;
       args[i.name] = i.name === "issue" ? Number(i.value) : i.value.trim();
     }
+    if ($("takes-work").checked) args.takesWork = true;
     $("save").disabled = true; say("Connecting…");
     try {
       const s = await call("connect_cloud_save", args);
