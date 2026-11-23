@@ -306,14 +306,37 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     Ok(out)
 }
 
-/// Keep who a message woke with the message itself, so every reader sees it.
+/// Keep who a message woke with the message itself, so every reader sees it. The sender is told
+/// when a cloud cook was among them: that is fire and forget.
 async fn record_woken(c: &mut PgConnection, id: Uuid, woken: &[Value]) -> Result<Value> {
     sqlx::query("update pass_messages set woken = $2 where id = $1")
         .bind(id)
         .bind(json!(woken))
         .execute(&mut *c)
         .await?;
-    one(c, id).await
+    let mut out = one(c, id).await?;
+    if let Some(n) = cloud_note(woken) {
+        out["note"] = json!(n);
+    }
+    Ok(out)
+}
+
+/// What to know about the cloud cooks a message woke, if any.
+pub fn cloud_note(woken: &[Value]) -> Option<String> {
+    let mut names: Vec<&str> = woken
+        .iter()
+        .filter(|w| w["cloud"] == true)
+        .filter_map(|w| w["cook"].as_str())
+        .collect();
+    names.dedup();
+    if names.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} {} a cloud cook: fire and forget. Each message starts a fresh run that reads the recent conversation, acts, answers once and stops; it does not stay to chat or keep working between messages. Put everything it needs in one message, or in a task.",
+        names.join(", "),
+        if names.len() == 1 { "is" } else { "are" }
+    ))
 }
 
 /// Read a pot's pass. `chef`: none for everything you can read (the pass and your direct

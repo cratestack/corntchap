@@ -745,12 +745,25 @@ pub async fn wake(
                "task": task_ref}),
     )
     .await?;
+    // a cook with a cloud wake target is woken in the cloud (the dispatcher prefers it): each
+    // wake is a fresh run that answers once and stops
+    let cloud: bool = sqlx::query_scalar(
+        "select exists (select 1 from wake_targets where agent_id = $1 and type = any($2))",
+    )
+    .bind(agent)
+    .bind(crate::cloud::CLOUD_TYPES)
+    .fetch_one(&mut *c)
+    .await?;
     // who was woken, for the record: the cook, and the session when there is one
-    Ok(json!({
+    let mut out = json!({
         "cook": name,
         "station": st.as_ref().and_then(|s| s["id"].as_str()),
         "label": st.as_ref().and_then(|s| s["label"].as_str().or(s["directory"].as_str())),
-    }))
+    });
+    if cloud {
+        out["cloud"] = json!(true);
+    }
+    Ok(out)
 }
 
 /// The station to wake when none is named (answers, notes, pass messages and mentions): the

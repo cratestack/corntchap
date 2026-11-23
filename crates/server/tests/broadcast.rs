@@ -179,7 +179,7 @@ async fn broadcast_reaches_every_session() {
     );
     assert_eq!(
         page["messages"][0]["woken"],
-        json!([{"cook": "c2", "station": st["x"], "label": null}]),
+        json!([{"cook": "c2", "station": st["x"], "label": null, "cloud": null}]),
         "{page}"
     );
 

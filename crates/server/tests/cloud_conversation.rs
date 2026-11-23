@@ -115,6 +115,49 @@ async fn a_cloud_wake_carries_the_conversation_so_far() {
         "{full}"
     );
 
+    // the sender is told a cloud cook is fire and forget; a local cook gets no such note
+    sqlx::query("insert into wake_targets (agent_id, type, projects, labels, config) values ($1, 'claude-routine', '{}', '{}', '{}')")
+        .bind(agent)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let r = app
+        .mcp(
+            &alice,
+            "pass",
+            json!({"project": "PAY", "message": "One more thing", "to": "rita"}),
+        )
+        .await;
+    let sent = common::TestApp::payload(&r);
+    assert_eq!(sent["woken"][0]["cloud"], true, "{sent}");
+    assert!(
+        sent["note"]
+            .as_str()
+            .unwrap()
+            .contains("rita is a cloud cook: fire and forget"),
+        "{sent}"
+    );
+    let (_, l) = app
+        .post(
+            &alice,
+            "/agents",
+            json!({"name": "lou", "kind": "opencode", "runtime": "local"}),
+        )
+        .await;
+    assert!(l["token"].is_string());
+    app.post(&root, "/teams/acme/members", json!({"principal": "lou"}))
+        .await;
+    let r = app
+        .mcp(
+            &alice,
+            "pass",
+            json!({"project": "PAY", "message": "hi lou", "to": "lou"}),
+        )
+        .await;
+    let sent = common::TestApp::payload(&r);
+    assert!(sent["woken"][0]["cloud"].is_null(), "{sent}");
+    assert!(sent["note"].is_null(), "{sent}");
+
     // a cook with no exchange gets no section
     let none =
         corntchap::cloud::conversation(&mut conn, uuid::Uuid::new_v4(), "nobody", project).await;

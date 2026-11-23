@@ -21,6 +21,8 @@ type PassMessageView {
   task String?
   at String
   /// Who posting it woke, kept with the message: each cook, and the session (station) it reached.
+  /// Set on the message you just posted when it woke a cloud cook: what that means.
+  note String?
   woken WokenRef[]
   /// The session (station) that wrote it, when the cook said which: a cook can run several.
   station String?
@@ -61,4 +63,6 @@ type WokenRef {
   station String?
   /// That session's label (its folder or title).
   label String?
+  /// A cloud cook (a Claude routine, a GitHub mention, a webhook): fire and forget, each wake a fresh run that answers once.
+  cloud Boolean?
 }
