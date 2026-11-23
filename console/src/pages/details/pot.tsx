@@ -136,7 +136,8 @@ export function PotDetailsPage() {
           </>
         }
         actions={
-          <Button asChild>
+          // phones reach the board from the bottom tabs; the button only pushed the header onto two rows
+          <Button asChild className="max-md:hidden">
             <Link to={`/pots/${project.key}/${lastView(project.key)}`}>Open the board</Link>
           </Button>
         }

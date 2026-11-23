@@ -974,7 +974,7 @@ function BoardView({
   if (total === 0) {
     return (
       <EmptyState title="The board is bare" action={<Button onClick={onNew}>New task</Button>}>
-        Five columns: ready to scoop, on the fire, waiting on a human or a dependency, served, and tossed.
+        Tasks go from ready to scoop, to on the fire, to served; a task waiting on a person or a dependency sits in between, and tossed ones are kept aside.
       </EmptyState>
     );
   }
