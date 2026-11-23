@@ -147,10 +147,10 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
   const startable = stations.filter((s) => !!s.directory);
 
   return (
-    <div className="mt-2 space-y-2">
+    <div className="space-y-3">
       {canStart && (
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" disabled={startable.length === 0} onClick={() => setStarting(true)}>
+          <Button variant="outline" className="max-sm:w-full" disabled={startable.length === 0} onClick={() => setStarting(true)}>
             <Play /> Start a session
           </Button>
           {startable.length === 0 && (
@@ -174,7 +174,7 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
             {stations.map((s) => {
               const where = s.label ?? s.directory ?? s.session;
               return (
-                <li key={s.id} className={cn("rounded-lg border bg-muted/40 px-3 py-2 text-[12.5px]", s.main ? "border-primary/50" : "border-border")}>
+                <li key={s.id} className={cn("rounded-xl border bg-muted/40 px-3.5 py-3 text-[12.5px]", s.main ? "border-primary/50" : "border-border")}>
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-mono text-[12px] font-medium" title={s.directory ?? where}>
@@ -188,7 +188,7 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
                     </div>
                     {s.runtime === "claude-code" && s.directory && (
                       <Button
-                        size="icon-xs"
+                        size="icon-sm"
                         variant="ghost"
                         aria-label={`Open ${where} in Claude Desktop`}
                         title="Open in Claude Desktop"
@@ -198,7 +198,7 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
                       </Button>
                     )}
                     <Button
-                      size="icon-xs"
+                      size="icon-sm"
                       variant="ghost"
                       aria-pressed={s.main}
                       aria-label={s.main ? `${where} is the main station of ${s.project}: unset it` : `Make ${where} the main station of ${s.project}`}
@@ -207,7 +207,7 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
                     >
                       <Star className={cn(s.main && "fill-primary text-primary")} />
                     </Button>
-                    <Button size="icon-xs" variant="ghost" aria-label={`Remove station ${where}`} onClick={() => setRemoving(s)}>
+                    <Button size="icon-sm" variant="ghost" aria-label={`Remove station ${where}`} onClick={() => setRemoving(s)}>
                       <Trash2 />
                     </Button>
                   </div>

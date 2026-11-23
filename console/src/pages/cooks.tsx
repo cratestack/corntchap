@@ -1,65 +1,61 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
-import { ChefHat, ChevronDown, Loader2, Minus, Pencil, Plug, Plus, Power, RotateCw, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
+import { ChefHat, ChevronRight, Cloud, Flame, Laptop, Loader2, Minus, Plus, MessageSquare, Webhook } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page";
-import { Avatar, EmptyState, LabelChip, RowSkeleton, StateDot, STATE_LABEL, cookState } from "@/components/bits";
-import { StationList } from "@/components/stations";
-import { DeleteDialog, RenameDialog } from "@/components/rename-delete";
-import { CookUsage, fmtTokens } from "@/components/usage";
-import { McpDialog, TokenDialog } from "@/components/secret-dialog";
+import {
+  Avatar,
+  EmptyState,
+  FilterChips,
+  FormSheetBody,
+  FormSheetFoot,
+  FormSheetHead,
+  LabelChip,
+  RowSkeleton,
+  StatePill,
+  StateDot,
+  STATE_LABEL,
+  cookState,
+  formSheetClass,
+  type CookState,
+} from "@/components/bits";
+import { fmtTokens } from "@/components/usage";
+import { Snippets, TokenBox } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-  useAgents,
-  useClaimedTasks,
-  useProc,
-  useProcCall,
-  useProjects,
-  useV1,
-  useInvalidateAll,
-  useV1Call,
-  type AgentRow,
-  type TeamRow,
-  type WakeTargetRow,
-} from "@/lib/data";
-import type { StationView } from "@corntchap/api";
-import { client, errorMessage } from "@/lib/api";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { useAgents, useClaimedTasks, useProc, useProcCall, useProjects, useV1, useV1Call, type AgentRow, type TeamRow } from "@/lib/data";
+import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { KIND_LABEL } from "@/lib/snippets";
 import { useSession } from "@/lib/session";
-import { useOpenTask } from "@/lib/nav";
+
+type Filter = "all" | "awake" | "cloud" | "local" | "disabled";
+
+const STATE_ORDER: Record<CookState, number> = { cooking: 0, awake: 1, idle: 2, disabled: 3 };
 
 export function CooksPage() {
   const agents = useAgents();
   const projects = useProjects();
   const claimed = useClaimedTasks(projects.data);
-  const stations = useProc("stationList", {});
   const usage = useProc("usageReport", { days: 7 });
   const [creating, setCreating] = useState(false);
-  const [token, setToken] = useState<{ name: string; kind: string | null; token: string; title: string; hint?: string } | null>(null);
+  const [params, setParams] = useSearchParams();
   const loc = useLocation();
+  const navigate = useNavigate();
+  const now = useNow();
 
+  const filter = (["all", "awake", "cloud", "local", "disabled"] as const).find((f) => f === params.get("show")) ?? "all";
+  const setFilter = (f: Filter) => setParams(f === "all" ? {} : { show: f }, { replace: true });
+
+  // old links to /cooks#name now land on the cook's page
   useEffect(() => {
-    if (loc.hash && agents.data) {
-      document.getElementById(`cook-${loc.hash.slice(1)}`)?.scrollIntoView({ block: "center" });
-    }
-  }, [loc.hash, agents.data]);
+    if (loc.hash && agents.data?.some((a) => a.name === loc.hash.slice(1))) void navigate(`/cooks/${loc.hash.slice(1)}`, { replace: true });
+  }, [loc.hash, agents.data, navigate]);
 
   const claimedTasks = claimed.tasks;
   const current = useMemo(() => {
@@ -68,17 +64,49 @@ export function CooksPage() {
     return m;
   }, [claimedTasks]);
 
+  const all = useMemo(
+    () =>
+      [...(agents.data ?? [])].sort(
+        (a, b) => STATE_ORDER[cookState(a, now)] - STATE_ORDER[cookState(b, now)] || a.name.localeCompare(b.name),
+      ),
+    [agents.data, now],
+  );
+  const counts = useMemo(() => {
+    const awake = (a: AgentRow) => ["cooking", "awake"].includes(cookState(a, now));
+    return {
+      all: all.length,
+      awake: all.filter(awake).length,
+      cloud: all.filter((a) => a.runtime === "cloud").length,
+      local: all.filter((a) => a.runtime !== "cloud").length,
+      disabled: all.filter((a) => a.disabled).length,
+    };
+  }, [all, now]);
+  const shown = all.filter((a) => {
+    const st = cookState(a, now);
+    switch (filter) {
+      case "awake":
+        return st === "cooking" || st === "awake";
+      case "cloud":
+        return a.runtime === "cloud";
+      case "local":
+        return a.runtime !== "cloud";
+      case "disabled":
+        return a.disabled;
+      default:
+        return true;
+    }
+  });
+
   return (
     <PageShell
       eyebrow="Kitchen"
       title="Cooks"
       sub={
         <>
-          The agents that scoop and serve your tasks. Each one has its own token, a lease limit and, if it sleeps, a wake target.
+          The agents that scoop and serve your tasks.
           {usage.data && (
             <span className="mt-1 block" title={usage.data.note}>
-              Tokens sent (7 days): <span className="font-mono font-bold">~{fmtTokens(usage.data.totals.tokens)}</span>, an estimate of
-              what corntchap put in your cooks' context.
+              Tokens sent, 7 days: <span className="font-mono font-bold">~{fmtTokens(usage.data.totals.tokens)}</span> (an estimate)
             </span>
           )}
         </>
@@ -90,608 +118,205 @@ export function CooksPage() {
       }
     >
       {agents.isLoading ? (
-        <RowSkeleton rows={3} />
+        <RowSkeleton rows={4} />
       ) : agents.error ? (
         <EmptyState band={false} title="Could not reach the cooks">{errorMessage(agents.error)}</EmptyState>
-      ) : agents.data?.length === 0 ? (
-        <EmptyState title="No cooks in the kitchen" action={<Button onClick={() => setCreating(true)}>Hire the first cook</Button>}>
-          A cook is an agent (Claude Code, Codex, OpenCode or any MCP client). Make one, copy its config, and it can start scooping.
+      ) : all.length === 0 ? (
+        <EmptyState title="No cooks yet" action={<Button onClick={() => setCreating(true)}><Plus /> Hire the first cook</Button>}>
+          A cook is an agent (Claude Code, Codex, OpenCode or any MCP client). Make one, copy its token or MCP config, and it can start scooping.
         </EmptyState>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-          {agents.data!.map((a) => (
-            <CookCard
-              key={a.name}
-              a={a}
-              current={current.get(a.name)?.id ?? null}
-              stations={(stations.data ?? []).filter((s) => s.cook === a.name)}
-              onToken={(t) => setToken({ name: a.name, kind: a.agent_kind, ...t })}
-            />
-          ))}
-        </div>
+        <>
+          <FilterChips
+            label="Show cooks"
+            value={filter}
+            onChange={setFilter}
+            className="mb-4"
+            options={[
+              { id: "all", label: "All", count: counts.all },
+              { id: "awake", label: "Awake", count: counts.awake },
+              { id: "cloud", label: "Cloud", count: counts.cloud },
+              { id: "local", label: "Local", count: counts.local },
+              ...(counts.disabled > 0 || filter === "disabled" ? [{ id: "disabled" as const, label: "Disabled", count: counts.disabled }] : []),
+            ]}
+          />
+          {shown.length === 0 ? (
+            <EmptyState band={false} title="No cook matches" action={<Button variant="outline" onClick={() => setFilter("all")}>Show all cooks</Button>}>
+              Nothing is {filter === "awake" ? "awake" : filter} right now.
+            </EmptyState>
+          ) : (
+            <ul
+              className={cn(
+                "max-md:divide-y max-md:divide-border max-md:overflow-hidden max-md:rounded-[14px] max-md:border max-md:border-border max-md:bg-card",
+                "md:grid md:grid-cols-2 md:gap-3 2xl:grid-cols-3",
+              )}
+            >
+              {shown.map((a) => (
+                <CookItem key={a.name} a={a} current={current.get(a.name)?.id ?? null} now={now} />
+              ))}
+            </ul>
+          )}
+        </>
       )}
-      <CreateCook
-        open={creating}
-        onOpenChange={setCreating}
-        onCreated={(c) =>
-          setToken({
-            name: c.name,
-            kind: c.kind,
-            token: c.token,
-            title: `${c.name} is in the kitchen`,
-            hint: "Put the token in the MCP config below, or keep it in an env var.",
-          })
-        }
-      />
-      <TokenDialog
-        open={!!token}
-        onOpenChange={(o) => !o && setToken(null)}
-        title={token?.title ?? ""}
-        name={token?.name ?? ""}
-        token={token?.token ?? null}
-        kind={token?.kind ?? null}
-        {...(token?.hint ? { hint: token.hint } : {})}
-      />
+      <NewCookSheet open={creating} onOpenChange={setCreating} />
     </PageShell>
   );
 }
 
-const GRANTS: { id: string; label: string; hint: string }[] = [
-  { id: "plan", label: "Plan", hint: "Edit, toss, restore and unblock any task in its teams; tick items without a lease" },
-  { id: "manage", label: "Manage", hint: "Act as its owner on teams, pots, cooks, fires and wake targets" },
-  { id: "admin", label: "Admin", hint: "Its owner's admin powers (only if the owner is an admin)" },
-];
-
-/** What a cook may do beyond working its tasks. A cook never exceeds its owner and cannot change this itself. */
-function Grants({ a }: { a: AgentRow }) {
-  const call = useV1Call();
-  const [busy, setBusy] = useState<string | null>(null);
-  const have = new Set(a.grants ?? []);
-  async function toggle(id: string) {
-    const next = have.has(id) ? [...have].filter((g) => g !== id) : [...have, id];
-    setBusy(id);
-    try {
-      await call("POST", `/agents/${a.name}/grants`, { grants: next });
-      toast.success(have.has(id) ? `${a.name} may no longer ${id}` : `${a.name} may now ${id}`);
-    } catch (e) {
-      toast.error("Could not change what this cook may do", { description: errorMessage(e) });
-    } finally {
-      setBusy(null);
-    }
-  }
+/** Used leases as little blocks: saffron while held. */
+function LeaseBlocks({ busy, max }: { busy: number; max: number }) {
+  const n = Math.min(max, 10);
   return (
-    <div className="flex flex-wrap gap-1.5" role="group" aria-label={`What ${a.name} may also do`}>
-      {GRANTS.map((g) => {
-        const on = have.has(g.id);
-        return (
-          <button
-            key={g.id}
-            type="button"
-            title={g.hint}
-            aria-pressed={on}
-            disabled={!!busy}
-            onClick={() => void toggle(g.id)}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[12px] transition-colors",
-              on ? "border-primary bg-primary/10 font-semibold text-primary" : "border-border text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {busy === g.id && <Loader2 className="size-3 animate-spin" />}
-            {g.label}
-          </button>
-        );
-      })}
-      {have.size === 0 && <span className="self-center text-[11.5px] text-muted-foreground">works its tasks only</span>}
-    </div>
-  );
-}
-
-/** The teams a cook is in: they decide which pots it sees. Owners of a team (and admins) can move the cook in and out. */
-function CookTeams({ a }: { a: AgentRow }) {
-  const me = useSession();
-  const call = useV1Call();
-  const teams = useV1<TeamRow[]>("/teams");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [pick, setPick] = useState("");
-  const mine = a.teams ?? [];
-  const manageable = (t: string) => me.is_admin || (teams.data ?? []).some((x) => x.name === t && x.role === "owner");
-  const addable = (teams.data ?? []).filter((t) => !mine.includes(t.name) && (me.is_admin || t.role === "owner"));
-
-  async function add(team: string) {
-    setBusy(team);
-    try {
-      await call("POST", `/teams/${team}/members`, { principal: a.name, role: "chef" });
-      toast.success(`${a.name} joined ${team}`);
-    } catch (e) {
-      toast.error("Could not add it to that team", { description: errorMessage(e) });
-    } finally {
-      setBusy(null);
-      setPick("");
-    }
-  }
-  async function remove(team: string) {
-    setBusy(team);
-    try {
-      await call("DELETE", `/teams/${team}/members/${a.name}`);
-      toast.success(`${a.name} left ${team}`);
-    } catch (e) {
-      toast.error("Could not remove it from that team", { description: errorMessage(e) });
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {mine.map((t) => (
-        <LabelChip key={t} className="gap-1">
-          <Link to={`/teams/${t}`} className="hover:underline focus-visible:underline">{t}</Link>
-          {manageable(t) && (
-            <button
-              type="button"
-              aria-label={`Remove ${a.name} from ${t}`}
-              disabled={busy === t}
-              onClick={() => void remove(t)}
-              className="-mr-1 inline-flex size-4 items-center justify-center rounded-full hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
-            >
-              {busy === t ? <Loader2 className="size-3 animate-spin" aria-hidden="true" /> : <X className="size-3" aria-hidden="true" />}
-            </button>
-          )}
-        </LabelChip>
+    <span className="inline-flex items-center gap-[3px]" aria-hidden="true">
+      {Array.from({ length: n }).map((_, i) => (
+        <span key={i} className={cn("h-2 w-3 rounded-[2px]", i < busy ? "bg-corn" : "bg-muted")} />
       ))}
-      {mine.length === 0 && <span className="text-[11.5px] text-muted-foreground">in no team: it sees no pot</span>}
-      {addable.length > 0 && (
-        <Select value={pick} onValueChange={(v) => void add(v)} disabled={!!busy}>
-          <SelectTrigger size="sm" className="h-6 w-auto gap-1 px-2 text-[12px]" aria-label={`Add ${a.name} to a team`}>
-            <SelectValue placeholder="+ Add to team" />
-          </SelectTrigger>
-          <SelectContent>
-            {addable.map((t) => (
-              <SelectItem key={t.name} value={t.name}>
-                {t.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
-    </div>
-  );
-}
-
-/** Tasks held right now out of the cook's limit, which its owner (or an admin) can step up or down. */
-function LeaseLimit({ a }: { a: AgentRow }) {
-  const invalidate = useInvalidateAll();
-  const [busy, setBusy] = useState(false);
-  async function set(n: number) {
-    setBusy(true);
-    try {
-      await client.principals.update(a.id, { maxLeases: n });
-      void invalidate();
-      toast.success(`${a.name} may now hold ${n} task${n === 1 ? "" : "s"} at once`);
-    } catch (e) {
-      toast.error("Could not change the limit", { description: errorMessage(e) });
-    } finally {
-      setBusy(false);
-    }
-  }
-  const step = "size-6 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40";
-  return (
-    <span className="inline-flex items-center gap-1.5 font-mono text-[12px]">
-      <span>{a.busy} of</span>
-      <span className="inline-flex items-center rounded-md border border-border" role="group" aria-label={`Leases ${a.name} may hold at once`}>
-        <Button type="button" variant="ghost" size="icon" className={step} disabled={busy || a.max_leases <= 1} onClick={() => void set(a.max_leases - 1)} aria-label="One fewer">
-          <Minus className="size-3" />
-        </Button>
-        <span className="min-w-5 text-center font-bold" aria-live="polite">
-          {busy ? <Loader2 className="mx-auto size-3 animate-spin" /> : a.max_leases}
-        </span>
-        <Button type="button" variant="ghost" size="icon" className={step} disabled={busy || a.max_leases >= 50} onClick={() => void set(a.max_leases + 1)} aria-label="One more">
-          <Plus className="size-3" />
-        </Button>
-      </span>
     </span>
   );
 }
 
-function CookCard({
-  a,
-  current,
-  stations,
-  onToken,
-}: {
-  a: AgentRow;
-  current: string | null;
-  stations: StationView[];
-  onToken: (t: { token: string; title: string; hint?: string }) => void;
-}) {
-  const now = useNow();
-  const openTask = useOpenTask();
-  const call = useV1Call();
-  const proc = useProcCall();
-  const [mcp, setMcp] = useState(false);
-  const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
-  const [confirm, setConfirm] = useState<"rotate" | "disable" | null>(null);
-  const [wakeOpen, setWakeOpen] = useState(false);
-  // open by default once the cook has stations; a click overrides
-  const [stationsOpen, setStationsOpen] = useState<boolean | null>(null);
-  const showStations = stationsOpen ?? stations.length > 0;
+/** One cook: a two-line row on phones, a compact card from tablets up. The whole thing opens the cook's page. */
+function CookItem({ a, current, now }: { a: AgentRow; current: string | null; now: number }) {
   const st = cookState(a, now);
-  const usage = useProc("usageReport", { cook: a.name, days: 7 });
-
-  async function rotate() {
-    try {
-      const r = await call<{ token: string }>("POST", `/agents/${a.name}/rotate`);
-      onToken({
-        token: r.token,
-        title: `New token for ${a.name}`,
-        hint: "The old token stopped working the moment this one was made.",
-      });
-    } catch (e) {
-      toast.error("Could not rotate the token", { description: errorMessage(e) });
-    }
-  }
-  async function toggle() {
-    try {
-      await call("POST", `/agents/${a.name}/${a.disabled ? "enable" : "disable"}`);
-      toast.success(a.disabled ? `${a.name} is back in the kitchen` : `${a.name} sent home`);
-    } catch (e) {
-      toast.error("Could not change that", { description: errorMessage(e) });
-    }
-  }
-
+  const cloud = a.runtime === "cloud";
+  const kind = KIND_LABEL[a.agent_kind ?? "other"] ?? a.agent_kind ?? "Agent";
   return (
-    <article
-      id={`cook-${a.name}`}
-      aria-label={`Cook ${a.name}`}
-      className={cn("scroll-mt-24 min-w-0 rounded-[14px] border border-border bg-card p-4", a.disabled && "opacity-75")}
-    >
-      <div className="flex items-start gap-3">
-        <Avatar name={a.name} className="size-10 rounded-lg text-[18px]" />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-[18px] leading-tight">
-            <Link to={`/cooks/${a.name}`} className="underline-offset-2 hover:underline focus-visible:underline">{a.name}</Link>
-          </h2>
-          <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-            {KIND_LABEL[a.agent_kind ?? "other"] ?? a.agent_kind} · {a.runtime ?? "local"}
-            {a.owner && <> · owned by {a.owner}</>}
-          </p>
-        </div>
-        <span
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px] font-medium",
-            st === "cooking" || st === "awake" ? "border-corn/60 bg-corn/15" : "border-border bg-muted/60 text-muted-foreground",
-            st === "disabled" && "border-destructive/40 text-destructive",
-          )}
-        >
-          <span className="inline-flex">
-            <StateDot state={st} className={st === "idle" ? "bg-muted-foreground/50" : ""} />
-          </span>
-          {STATE_LABEL[st]}
-        </span>
-      </div>
-
-      <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[12.5px]">
-        <dt className="text-muted-foreground">Cooking</dt>
-        <dd className="min-w-0">
-          {current ? (
-            <button type="button" onClick={() => openTask(current)} className="font-mono text-[12px] font-bold underline-offset-2 hover:underline">
-              {current}
-            </button>
-          ) : (
-            <span className="text-muted-foreground">nothing right now</span>
-          )}
-        </dd>
-        <dt className="text-muted-foreground">Last seen</dt>
-        <dd>{fmtAgo(a.last_seen_at, now)}</dd>
-        <dt className="text-muted-foreground">Leases</dt>
-        <dd>
-          <LeaseLimit a={a} />
-        </dd>
-        <dt className="pt-1 text-muted-foreground">May also</dt>
-        <dd>
-          <Grants a={a} />
-        </dd>
-        <dt className="pt-1 text-muted-foreground">Teams</dt>
-        <dd className="min-w-0">
-          <CookTeams a={a} />
-        </dd>
-      </dl>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" onClick={() => setMcp(true)}>
-          <Plug /> MCP config
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setConfirm("rotate")}>
-          <RotateCw /> Rotate token
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className={a.disabled ? "" : "text-destructive hover:text-destructive"}
-          onClick={() => (a.disabled ? void toggle() : setConfirm("disable"))}
-        >
-          <Power /> {a.disabled ? "Enable" : "Disable"}
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setDialog("rename")}>
-          <Pencil /> Rename
-        </Button>
-        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDialog("delete")}>
-          <Trash2 /> Delete
-        </Button>
-      </div>
-
-      <button
-        type="button"
-        aria-expanded={showStations}
-        onClick={() => setStationsOpen(!showStations)}
-        className="mt-4 flex w-full items-center gap-1.5 border-t border-border pt-3 text-left"
+    <li className="min-w-0 md:contents">
+      <Link
+        to={`/cooks/${a.name}`}
+        aria-label={`Cook ${a.name}, ${STATE_LABEL[st]}`}
+        className={cn(
+          "group flex min-h-16 items-center gap-3 px-4 py-3 outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/60 active:bg-muted",
+          "md:block md:min-h-0 md:rounded-[14px] md:border md:border-border md:bg-card md:p-4 md:hover:border-foreground/30 md:focus-visible:border-foreground/40",
+          a.disabled && "opacity-75",
+        )}
       >
-        <ChevronDown className={cn("size-3.5 text-muted-foreground transition-transform", !showStations && "-rotate-90")} aria-hidden="true" />
-        <span className="label-caps">Stations</span>
-        <span className="font-mono text-[11px] text-muted-foreground">{stations.length}</span>
-      </button>
-      {showStations && <StationList stations={stations} cook={a.name} kind={a.agent_kind} />}
-
-      <div className="mt-4 border-t border-border pt-3">
-        <span className="label-caps">Usage</span>
-        <CookUsage report={usage.data} />
-      </div>
-
-      <button
-        type="button"
-        aria-expanded={wakeOpen}
-        onClick={() => setWakeOpen((o) => !o)}
-        className="mt-4 flex w-full items-center gap-1.5 border-t border-border pt-3 text-left"
-      >
-        <ChevronDown className={cn("size-3.5 text-muted-foreground transition-transform", !wakeOpen && "-rotate-90")} aria-hidden="true" />
-        <span className="label-caps">Wake targets</span>
-      </button>
-      {wakeOpen && <WakeTargets agent={a.name} runtime={a.runtime} />}
-
-      <McpDialog open={mcp} onOpenChange={setMcp} name={a.name} kind={a.agent_kind} />
-      <RenameDialog
-        open={dialog === "rename"}
-        onOpenChange={(o) => !o && setDialog(null)}
-        title={`Rename ${a.name}`}
-        description="Its tokens, stations, leases, wake targets and teams keep working. Text that already says the old name (@mentions, and the agent name in a fire's config.toml) does not change: edit the config on the machine."
-        label="New name"
-        current={a.name}
-        onSave={async (newName) => {
-          await proc("cookRename", { name: a.name, newName });
-          toast.success(`${a.name} is now ${newName.toLowerCase()}`);
-        }}
-      />
-      <DeleteDialog
-        open={dialog === "delete"}
-        onOpenChange={(o) => !o && setDialog(null)}
-        title={`Delete ${a.name}?`}
-        description="Any task it holds goes back to open. Its tokens, stations, wake targets and team memberships are deleted, so it can no longer sign in. Comments and tasks it wrote stay, without an author. This cannot be undone."
-        action="Delete the cook"
-        onConfirm={async () => {
-          const out = await proc("cookDelete", { name: a.name });
-          toast.success(`${a.name} deleted`, { description: out.released > 0 ? `${out.released} lease${out.released === 1 ? "" : "s"} released.` : undefined });
-        }}
-      />
-      <AlertDialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{confirm === "rotate" ? `Rotate ${a.name}'s token?` : `Disable ${a.name}?`}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirm === "rotate"
-                ? "A new token is shown once. The old one stops working immediately, so update the cook's MCP config right after."
-                : "It can no longer sign in and any lease it holds will run out. You can enable it again later."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Not now</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void (confirm === "rotate" ? rotate() : toggle())}>
-              {confirm === "rotate" ? "Rotate it" : "Disable it"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </article>
-  );
-}
-
-export function WakeTargets({ agent, runtime }: { agent: string; runtime: string | null }) {
-  const q = useV1<WakeTargetRow[]>(`/agents/${agent}/wake-targets`);
-  const call = useV1Call();
-  const me = useSession();
-  const [adding, setAdding] = useState(false);
-  if (q.isLoading) return <p className="mt-2 text-[12.5px] text-muted-foreground">Loading…</p>;
-  const rows = q.data ?? [];
-  return (
-    <div className="mt-2 space-y-2">
-      {rows.length === 0 && (
-        <p className="text-[12.5px] text-muted-foreground">
-          {runtime === "cloud"
-            ? "No wake target. A cloud cook is started by a routine, a GitHub comment or a webhook, when someone calls it."
-            : "No wake target. A relay (fire) on your laptop wakes local cooks."}
-        </p>
-      )}
-      {rows.map((w) => (
-        <div key={w.id} className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-[12.5px]">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <Avatar name={a.name} className="size-10 rounded-lg text-[18px]" />
           <div className="min-w-0 flex-1">
-            <p className="font-medium">
-              {w.type}
-              {w.type !== "relay" && (
-                <span className="ml-1.5 font-normal text-muted-foreground">
-                  {w.config.takes_work === true ? "· on call, and takes new work" : "· on call: started by name only"}
-                </span>
+            <p className="flex items-center gap-2">
+              <span className="truncate font-display text-[17px] leading-tight">{a.name}</span>
+              {cloud && (
+                <LabelChip className="gap-1 px-1.5">
+                  <Cloud className="size-3" aria-hidden="true" /> cloud
+                </LabelChip>
               )}
             </p>
-            <p className="truncate font-mono text-[11px] text-muted-foreground">
-              {w.type === "webhook"
-                ? String(w.config.url ?? "")
-                : w.type === "claude-routine"
-                  ? `Claude routine ${String(w.config.url ?? "").match(/trig_[A-Za-z0-9]+/)?.[0] ?? ""}`
-                  : w.type === "github-comment"
-                    ? `${String(w.config.mention ?? "the default mention")} on ${String(w.config.repo ?? "")}#${String(w.config.issue ?? "")}`
-                    : "via the fire"}
+            <p className="mt-0.5 truncate text-[12.5px] text-muted-foreground">
+              {kind} · {a.runtime ?? "local"}
             </p>
-            {(w.projects.length > 0 || w.labels.length > 0) && (
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                {w.projects.length > 0 && <>pots {w.projects.join(", ")} </>}
-                {w.labels.length > 0 && <>labels {w.labels.join(", ")}</>}
-              </p>
-            )}
+            <p className="mt-0.5 flex items-center gap-1.5 text-[12.5px] md:hidden">
+              <StateDot state={st} className={st === "idle" ? "bg-muted-foreground/50" : ""} />
+              <span className={cn(st === "disabled" ? "text-destructive" : st === "idle" ? "text-muted-foreground" : "text-foreground")}>{STATE_LABEL[st]}</span>
+              {current && <span className="font-mono text-[12px] font-bold">{current}</span>}
+            </p>
           </div>
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            aria-label={`Remove ${w.type} wake target`}
-            onClick={async () => {
-              try {
-                await call("DELETE", `/wake-targets/${w.id}`);
-                toast.success("Wake target removed");
-              } catch (e) {
-                toast.error("Could not remove it", { description: errorMessage(e) });
-              }
-            }}
-          >
-            <Trash2 />
-          </Button>
+          <StatePill state={st} className="max-md:hidden" />
+          <div className="flex shrink-0 items-center gap-1.5 md:hidden">
+            <span className="text-right font-mono text-[12.5px] leading-tight">
+              <span className="font-bold">{a.busy}</span>
+              <span className="text-muted-foreground">/{a.max_leases}</span>
+              <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">leases</span>
+            </span>
+            <ChevronRight className="size-4 text-muted-foreground/70" aria-hidden="true" />
+          </div>
         </div>
-      ))}
-      <Button size="sm" variant="ghost" onClick={() => setAdding(true)}>
-        <Plus /> Add wake target
-      </Button>
-      <AddWake open={adding} onOpenChange={setAdding} agent={agent} admin={me.is_admin} />
-    </div>
+        <dl className="mt-4 grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-[12.5px] max-md:hidden">
+          <dt className="text-muted-foreground">Cooking</dt>
+          <dd className="min-w-0 truncate">
+            {current ? <span className="font-mono text-[12px] font-bold">{current}</span> : <span className="text-muted-foreground">nothing right now</span>}
+          </dd>
+          <dt className="text-muted-foreground">Leases</dt>
+          <dd className="flex items-center gap-2 font-mono text-[12px]">
+            <span>
+              <b>{a.busy}</b>/{a.max_leases}
+            </span>
+            <LeaseBlocks busy={a.busy} max={a.max_leases} />
+          </dd>
+          <dt className="text-muted-foreground">Last seen</dt>
+          <dd>{fmtAgo(a.last_seen_at, now)}</dd>
+          <dt className="text-muted-foreground">Teams</dt>
+          <dd className="flex min-w-0 flex-wrap gap-1">
+            {(a.teams ?? []).length === 0 ? <span className="text-muted-foreground">none</span> : (a.teams ?? []).map((t) => <LabelChip key={t}>{t}</LabelChip>)}
+          </dd>
+        </dl>
+      </Link>
+    </li>
   );
 }
 
+// ------------------------------------------------------------------ New cook: a step-by-step sheet
+
+type Step = "who" | "where" | "token" | "wake";
+
+const CLOUD_WAKES = [
+  { id: "claude-routine", title: "Claude Code on the web", sub: "A routine is started on each wake", icon: Cloud },
+  { id: "github-comment", title: "GitHub comment", sub: "Codex cloud, Copilot and others", icon: MessageSquare },
+  { id: "webhook", title: "Webhook", sub: "Your own endpoint (admins)", icon: Webhook },
+] as const;
+
 /**
- * Relays are added here. Cloud kinds go through a cloud setup, the same page an agent's
- * connect_cloud links to (/connect/<code>): one form and one set of rules for both.
+ * create, then the token and MCP config, with the team and a relay wake target added on the way, then (for a cloud
+ * cook) the cloud setup. On a phone a bottom sheet with one thing per step and a sticky button.
  */
-function AddWake({ open, onOpenChange, agent, admin }: { open: boolean; onOpenChange: (o: boolean) => void; agent: string; admin: boolean }) {
+function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const call = useV1Call();
   const proc = useProcCall();
   const navigate = useNavigate();
-  const [type, setType] = useState("relay");
-  const [busy, setBusy] = useState(false);
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      if (type === "relay") {
-        await call("POST", `/agents/${agent}/wake-targets`, { type, config: {} });
-        toast.success("Wake target added");
-        onOpenChange(false);
-      } else {
-        const s = await proc("cloudConnect", { kind: type, cook: agent });
-        onOpenChange(false);
-        navigate(`/connect/${s.code}`);
-      }
-    } catch (err) {
-      toast.error("Could not add it", { description: errorMessage(err) });
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Wake target for {agent}</DialogTitle>
-          <DialogDescription>How an idle cook hears that there is work, or a message for it.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="wt-type">Kind</Label>
-            <Select value={type} onValueChange={setType}>
-              <SelectTrigger id="wt-type" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="relay">Relay: a fire on your laptop</SelectItem>
-                <SelectItem value="claude-routine">Claude Code on the web (a routine)</SelectItem>
-                <SelectItem value="github-comment">GitHub comment (Codex cloud, Copilot, …)</SelectItem>
-                {admin && <SelectItem value="webhook">Webhook (your own endpoint)</SelectItem>}
-              </SelectContent>
-            </Select>
-            {type === "relay" ? (
-              <p className="text-[12px] text-muted-foreground">
-                The fire on {agent}&rsquo;s machine wakes its sessions (<span className="font-mono">corntchap-cli fire</span>).
-              </p>
-            ) : (
-              <p className="text-[12px] text-muted-foreground">
-                Each wake starts a fresh cloud session: new work, and every message for {agent} (pass, mentions, comments, answers), batched. Next you get
-                the steps and the form, the same page {agent} gets from <span className="font-mono">connect_cloud</span>.
-              </p>
-            )}
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={busy}>
-              {busy && <Loader2 className="animate-spin" />} {type === "relay" ? "Add" : "Continue"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function CreateCook({
-  open,
-  onOpenChange,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (o: boolean) => void;
-  onCreated: (c: { name: string; kind: string; token: string }) => void;
-}) {
-  const call = useV1Call();
+  const me = useSession();
   const teams = useV1<TeamRow[]>("/teams", { enabled: open });
+  const [step, setStep] = useState<Step>("who");
   const [name, setName] = useState("");
   const [kind, setKind] = useState("claude-code");
   const [runtime, setRuntime] = useState("local");
-  const [maxLeases, setMaxLeases] = useState("1");
+  const [maxLeases, setMaxLeases] = useState(1);
   const [team, setTeam] = useState("");
   const [relay, setRelay] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [made, setMade] = useState<{ name: string; token: string } | null>(null);
 
-  useEffect(() => {
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) {
+      setStep("who");
       setName("");
-      setTeam((t) => t || teams.data?.[0]?.name || "");
+      setMade(null);
+      setMaxLeases(1);
     }
-  }, [open, teams.data]);
+  }
+  useEffect(() => {
+    if (open) setTeam((t) => t || teams.data?.find((x) => me.is_admin || x.role === "owner")?.name || "");
+  }, [open, teams.data, me.is_admin]);
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  const cloud = runtime === "cloud";
+  const total = cloud ? 4 : 3;
+  const index = ["who", "where", "token", "wake"].indexOf(step) + 1;
+  const nameOk = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name);
+
+  async function hire() {
     setBusy(true);
     try {
-      const made = await call<{ name: string; token: string }>("POST", "/agents", {
-        name,
-        kind,
-        runtime,
-        max_leases: Number(maxLeases) || 1,
-      });
+      const m = await call<{ name: string; token: string }>("POST", "/agents", { name, kind, runtime, max_leases: maxLeases });
       // like `cook setup`: join the team so the cook can see its pots, and add a relay wake target for local cooks
       const notes: string[] = [];
       if (team) {
         try {
-          await call("POST", `/teams/${team}/members`, { principal: made.name, role: "member" });
+          await call("POST", `/teams/${team}/members`, { principal: m.name, role: "member" });
         } catch (err) {
           notes.push(`could not join team ${team}: ${errorMessage(err)}`);
         }
       }
-      if (relay && runtime === "local") {
+      if (relay && !cloud) {
         try {
-          await call("POST", `/agents/${made.name}/wake-targets`, { type: "relay" });
+          await call("POST", `/agents/${m.name}/wake-targets`, { type: "relay" });
         } catch (err) {
           notes.push(`no relay wake target: ${errorMessage(err)}`);
         }
       }
       if (notes.length) toast.warning("Cook created, with a hiccup", { description: notes.join("; ") });
-      onOpenChange(false);
-      onCreated({ name: made.name, kind, token: made.token });
+      setMade(m);
+      setStep("token");
     } catch (err) {
       toast.error("Could not hire that cook", { description: errorMessage(err) });
     } finally {
@@ -699,87 +324,254 @@ function CreateCook({
     }
   }
 
+  async function wake(k: string) {
+    if (!made) return;
+    setBusy(true);
+    try {
+      const s = await proc("cloudConnect", { kind: k, cook: made.name });
+      onOpenChange(false);
+      void navigate(`/connect/${s.code}`);
+    } catch (err) {
+      toast.error("Could not start the cloud setup", { description: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function finish() {
+    onOpenChange(false);
+    if (made) void navigate(`/cooks/${made.name}`);
+  }
+
+  const optionBtn = (on: boolean) =>
+    cn(
+      "flex min-h-14 w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-colors",
+      on ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50",
+    );
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>New cook</DialogTitle>
-          <DialogDescription>Registers an agent and mints its token. The token is shown once.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="ck-name">Name</Label>
-            <Input id="ck-name" required value={name} onChange={(e) => setName(e.target.value)} placeholder="claude-laptop" pattern="[A-Za-z0-9][A-Za-z0-9._-]*" autoFocus />
-            <p className="text-[12px] text-muted-foreground">Letters, digits, dots, dashes. Stored in lower case.</p>
+      <DialogContent
+        className={cn(formSheetClass, "sm:max-w-lg")}
+        onInteractOutside={(e) => step === "token" && e.preventDefault()}
+        onEscapeKeyDown={(e) => step === "token" && e.preventDefault()}
+      >
+        <FormSheetHead>
+          <p className="label-caps" aria-live="polite">
+            Step {index} of {total}
+          </p>
+          <div className="flex gap-1.5" aria-hidden="true">
+            {Array.from({ length: total }).map((_, i) => (
+              <span key={i} className={cn("h-1 flex-1 rounded-full", i < index ? "bg-primary" : "bg-muted")} />
+            ))}
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="ck-kind">Runs in</Label>
-              <Select value={kind} onValueChange={setKind}>
-                <SelectTrigger id="ck-kind" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(KIND_LABEL).map(([k, v]) => (
-                    <SelectItem key={k} value={k}>
-                      {v}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ck-rt">Runtime</Label>
-              <Select value={runtime} onValueChange={setRuntime}>
-                <SelectTrigger id="ck-rt" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="local">Local</SelectItem>
-                  <SelectItem value="cloud">Cloud</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="ck-team">Team</Label>
-              <Select value={team} onValueChange={setTeam}>
-                <SelectTrigger id="ck-team" className="w-full">
-                  <SelectValue placeholder="No team yet" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(teams.data ?? []).map((t) => (
-                    <SelectItem key={t.name} value={t.name}>
-                      {t.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ck-max">Leases at once</Label>
-              <Input id="ck-max" type="number" min={1} max={20} value={maxLeases} onChange={(e) => setMaxLeases(e.target.value)} />
-            </div>
-          </div>
-          {runtime === "local" && (
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
-              <div>
-                <Label htmlFor="ck-relay">Wake through my fire</Label>
-                <p className="text-[12px] text-muted-foreground">Adds a relay wake target so an idle cook is started when work arrives.</p>
+          <DialogTitle className="mt-1 text-[24px] leading-tight">
+            {step === "who" && "Who is cooking?"}
+            {step === "where" && "Where does it work?"}
+            {step === "token" && `${made?.name ?? "The cook"} is in the kitchen`}
+            {step === "wake" && "How is it woken?"}
+          </DialogTitle>
+          <DialogDescription>
+            {step === "who" && "Name the agent and say where it runs. Its token is made when you hire it."}
+            {step === "where" && "The team decides which pots it sees; the lease limit is how many tasks it holds at once."}
+            {step === "token" && "Copy the token now: it is shown once and the server keeps only a hash. Then paste the config where the agent runs."}
+            {step === "wake" && `${made?.name} runs in the cloud, so it is on call: started by a message, an @mention or a comment on its task. Pick how.`}
+          </DialogDescription>
+        </FormSheetHead>
+
+        {step === "who" && (
+          <form
+            id="new-cook-who"
+            className="flex min-h-0 flex-1 flex-col"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (nameOk) setStep("where");
+            }}
+          >
+            <FormSheetBody>
+              <div className="space-y-1.5">
+                <Label htmlFor="ck-name">Name</Label>
+                <Input
+                  id="ck-name"
+                  required
+                  autoFocus
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="claude-laptop"
+                  className="h-11 font-mono"
+                />
+                <p className="text-[12px] text-muted-foreground">Letters, digits, dots, dashes. Stored in lower case.</p>
               </div>
-              <Switch id="ck-relay" checked={relay} onCheckedChange={setRelay} />
-            </div>
-          )}
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={busy || !name}>
-              {busy ? <Loader2 className="animate-spin" /> : <ChefHat />} Hire the cook
-            </Button>
-          </DialogFooter>
-        </form>
+              <div className="space-y-1.5">
+                <Label>Runs in</Label>
+                <div role="radiogroup" aria-label="Runs in" className="grid grid-cols-2 gap-2">
+                  {Object.entries(KIND_LABEL).map(([k, v]) => (
+                    <button key={k} type="button" role="radio" aria-checked={kind === k} onClick={() => setKind(k)} className={cn(optionBtn(kind === k), "min-h-12 text-[13.5px] font-medium")}>
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1.5 pb-2">
+                <Label>Where it runs</Label>
+                <div role="radiogroup" aria-label="Runtime" className="grid gap-2 sm:grid-cols-2">
+                  <button type="button" role="radio" aria-checked={runtime === "local"} onClick={() => setRuntime("local")} className={optionBtn(runtime === "local")}>
+                    <Laptop className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span>
+                      <span className="block text-[14px] font-medium">Local</span>
+                      <span className="block text-[12px] text-muted-foreground">On your machine, woken by a fire</span>
+                    </span>
+                  </button>
+                  <button type="button" role="radio" aria-checked={runtime === "cloud"} onClick={() => setRuntime("cloud")} className={optionBtn(runtime === "cloud")}>
+                    <Cloud className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span>
+                      <span className="block text-[14px] font-medium">Cloud</span>
+                      <span className="block text-[12px] text-muted-foreground">On call: started by a message or mention</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </FormSheetBody>
+            <FormSheetFoot>
+              <Button type="submit" disabled={!nameOk} className="max-sm:h-11">
+                Next
+              </Button>
+              <Button type="button" variant="ghost" className="max-sm:h-11" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+            </FormSheetFoot>
+          </form>
+        )}
+
+        {step === "where" && (
+          <form
+            className="flex min-h-0 flex-1 flex-col"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void hire();
+            }}
+          >
+            <FormSheetBody>
+              <div className="space-y-1.5">
+                <Label htmlFor="ck-team">Team</Label>
+                <Select value={team} onValueChange={setTeam}>
+                  <SelectTrigger id="ck-team" className="h-11 w-full">
+                    <SelectValue placeholder="No team yet: it sees no pot" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(teams.data ?? [])
+                      .filter((t) => me.is_admin || t.role === "owner")
+                      .map((t) => (
+                        <SelectItem key={t.name} value={t.name}>
+                          {t.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-border px-3.5 py-2">
+                <div>
+                  <p className="text-[14px] font-medium">Tasks at once</p>
+                  <p className="text-[12px] text-muted-foreground">How many leases it may hold</p>
+                </div>
+                <div className="flex items-center gap-1.5" role="group" aria-label="Leases at once">
+                  <Button type="button" variant="ghost" size="icon" className="border border-border" aria-label="One fewer" disabled={maxLeases <= 1} onClick={() => setMaxLeases((n) => n - 1)}>
+                    <Minus />
+                  </Button>
+                  <span className="min-w-7 text-center font-mono text-[16px] font-bold">{maxLeases}</span>
+                  <Button type="button" variant="ghost" size="icon" className="border border-border" aria-label="One more" disabled={maxLeases >= 20} onClick={() => setMaxLeases((n) => n + 1)}>
+                    <Plus />
+                  </Button>
+                </div>
+              </div>
+              {!cloud ? (
+                <label htmlFor="ck-relay" className="flex min-h-14 cursor-pointer items-center justify-between gap-3 rounded-xl border border-border px-3.5 py-2.5">
+                  <span>
+                    <span className="flex items-center gap-1.5 text-[14px] font-medium">
+                      <Flame className="size-4 text-muted-foreground" aria-hidden="true" /> Wake through my fire
+                    </span>
+                    <span className="mt-0.5 block text-[12px] text-muted-foreground">Adds a relay wake target so an idle cook is started when work arrives.</span>
+                  </span>
+                  <Switch id="ck-relay" checked={relay} onCheckedChange={setRelay} />
+                </label>
+              ) : (
+                <p className="rounded-xl border border-border bg-muted/40 px-3.5 py-3 text-[12.5px] text-muted-foreground">
+                  A cloud cook has no fire. After the token you pick how it is woken: a Claude routine, GitHub comments or a webhook.
+                </p>
+              )}
+            </FormSheetBody>
+            <FormSheetFoot>
+              <Button type="submit" disabled={busy} className="max-sm:h-11">
+                {busy ? <Loader2 className="animate-spin" /> : <ChefHat />} Hire the cook
+              </Button>
+              <Button type="button" variant="ghost" className="max-sm:h-11" disabled={busy} onClick={() => setStep("who")}>
+                Back
+              </Button>
+            </FormSheetFoot>
+          </form>
+        )}
+
+        {step === "token" && made && (
+          <>
+            <FormSheetBody className="pb-4">
+              <TokenBox token={made.token} name={made.name} />
+              <Snippets token={made.token} defaultKind={kind} />
+            </FormSheetBody>
+            <FormSheetFoot>
+              {cloud ? (
+                <>
+                  <Button className="max-sm:h-11" onClick={() => setStep("wake")}>
+                    I have copied it: next
+                  </Button>
+                  <Button variant="ghost" className="max-sm:h-11" onClick={finish}>
+                    Skip the wake target
+                  </Button>
+                </>
+              ) : (
+                <Button className="max-sm:h-11" onClick={finish}>
+                  I have copied it
+                </Button>
+              )}
+            </FormSheetFoot>
+          </>
+        )}
+
+        {step === "wake" && made && (
+          <>
+            <FormSheetBody className="pb-4">
+              <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+                {CLOUD_WAKES.filter((w) => w.id !== "webhook" || me.is_admin).map((w) => (
+                  <li key={w.id}>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void wake(w.id)}
+                      className="flex min-h-14 w-full items-center gap-3 px-3.5 py-2.5 text-left hover:bg-muted/50 active:bg-muted disabled:opacity-60"
+                    >
+                      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+                        <w.icon className="size-4" aria-hidden="true" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[14px] font-medium">{w.title}</span>
+                        <span className="block text-[12px] text-muted-foreground">{w.sub}</span>
+                      </span>
+                      <ChevronRight className="size-4 text-muted-foreground/70" aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[12px] text-muted-foreground">Next come the steps and the form, the same page {made.name} gets from connect_cloud.</p>
+            </FormSheetBody>
+            <FormSheetFoot>
+              <Button variant="ghost" className="max-sm:h-11" onClick={finish}>
+                Do it later
+              </Button>
+            </FormSheetFoot>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
