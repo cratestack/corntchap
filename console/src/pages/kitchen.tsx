@@ -378,7 +378,8 @@ function PhoneHeader({ project, base, viewKey, saved, taskView, onNewView, filte
 
   if (!taskView) {
     const label = ALL_VIEWS.find((v) => v.id === base)?.label ?? "Pot";
-    const action = base === "pantry" ? "Stock" : base === "menus" ? "New menu" : base === "questions" ? "Ask" : null;
+    // the pantry has its own floating "Stock" button on phones
+    const action = base === "menus" ? "New menu" : base === "questions" ? "Ask" : null;
     return (
       <header className="flex h-10 items-center justify-between gap-3">
         <h1 className="text-[22px] leading-none">{label}</h1>
@@ -419,8 +420,9 @@ function PhoneHeader({ project, base, viewKey, saved, taskView, onNewView, filte
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {/* the board has its own status switcher under this line; lists filter by status here */}
       <div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
-        <StatusChips project={project} status={filters.status} onPick={(b) => setFilter("status", b)} withLabels={false} />
+        {viewKey && <StatusChips project={project} status={filters.status} onPick={(b) => setFilter("status", b)} withLabels={false} />}
       </div>
       <button
         type="button"
