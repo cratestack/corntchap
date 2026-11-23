@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { Navigate } from "react-router";
+import { Link, Navigate } from "react-router";
 import { Check, ChevronsUpDown, Flame, Loader2, Plus, RotateCw, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -147,7 +147,7 @@ export function FiresPage() {
                     <Flame className={cn("size-5", lit ? "text-corn-text" : "text-muted-foreground")} aria-hidden="true" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <h2 className="truncate text-[18px] leading-tight">{r.name}</h2>
+                    <h2 className="truncate text-[18px] leading-tight"><Link to={`/fires/${r.name}`} className="underline-offset-2 hover:underline focus-visible:underline">{r.name}</Link></h2>
                     <p className="mt-0.5 flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
                       <StateDot state={lit ? "cooking" : st} className={lit ? "" : "bg-muted-foreground/50"} />
                       {lit ? "lit" : r.disabled ? "put out" : "banked"} · seen {fmtAgo(r.last_seen_at, now)}
@@ -284,7 +284,7 @@ export function PotsAdminPage() {
           <tbody>
             {projects.data!.map((p) => (
               <tr key={p.key}>
-                <TD className="font-mono text-[12.5px] font-bold">{p.key}</TD>
+                <TD className="font-mono text-[12.5px] font-bold"><Link to={`/pots/${p.key}/about`} className="underline-offset-2 hover:underline focus-visible:underline">{p.key}</Link></TD>
                 <TD>
                   {p.name}
                   {p.repo_url && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{p.repo_url}</span>}
@@ -410,7 +410,7 @@ function TeamCard({ team, canManage, onAdd }: { team: TeamRow; canManage: boolea
   return (
     <section className="rounded-[14px] border border-border bg-card" aria-label={`Team ${team.name}`}>
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
-        <h2 className="text-[18px]">{team.name}</h2>
+        <h2 className="text-[18px]"><Link to={`/teams/${team.name}`} className="underline-offset-2 hover:underline focus-visible:underline">{team.name}</Link></h2>
         <span className="font-mono text-[11.5px] text-muted-foreground">
           {team.members} {team.members === 1 ? "chef" : "chefs"} · pots {team.projects.length ? team.projects.join(", ") : "none"}
         </span>
@@ -461,7 +461,7 @@ interface Candidate {
   kind: "user" | "cook";
 }
 
-function AddMember({ team, onClose }: { team: string | null; onClose: () => void }) {
+export function AddMember({ team, onClose }: { team: string | null; onClose: () => void }) {
   const call = useV1Call();
   const me = useSession();
   const open = !!team;
