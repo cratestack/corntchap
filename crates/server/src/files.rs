@@ -37,6 +37,9 @@ pub struct StorageConfig {
     /// Where agents and browsers reach it (presigned URLs are signed for this host).
     pub public_endpoint: String,
     pub bucket: String,
+    /// Put in front of every object key (`corntchap/files/`), for a bucket shared with other data;
+    /// empty or ending in `/` (see [`key_prefix`]).
+    pub prefix: String,
     pub region: String,
     pub access_key: String,
     pub secret_key: String,
@@ -46,6 +49,53 @@ pub struct StorageConfig {
     pub create_bucket: bool,
     pub max_bytes: i64,
     pub inline_max_bytes: i64,
+}
+
+/// `S3_PREFIX` as a key prefix: slashes at either end and empty segments dropped, then one `/`
+/// appended (`/corntchap//files` -> `corntchap/files/`); blank means the bucket root. `.` and `..`
+/// segments are refused: URL path resolution would move them out of the prefix, even into another
+/// bucket. So are control characters and segments with spaces around them.
+pub fn key_prefix(raw: &str) -> anyhow::Result<String> {
+    let segs: Vec<&str> = raw.split('/').filter(|s| !s.is_empty()).collect();
+    for s in &segs {
+        anyhow::ensure!(
+            *s != "." && *s != "..",
+            "S3_PREFIX {raw:?}: `.` and `..` segments would leave the prefix"
+        );
+        anyhow::ensure!(
+            !s.chars().any(char::is_control) && s.trim() == *s,
+            "S3_PREFIX {raw:?}: no control characters or spaces around a segment"
+        );
+    }
+    Ok(if segs.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", segs.join("/"))
+    })
+}
+
+impl StorageConfig {
+    /// File storage from `S3_*` / `FILES_*` (via `get`, which treats empty values as unset); off
+    /// unless both `S3_ENDPOINT` and `S3_BUCKET` are set. A bad `S3_PREFIX` stops the server.
+    pub fn from_env(get: impl Fn(&str) -> Option<String>) -> anyhow::Result<Option<Self>> {
+        let (Some(endpoint), Some(bucket)) = (get("S3_ENDPOINT"), get("S3_BUCKET")) else {
+            return Ok(None);
+        };
+        let num = |k: &str, d: i64| get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
+        Ok(Some(Self {
+            public_endpoint: get("S3_PUBLIC_ENDPOINT").unwrap_or_else(|| endpoint.clone()),
+            endpoint,
+            bucket,
+            prefix: key_prefix(&get("S3_PREFIX").unwrap_or_default())?,
+            region: get("S3_REGION").unwrap_or_else(|| "us-east-1".into()),
+            access_key: get("S3_ACCESS_KEY").unwrap_or_default(),
+            secret_key: get("S3_SECRET_KEY").unwrap_or_default(),
+            path_style: get("S3_PATH_STYLE").is_none_or(|v| v != "false" && v != "0"),
+            create_bucket: get("S3_CREATE_BUCKET").is_some_and(|v| v == "true" || v == "1"),
+            max_bytes: num("FILES_MAX_BYTES", DEFAULT_MAX_BYTES),
+            inline_max_bytes: num("FILES_INLINE_MAX_BYTES", DEFAULT_INLINE_MAX_BYTES),
+        }))
+    }
 }
 
 pub const DEFAULT_MAX_BYTES: i64 = 1024 * 1024 * 1024;
@@ -433,7 +483,7 @@ async fn insert(
     .fetch_one(&mut *c)
     .await?;
     let id = Uuid::new_v4();
-    let key = format!("pots/{}/{}/{}", pr.id, id, name);
+    let key = format!("{}pots/{}/{}/{}", st.cfg.prefix, pr.id, id, name);
     sqlx::query(
         "insert into files (id, project_id, number, name, content_type, size_expected, storage_key, status,
             created_by, task_id, question_id, upload_expires_at)
@@ -823,6 +873,78 @@ pub async fn delete(db: &PgPool, state: &AppState, p: &Principal, r: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_prefixes() {
+        for (raw, want) in [
+            ("", ""),
+            ("/", ""),
+            ("corntchap/files", "corntchap/files/"),
+            ("/corntchap//files/", "corntchap/files/"),
+            ("corntchap", "corntchap/"),
+            ("a.b/..c/x..", "a.b/..c/x../"),
+        ] {
+            assert_eq!(key_prefix(raw).unwrap(), want, "{raw:?}");
+        }
+        for bad in [
+            "..",
+            ".",
+            "../tf-states",
+            "corntchap/../tf-states",
+            "corntchap/./files",
+            "corntchap/ files",
+            "  ",
+            "corn\nchap",
+            "corn\u{7f}",
+        ] {
+            assert!(key_prefix(bad).is_err(), "{bad:?} should be refused");
+        }
+    }
+
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let m: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |k| m.get(k).cloned()
+    }
+
+    #[test]
+    fn storage_from_env() {
+        // off unless both the endpoint and the bucket are set
+        assert!(StorageConfig::from_env(env_of(&[])).unwrap().is_none());
+        assert!(
+            StorageConfig::from_env(env_of(&[("S3_ENDPOINT", "https://s3")]))
+                .unwrap()
+                .is_none()
+        );
+        let c = StorageConfig::from_env(env_of(&[
+            ("S3_ENDPOINT", "https://nbg1.example"),
+            ("S3_BUCKET", "shared"),
+            ("S3_PREFIX", "corntchap/files"),
+            ("S3_REGION", "nbg1"),
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (&*c.bucket, &*c.prefix, &*c.region, &*c.public_endpoint),
+            ("shared", "corntchap/files/", "nbg1", "https://nbg1.example")
+        );
+        assert!(c.path_style && !c.create_bucket);
+        let root = StorageConfig::from_env(env_of(&[("S3_ENDPOINT", "e"), ("S3_BUCKET", "b")]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(root.prefix, "");
+        // a prefix that would leave itself stops the server instead of writing elsewhere
+        assert!(
+            StorageConfig::from_env(env_of(&[
+                ("S3_ENDPOINT", "e"),
+                ("S3_BUCKET", "b"),
+                ("S3_PREFIX", "corntchap/../tf-states"),
+            ]))
+            .is_err()
+        );
+    }
 
     #[test]
     fn refs_names_links() {

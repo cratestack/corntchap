@@ -82,24 +82,7 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
     if let Some(d) = env("PASS_RETENTION_DAYS").and_then(|v| v.parse::<i64>().ok()) {
         c.pass_retention_days = d.max(1);
     }
-    if let (Some(endpoint), Some(bucket)) = (env("S3_ENDPOINT"), env("S3_BUCKET")) {
-        let num = |k: &str, d: i64| env(k).and_then(|v| v.parse().ok()).unwrap_or(d);
-        c.storage = Some(corntchap::files::StorageConfig {
-            public_endpoint: env("S3_PUBLIC_ENDPOINT").unwrap_or_else(|| endpoint.clone()),
-            endpoint,
-            bucket,
-            region: env("S3_REGION").unwrap_or_else(|| "us-east-1".into()),
-            access_key: env("S3_ACCESS_KEY").unwrap_or_default(),
-            secret_key: env("S3_SECRET_KEY").unwrap_or_default(),
-            path_style: env("S3_PATH_STYLE").is_none_or(|v| v != "false" && v != "0"),
-            create_bucket: env("S3_CREATE_BUCKET").is_some_and(|v| v == "true" || v == "1"),
-            max_bytes: num("FILES_MAX_BYTES", corntchap::files::DEFAULT_MAX_BYTES),
-            inline_max_bytes: num(
-                "FILES_INLINE_MAX_BYTES",
-                corntchap::files::DEFAULT_INLINE_MAX_BYTES,
-            ),
-        });
-    }
+    c.storage = corntchap::files::StorageConfig::from_env(env)?;
     Ok(c)
 }
 
@@ -114,6 +97,18 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let cli = Cli::parse();
     let cfg = config(&cli)?;
+    if let Some(st) = &cfg.storage {
+        tracing::info!(
+            "file storage: bucket {} under {:?} at {}",
+            st.bucket,
+            if st.prefix.is_empty() {
+                "/"
+            } else {
+                &st.prefix
+            },
+            st.endpoint
+        );
+    }
     if let Some(origin) = cfg.storage.as_ref().and_then(|s| s.public_origin()) {
         corntchap::console::allow_images_from(&origin);
     }

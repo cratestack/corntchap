@@ -175,7 +175,7 @@ pub async fn start(background: bool) -> TestApp {
     });
     cfg.run_background = background;
     // File storage when an S3 endpoint is configured (RustFS from `just infra`, a service in CI):
-    // one throwaway bucket per test app.
+    // one throwaway bucket per test app, keys under a prefix as in a shared bucket.
     if let (Ok(endpoint), Ok(key), Ok(secret)) = (
         std::env::var("S3_ENDPOINT"),
         std::env::var("S3_ACCESS_KEY"),
@@ -185,6 +185,7 @@ pub async fn start(background: bool) -> TestApp {
             public_endpoint: endpoint.clone(),
             endpoint,
             bucket: format!("t{}", uuid::Uuid::new_v4().simple()),
+            prefix: "corntchap/files/".into(),
             region: "us-east-1".into(),
             access_key: key,
             secret_key: secret,

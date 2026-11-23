@@ -116,6 +116,14 @@ async fn upload_watch_link_download() {
         (&json!("ready"), &json!(bytes.len()))
     );
     let dl = got["download_url"].as_str().unwrap();
+    // the object lives under S3_PREFIX, and the presigned URL points there
+    let skey: String =
+        sqlx::query_scalar("select storage_key from files where name = 'bug shot.png'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert!(skey.starts_with("corntchap/files/pots/"), "{skey}");
+    assert!(dl.contains("/corntchap/files/pots/"), "{dl}");
     assert_eq!(
         reqwest::get(dl)
             .await
