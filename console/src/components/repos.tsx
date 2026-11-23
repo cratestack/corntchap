@@ -38,11 +38,11 @@ export function RepoPicker({
             onClick={() => toggle(r.name)}
             title={r.url}
             className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 font-mono text-[12px] font-medium transition-colors pointer-coarse:h-11 pointer-coarse:px-4",
+              "inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-3 font-mono text-[12px] font-medium transition-colors pointer-coarse:h-11 pointer-coarse:px-4",
               on ? "border-primary bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted/60",
             )}
           >
-            <GitBranch className="size-3.5" aria-hidden="true" /> {r.name}
+            <GitBranch className="size-3.5 text-primary" aria-hidden="true" /> {r.name}
           </button>
         );
       })}

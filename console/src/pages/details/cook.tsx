@@ -22,7 +22,7 @@ import {
 } from "@/components/bits";
 import { StationList } from "@/components/stations";
 import { CookRepoScopes } from "@/components/repos";
-import { CookUsage } from "@/components/usage";
+import { UsagePanel } from "@/components/usage";
 import { TaskRow } from "@/components/task-views";
 import { McpDialog, TokenDialog } from "@/components/secret-dialog";
 import { ConfirmDialog, DeleteDialog, RenameDialog } from "@/components/rename-delete";
@@ -610,8 +610,8 @@ export function CookDetailsPage() {
             <WakeGroup agent={cook.name} runtime={cook.runtime} />
 
             <Group title="Usage" hint="Estimated tokens corntchap sent this cook.">
-              <div className="p-3.5 pt-1">
-                <CookUsage report={usage.data} />
+              <div className="p-3.5">
+                <UsagePanel report={usage.data} />
               </div>
             </Group>
 

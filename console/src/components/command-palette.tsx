@@ -71,9 +71,11 @@ export function CommandPalette() {
               <Plus /> New menu in {pot}
             </CommandItem>
           )}
-          <CommandItem value="new task add create" onSelect={run(() => openNewTask(pot))}>
-            <Plus /> New task{pot ? ` in ${pot}` : ""}
-          </CommandItem>
+          {(projects.data ?? []).length > 0 && (
+            <CommandItem value="new task add create" onSelect={run(() => openNewTask(pot))}>
+              <Plus /> New task{pot ? ` in ${pot}` : ""}
+            </CommandItem>
+          )}
         </CommandGroup>
         {pot && menus.open.length > 0 && (
           <>

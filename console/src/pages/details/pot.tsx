@@ -5,7 +5,7 @@ import type { ActivityView } from "@corntchap/api";
 import { PageShell } from "@/components/page";
 import { Avatar, EmptyState, Group, GroupRow, IdChip, LabelChip, RowSkeleton } from "@/components/bits";
 import { PotDeleteDialog, PotRenameDialog } from "@/components/pot-options";
-import { CookUsage, fmtTokens } from "@/components/usage";
+import { UsagePanel } from "@/components/usage";
 import { CodeBlock, CopyButton, CopyLine } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api";
@@ -142,12 +142,33 @@ export function PotDetailsPage() {
         }
       >
         <div className="space-y-6">
+          <Group
+            title="Tasks"
+            aside={
+              project.unread_pass > 0 ? (
+                <Link to={`/pots/${project.key}/pass`} className={`text-[12px] ${linkClass}`}>
+                  {project.unread_pass} unread on the pass
+                </Link>
+              ) : undefined
+            }
+          >
+            <ul className="grid grid-cols-3 gap-px bg-border sm:grid-cols-6">
+              {counts.map((c) => (
+                <li key={c.id} className="bg-card px-3 py-2.5 sm:py-3">
+                  <p className={`font-mono text-[20px] leading-none font-bold tabular-nums ${c.n === 0 ? "text-muted-foreground" : ""}`}>{c.n}</p>
+                  <p className="label-caps mt-1.5">{c.label}</p>
+                </li>
+              ))}
+            </ul>
+          </Group>
+
+          <PotRepos project={project} canManage={canManage} />
+
           <div className="space-y-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-6 lg:space-y-0 lg:gap-y-6">
-            <Group title="About">
-              <GroupRow label="Name" value={project.name} />
-              <GroupRow label="Key" value={<span className="font-mono font-bold text-foreground">{project.key}</span>} />
+            <div className="space-y-6">
+            <Group title="Details">
               <GroupRow label="Team" value={team ?? "none"} {...(team ? { to: `/teams/${team}` } : {})} />
-              <GroupRow label="Lease" value={<span className="font-mono">{project.lease_ttl_s >= 120 ? `${Math.round(project.lease_ttl_s / 60)} min` : `${project.lease_ttl_s} s`}</span>} />
+              <GroupRow label="Lease" hint="How long a scooped task stays held without a heartbeat" value={<span className="font-mono">{project.lease_ttl_s >= 120 ? `${Math.round(project.lease_ttl_s / 60)} min` : `${project.lease_ttl_s} s`}</span>} />
               <GroupRow
                 label="Questions"
                 value={project.open_questions > 0 ? `${project.open_questions} open` : "none open"}
@@ -155,30 +176,6 @@ export function PotDetailsPage() {
               />
             </Group>
 
-            <Group
-              title="Tasks"
-              aside={
-                project.unread_pass > 0 ? (
-                  <Link to={`/pots/${project.key}/pass`} className={`text-[12px] ${linkClass}`}>
-                    {project.unread_pass} unread on the pass
-                  </Link>
-                ) : undefined
-              }
-            >
-              <ul className="grid grid-cols-3 gap-px bg-border">
-                {counts.map((c) => (
-                  <li key={c.id} className="bg-card px-3 py-3">
-                    <p className="font-mono text-[22px] font-bold leading-none tabular-nums">{c.n}</p>
-                    <p className="label-caps mt-1.5">{c.label}</p>
-                  </li>
-                ))}
-              </ul>
-            </Group>
-          </div>
-
-          <PotRepos project={project} canManage={canManage} />
-
-          <div className="space-y-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-6 lg:space-y-0 lg:gap-y-6">
             <Group title="Cooks who work here" hint={team ? `The cooks of team ${team}, with their stations in ${project.key}.` : "This pot has no team, so no cook sees it."}>
               {members.isLoading ? (
                 <div className="p-3">
@@ -210,14 +207,11 @@ export function PotDetailsPage() {
               {people.length > 0 && <GroupRow label="People" value={people.map((p) => p.display_name ?? p.name).join(", ")} />}
             </Group>
 
-            <Group title="Usage" hint="Estimated tokens corntchap sent for this pot, 7 days.">
-              <div className="p-3.5 pt-1">
-                {usage.data && usage.data.by_cook.length > 0 && (
-                  <p className="mt-2 font-mono text-[12px] text-muted-foreground">
-                    {usage.data.by_cook.slice(0, 4).map((c) => `${c.cook} ~${fmtTokens(c.tokens)}`).join(" · ")}
-                  </p>
-                )}
-                <CookUsage report={usage.data} />
+            </div>
+
+            <Group title="Usage" hint="Estimated tokens corntchap sent for this pot.">
+              <div className="p-3.5">
+                <UsagePanel report={usage.data} showCooks />
               </div>
             </Group>
           </div>

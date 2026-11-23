@@ -8,49 +8,87 @@ export function fmtTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
 }
 
-/** A tiny per-day bar row (plain divs): the estimated tokens corntchap sent each day, oldest first. */
+const DAY_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+const dayLetter = (day: string) => DAY_LETTERS[new Date(`${day}T12:00:00`).getDay()] ?? "";
+
+/** A tiny per-day bar row (plain divs): the estimated tokens corntchap sent each day, oldest first, with weekday initials. */
 export function DayBars({ days, className }: { days: UsageReport["by_day"]; className?: string }) {
   const max = Math.max(1, ...days.map((d) => d.tokens));
   return (
-    <div className={cn("flex h-8 items-end gap-1", className)} role="img" aria-label="Estimated tokens sent per day">
+    <div className={cn("flex items-end gap-1.5", className)} role="img" aria-label="Estimated tokens sent per day">
       {days.map((d) => (
         <div
           key={d.day}
           title={`${d.day}: ~${d.tokens.toLocaleString()} tokens in ${d.calls.toLocaleString()} sends`}
-          className="flex h-full min-w-0 flex-1 items-end"
+          className="flex min-w-0 flex-1 flex-col items-center gap-1"
         >
-          <div
-            className={cn("w-full rounded-[2px]", d.tokens > 0 ? "bg-corn" : "bg-muted")}
-            style={{ height: d.tokens > 0 ? `${Math.max(8, Math.round((d.tokens / max) * 100))}%` : "4px" }}
-          />
+          <div className="flex h-10 w-full items-end">
+            <div
+              className={cn("w-full rounded-[3px] transition-[height] duration-300 motion-reduce:transition-none", d.tokens > 0 ? "bg-corn" : "bg-muted")}
+              style={{ height: d.tokens > 0 ? `${Math.max(10, Math.round((d.tokens / max) * 100))}%` : "3px" }}
+            />
+          </div>
+          {days.length <= 14 && <span className="font-mono text-[10px] leading-none text-muted-foreground">{dayLetter(d.day)}</span>}
         </div>
       ))}
     </div>
   );
 }
 
-/** What corntchap sent one cook over the last days: an estimate, tokens ~ characters / 4. */
-export function CookUsage({ report }: { report: UsageReport | undefined }) {
-  if (!report) return <p className="pt-2 text-[12.5px] text-muted-foreground">Counting...</p>;
-  const top = report.top.slice(0, 3);
+/** One labelled line with a proportional bar and the estimate on the right. */
+function BarRow({ label, caption, tokens, max }: { label: string; caption?: string; tokens: number; max: number }) {
   return (
-    <div className="pt-2">
-      <p className="text-[12.5px]">
-        <span className="font-mono font-bold">~{fmtTokens(report.totals.tokens)}</span> tokens sent in {report.days} days
-        <span className="text-muted-foreground"> · {report.totals.calls.toLocaleString()} sends</span>
-      </p>
-      <DayBars days={report.by_day} className="mt-2" />
-      {top.length > 0 && (
-        <ul className="mt-2 space-y-0.5 text-[12px] text-muted-foreground">
-          {top.map((t) => (
-            <li key={`${t.kind}:${t.name}`} className="flex justify-between gap-3">
-              <span className="min-w-0 truncate font-mono">{t.name}</span>
-              <span className="shrink-0">~{fmtTokens(t.tokens)}</span>
-            </li>
-          ))}
-        </ul>
+    <li className="grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)_3.25rem] items-center gap-3 text-[12.5px] sm:grid-cols-[minmax(0,9rem)_minmax(0,1fr)_3.5rem]">
+      <span className="min-w-0 truncate" title={caption ? `${label} (${caption})` : label}>
+        <span className="font-medium">{label}</span>
+        {caption && <span className="ml-1.5 font-mono text-[10.5px] text-muted-foreground">{caption}</span>}
+      </span>
+      <span className="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+        <span className="block h-full rounded-full bg-corn" style={{ width: `${Math.max(3, Math.round((tokens / Math.max(1, max)) * 100))}%` }} />
+      </span>
+      <span className="text-right font-mono text-[12px] tabular-nums text-muted-foreground">~{fmtTokens(tokens)}</span>
+    </li>
+  );
+}
+
+/** Estimated tokens corntchap sent (a pot's or one cook's): the total, a bar per day, then who and what took most. tokens ~ characters / 4. */
+export function UsagePanel({ report, showCooks }: { report: UsageReport | undefined; showCooks?: boolean }) {
+  if (!report) return <p className="text-[13px] text-muted-foreground">Counting...</p>;
+  const cooks = showCooks ? report.by_cook.slice(0, 5) : [];
+  const top = report.top.slice(0, 3);
+  const cookMax = Math.max(1, ...cooks.map((c) => c.tokens));
+  const topMax = Math.max(1, ...top.map((t) => t.tokens));
+  return (
+    <div className="space-y-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p>
+          <span className="font-mono text-[22px] font-bold leading-none tabular-nums">~{fmtTokens(report.totals.tokens)}</span>
+          <span className="ml-1.5 text-[13px] text-muted-foreground">tokens in {report.days} days</span>
+        </p>
+        <p className="font-mono text-[12px] text-muted-foreground">{report.totals.calls.toLocaleString()} sends</p>
+      </div>
+      <DayBars days={report.by_day} />
+      {cooks.length > 0 && (
+        <div>
+          <p className="label-caps mb-2">By cook</p>
+          <ul className="space-y-2">
+            {cooks.map((c) => (
+              <BarRow key={c.cook} label={c.cook} tokens={c.tokens} max={cookMax} />
+            ))}
+          </ul>
+        </div>
       )}
-      <p className="mt-2 text-[11.5px] text-muted-foreground">{report.note}</p>
+      {top.length > 0 && (
+        <div>
+          <p className="label-caps mb-2">Most sent</p>
+          <ul className="space-y-2">
+            {top.map((t) => (
+              <BarRow key={`${t.kind}:${t.name}`} label={t.name} caption={t.kind} tokens={t.tokens} max={topMax} />
+            ))}
+          </ul>
+        </div>
+      )}
+      <p className="text-[11.5px] text-muted-foreground">{report.note}</p>
     </div>
   );
 }
