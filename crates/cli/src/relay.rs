@@ -690,7 +690,8 @@ async fn exec_command(
     prompt: &str,
 ) -> Result<i32> {
     let mut c = Command::new(program(&expand(&cmd[0])));
-    c.args(cmd[1..].iter().map(|a| expand(a)));
+    c.args(cmd[1..].iter().map(|a| expand(a)))
+        .env("PATH", search_path());
     if let Some(cwd) = cwd {
         let dir = expand(cwd);
         if !std::path::Path::new(&dir).is_dir() {
@@ -873,10 +874,73 @@ pub async fn doctor(full: bool) -> Result<()> {
 }
 
 pub fn which(cmd: &str) -> bool {
-    resolve_in(cmd, std::env::var_os("PATH").as_deref(), &pathext(), &|p| {
-        p.exists()
-    })
-    .is_some()
+    resolve_in(cmd, Some(&search_path()), &pathext(), &|p| p.exists()).is_some()
+}
+
+static SEARCH_PATH: std::sync::OnceLock<std::ffi::OsString> = std::sync::OnceLock::new();
+
+/// Where to look for agent programs: this process's PATH, then your login shell's PATH, then the
+/// usual install folders. A service (systemd, launchd) starts with a bare PATH that misses
+/// `~/.local/bin`, Homebrew, npm or bun globals: that is where `claude`, `codex` and `opencode` live.
+/// Children get it too, so `claude` (a node script) finds `node`.
+pub fn search_path() -> std::ffi::OsString {
+    SEARCH_PATH
+        .get_or_init(|| {
+            let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+                .map(|p| std::env::split_paths(&p).collect())
+                .unwrap_or_default();
+            if !cfg!(windows) {
+                if let Some(p) = login_shell_path() {
+                    dirs.extend(std::env::split_paths(&p));
+                }
+                if let Some(h) = dirs::home_dir() {
+                    for d in [
+                        ".local/bin",
+                        ".claude/local",
+                        ".npm-global/bin",
+                        ".bun/bin",
+                        ".cargo/bin",
+                        ".volta/bin",
+                        ".opencode/bin",
+                        "bin",
+                    ] {
+                        dirs.push(h.join(d));
+                    }
+                }
+                for d in [
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    "/home/linuxbrew/.linuxbrew/bin",
+                    "/usr/bin",
+                    "/bin",
+                ] {
+                    dirs.push(PathBuf::from(d));
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            dirs.retain(|d| !d.as_os_str().is_empty() && seen.insert(d.clone()));
+            std::env::join_paths(dirs)
+                .unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+        })
+        .clone()
+}
+
+/// `$SHELL -l -c 'printf %s "$PATH"'`, given 3 seconds (a shell that prompts or hangs is ignored).
+fn login_shell_path() -> Option<std::ffi::OsString> {
+    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty())?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(shell)
+            .args(["-l", "-c", "printf %s \"$PATH\""])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        let _ = tx.send(out);
+    });
+    let out = rx.recv_timeout(Duration::from_secs(3)).ok()?.ok()?;
+    let p = String::from_utf8(out.stdout).ok()?;
+    let p = p.trim();
+    (!p.is_empty()).then(|| p.into())
 }
 
 /// The extensions a bare command name may carry: `PATHEXT` on Windows (npm shims are `.cmd`), none elsewhere.
@@ -917,16 +981,17 @@ fn resolve_in(
     std::env::split_paths(path?).find_map(|d| with_exts(d.join(cmd)))
 }
 
-/// The program to hand to `Command::new`: on Windows the full path found through `PATHEXT` (so `claude`
-/// finds `claude.cmd`); everywhere else the name unchanged.
+/// The program to hand to `Command::new`: the full path found on [`search_path`] (on Windows
+/// through `PATHEXT`, so `claude` finds `claude.cmd`), else the name unchanged.
 pub fn program(cmd: &str) -> PathBuf {
-    if !cfg!(windows) {
-        return PathBuf::from(cmd);
-    }
-    resolve_in(cmd, std::env::var_os("PATH").as_deref(), &pathext(), &|p| {
-        p.exists()
-    })
-    .unwrap_or_else(|| PathBuf::from(cmd))
+    resolve_in(cmd, Some(&search_path()), &pathext(), &|p| p.is_file())
+        .unwrap_or_else(|| PathBuf::from(cmd))
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 const NO_SERVICE_ON_WINDOWS: &str =
@@ -945,8 +1010,9 @@ pub fn install() -> Result<()> {
         std::fs::write(
             &path,
             format!(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>dev.corntchap.relay</string>\n<key>ProgramArguments</key><array><string>{}</string><string>relay</string></array>\n<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>\n<key>StandardErrorPath</key><string>{}/Library/Logs/corntchap-relay.log</string>\n</dict></plist>\n",
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>dev.corntchap.relay</string>\n<key>ProgramArguments</key><array><string>{}</string><string>relay</string></array>\n<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>\n<key>EnvironmentVariables</key><dict><key>PATH</key><string>{}</string></dict>\n<key>StandardErrorPath</key><string>{}/Library/Logs/corntchap-relay.log</string>\n</dict></plist>\n",
                 exe.display(),
+                xml_escape(&search_path().to_string_lossy()),
                 home.display()
             ),
         )?;
@@ -961,8 +1027,12 @@ pub fn install() -> Result<()> {
         std::fs::write(
             &path,
             format!(
-                "[Unit]\nDescription=corntchap relay\nAfter=network-online.target\n\n[Service]\nExecStart={} relay\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
-                exe.display()
+                "[Unit]\nDescription=corntchap relay\nAfter=network-online.target\n\n[Service]\nExecStart={} relay\nEnvironment=\"PATH={}\"\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+                exe.display(),
+                search_path()
+                    .to_string_lossy()
+                    .replace('"', "")
+                    .replace('%', "%%")
             ),
         )?;
         println!(

@@ -182,6 +182,8 @@ cwd = "~/code/payments"
 
 OpenCode v2 runs one shared background service, which the fire finds with `opencode service status` (its URL) and `opencode service get password` (HTTP basic, user `opencode`), then talks to over `/api` (`/api/session`, `/api/session/{id}/prompt` with durable queued delivery); `fire doctor` prints the API version it found. For OpenCode 1.x, whose desktop app and TUI pick a new port on every start, the `opencode` adapter finds the running server itself: `OPENCODE_PORT`, then running `opencode*` processes (their `--port`, or the ports they listen on), then `127.0.0.1:4096`, preferring the one with a session in `directory`. A password-protected server gets its password from `password_env` / `password` on the target, `OPENCODE_SERVER_PASSWORD`, or (Linux) the OpenCode process's own environment. `corntchap-cli fire doctor` shows what it found; `corntchap-cli fire poke <cook> --pot PAY` sends a wake right away to check the wiring.
 
+The fire looks for `claude`, `codex` and `opencode` on its own PATH, then on your login shell's PATH (`$SHELL -l`), then in the usual install folders (`~/.local/bin`, `~/.claude/local`, npm, bun, Homebrew). `fire install` also writes the PATH of the shell you run it from into the service, since systemd and launchd start services with a bare PATH. If a wake says `starting claude: No such file or directory`, run `corntchap-cli fire install` again from a terminal where `claude` works, then restart the service.
+
 The relay remembers the last event id it saw (`relay-state.json` next to `credentials.toml`) and sends it as `Last-Event-ID` on restart, so wakes sent while it was down are replayed.
 
 ### What a cook may do: grants
