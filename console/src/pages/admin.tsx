@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Navigate } from "react-router";
-import { Check, ChevronsUpDown, Flame, Loader2, Plus, RotateCw, ShieldCheck, Trash2, UserPlus } from "lucide-react";
+import { Check, ChevronsUpDown, Flame, Loader2, Pencil, Plus, RotateCw, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DataTable, PageShell, TD, TH } from "@/components/page";
 import { Avatar, EmptyState, PersonName, RowSkeleton, StateDot, cookState } from "@/components/bits";
 import { CopyButton, TokenDialog } from "@/components/secret-dialog";
+import { DeleteDialog, RenameDialog } from "@/components/rename-delete";
+import { PotDeleteDialog, PotRenameDialog } from "@/components/pot-options";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,7 +25,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useAgents, useProjects, useTeamChefs, useV1, useV1Call, type AgentRow, type TeamRow, type UserRow } from "@/lib/data";
+import { useAgents, useProcCall, useProjects, useTeamChefs, useV1, useV1Call, type AgentRow, type TeamRow, type UserRow } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useSession } from "@/lib/session";
@@ -95,6 +97,8 @@ export function FiresPage() {
   const [busy, setBusy] = useState(false);
   const [token, setToken] = useState<{ name: string; token: string; title: string } | null>(null);
   const [rotating, setRotating] = useState<string | null>(null);
+  const proc = useProcCall();
+  const [fireDialog, setFireDialog] = useState<{ kind: "rename" | "delete"; name: string } | null>(null);
 
   async function create() {
     setBusy(true);
@@ -178,6 +182,12 @@ export function FiresPage() {
                   >
                     {r.disabled ? "Light again" : "Put out"}
                   </Button>
+                  <Button size="sm" variant="outline" onClick={() => setFireDialog({ kind: "rename", name: r.name })}>
+                    <Pencil /> Rename
+                  </Button>
+                  <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setFireDialog({ kind: "delete", name: r.name })}>
+                    <Trash2 /> Delete
+                  </Button>
                 </div>
               </article>
             );
@@ -200,6 +210,29 @@ export function FiresPage() {
         kind={null}
         withSnippets={false}
         hint="Store it as the relay credential: corntchap-cli fire enroll does this for you, or set CORNTCHAP_TOKEN for the relay process."
+      />
+      <RenameDialog
+        open={fireDialog?.kind === "rename"}
+        onOpenChange={(o) => !o && setFireDialog(null)}
+        title={`Rename ${fireDialog?.name ?? "the fire"}`}
+        description="The relay keeps working: it is known by its token, not by its name."
+        label="New name"
+        current={fireDialog?.name ?? ""}
+        onSave={async (newName) => {
+          await proc("fireRename", { name: fireDialog!.name, newName });
+          toast.success(`${fireDialog!.name} is now ${newName.toLowerCase()}`);
+        }}
+      />
+      <DeleteDialog
+        open={fireDialog?.kind === "delete"}
+        onOpenChange={(o) => !o && setFireDialog(null)}
+        title={`Delete ${fireDialog?.name ?? "the fire"}?`}
+        description="Its tokens stop working at once, so the relay on that machine can no longer listen. Enroll a new fire to get going again. This cannot be undone."
+        action="Delete the fire"
+        onConfirm={async () => {
+          await proc("fireDelete", { name: fireDialog!.name });
+          toast.success(`${fireDialog!.name} deleted`);
+        }}
       />
       <AlertDialog open={!!rotating} onOpenChange={(o) => !o && setRotating(null)}>
         <AlertDialogContent>
@@ -230,6 +263,8 @@ export function PotsAdminPage() {
   const [repo, setRepo] = useState("");
   const [ttl, setTtl] = useState("900");
   const [busy, setBusy] = useState(false);
+  const [potDialog, setPotDialog] = useState<{ kind: "rename" | "delete"; key: string } | null>(null);
+  const dialogPot = projects.data?.find((p) => p.key === potDialog?.key);
 
   async function create() {
     setBusy(true);
@@ -279,6 +314,9 @@ export function PotsAdminPage() {
               <TH>Team</TH>
               <TH>Lease</TH>
               <TH className="text-right">Not served</TH>
+              <TH className="text-right">
+                <span className="sr-only">Actions</span>
+              </TH>
             </tr>
           </thead>
           <tbody>
@@ -292,11 +330,21 @@ export function PotsAdminPage() {
                 <TD>{p.team ?? "-"}</TD>
                 <TD className="font-mono text-[12px]">{Math.round(p.lease_ttl_s / 60)} min</TD>
                 <TD className="text-right font-mono text-[12.5px]">{p.open + p.claimed + p.blocked}</TD>
+                <TD className="text-right whitespace-nowrap">
+                  <Button size="icon-xs" variant="ghost" aria-label={`Rename ${p.key}`} onClick={() => setPotDialog({ kind: "rename", key: p.key })}>
+                    <Pencil />
+                  </Button>
+                  <Button size="icon-xs" variant="ghost" className="text-destructive hover:text-destructive" aria-label={`Delete ${p.key}`} onClick={() => setPotDialog({ kind: "delete", key: p.key })}>
+                    <Trash2 />
+                  </Button>
+                </TD>
               </tr>
             ))}
           </tbody>
         </DataTable>
       )}
+      {dialogPot && <PotRenameDialog pot={dialogPot} open={potDialog?.kind === "rename"} onOpenChange={(o) => !o && setPotDialog(null)} />}
+      {dialogPot && <PotDeleteDialog pot={dialogPot} open={potDialog?.kind === "delete"} onOpenChange={(o) => !o && setPotDialog(null)} />}
       <FormDialog open={creating} onOpenChange={setCreating} title="New pot" description="A project that tasks live in. Its key prefixes every task id." onSubmit={create} busy={busy} submitLabel="Start the pot" disabled={!key || !name || !(team || teams.data?.[0])}>
         <div className="grid grid-cols-[7rem_1fr] gap-4">
           <div className="space-y-1.5">
@@ -348,6 +396,8 @@ export function TeamsAdminPage() {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
+  const proc = useProcCall();
+  const [teamDialog, setTeamDialog] = useState<{ kind: "rename" | "delete"; team: TeamRow } | null>(null);
 
   async function create() {
     setBusy(true);
@@ -389,7 +439,14 @@ export function TeamsAdminPage() {
       ) : (
         <div className="space-y-4">
           {teams.data!.map((t) => (
-            <TeamCard key={t.name} team={t} canManage={me.is_admin || t.role === "owner"} onAdd={() => setAdding(t.name)} />
+            <TeamCard
+              key={t.name}
+              team={t}
+              canManage={me.is_admin || t.role === "owner"}
+              onAdd={() => setAdding(t.name)}
+              onRename={() => setTeamDialog({ kind: "rename", team: t })}
+              onDelete={() => setTeamDialog({ kind: "delete", team: t })}
+            />
           ))}
         </div>
       )}
@@ -400,11 +457,51 @@ export function TeamsAdminPage() {
         </div>
       </FormDialog>
       <AddMember team={adding} onClose={() => setAdding(null)} />
+      <RenameDialog
+        open={teamDialog?.kind === "rename"}
+        onOpenChange={(o) => !o && setTeamDialog(null)}
+        title={`Rename ${teamDialog?.team.name ?? "the team"}`}
+        description="Its pots and chefs stay as they are."
+        label="New name"
+        current={teamDialog?.team.name ?? ""}
+        onSave={async (newName) => {
+          await proc("teamRename", { name: teamDialog!.team.name, newName });
+          toast.success(`${teamDialog!.team.name} is now ${newName.toLowerCase()}`);
+        }}
+      />
+      <DeleteDialog
+        open={teamDialog?.kind === "delete"}
+        onOpenChange={(o) => !o && setTeamDialog(null)}
+        title={`Delete ${teamDialog?.team.name ?? "the team"}?`}
+        description={
+          teamDialog && teamDialog.team.projects.length > 0
+            ? `It still has pots (${teamDialog.team.projects.join(", ")}): delete or empty them first, the server refuses until then.`
+            : "Its memberships go; the people and cooks stay. This cannot be undone."
+        }
+        confirmText={teamDialog?.team.name}
+        action="Delete the team"
+        onConfirm={async () => {
+          await proc("teamDelete", { name: teamDialog!.team.name, confirm: teamDialog!.team.name });
+          toast.success(`${teamDialog!.team.name} deleted`);
+        }}
+      />
     </PageShell>
   );
 }
 
-function TeamCard({ team, canManage, onAdd }: { team: TeamRow; canManage: boolean; onAdd: () => void }) {
+function TeamCard({
+  team,
+  canManage,
+  onAdd,
+  onRename,
+  onDelete,
+}: {
+  team: TeamRow;
+  canManage: boolean;
+  onAdd: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
   const members = useTeamChefs(team.name);
   const call = useV1Call();
   return (
@@ -415,9 +512,17 @@ function TeamCard({ team, canManage, onAdd }: { team: TeamRow; canManage: boolea
           {team.members} {team.members === 1 ? "chef" : "chefs"} · pots {team.projects.length ? team.projects.join(", ") : "none"}
         </span>
         {canManage && (
-          <Button size="sm" variant="outline" className="ml-auto" onClick={onAdd}>
-            <UserPlus /> Add chef
-          </Button>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={onAdd}>
+              <UserPlus /> Add chef
+            </Button>
+            <Button size="sm" variant="outline" onClick={onRename}>
+              <Pencil /> Rename
+            </Button>
+            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={onDelete}>
+              <Trash2 /> Delete
+            </Button>
+          </div>
         )}
       </div>
       <ul className="divide-y divide-border">

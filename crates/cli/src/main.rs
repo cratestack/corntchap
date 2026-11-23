@@ -75,8 +75,8 @@ enum Cmd {
     /// Teams and their members.
     #[command(subcommand)]
     Team(TeamCmd),
-    /// Projects.
-    #[command(subcommand)]
+    /// Pots (projects).
+    #[command(subcommand, name = "project", alias = "pot")]
     Project(ProjectCmd),
     /// The pantry: what a pot's cooks and people have learned (conventions, gotchas, decisions, how-tos), saved under stable keys.
     #[command(subcommand, name = "pantry", alias = "memory")]
@@ -344,6 +344,15 @@ enum TeamCmd {
     },
     /// Remove a user or agent from a team.
     Leave { team: String, principal: String },
+    /// Rename a team (its owners and admins). Pots and chefs stay.
+    Rename { name: String, new_name: String },
+    /// Delete a team that has no pots (its owners and admins). Asks first; `--yes` skips the question.
+    Rm {
+        name: String,
+        /// Do not ask first (required without a terminal).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -362,6 +371,15 @@ enum ProjectCmd {
     Ls {
         #[arg(long)]
         json: bool,
+    },
+    /// Rename a pot's display name (the key stays: it is part of every task id).
+    Rename { key: String, name: String },
+    /// Delete a pot and everything in it: tasks, comments, pass, pantry, views, files. Asks first; `--yes` skips the question.
+    Rm {
+        key: String,
+        /// Do not ask first (required without a terminal).
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }
 
@@ -409,6 +427,15 @@ enum AgentCmd {
     },
     /// Revoke every token and print a fresh one.
     Rotate { name: String },
+    /// Rename a cook (its owner or an admin). Its tokens, stations and leases keep working; `@old` text and a fire's config.toml target do not follow.
+    Rename { name: String, new_name: String },
+    /// Delete a cook: its leases are released, its tokens and stations go; what it wrote stays. Asks first; `--yes` skips the question.
+    Rm {
+        name: String,
+        /// Do not ask first (required without a terminal).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// What a cook may do beyond working its tasks: plan (edit, toss, restore, unblock any task in
     /// its teams), manage (act as you on teams, pots, cooks, fires), admin (your admin powers).
     /// Replaces the set; `--none` removes them all. A cook never exceeds your own rights.
@@ -503,6 +530,15 @@ enum RelayCmd {
     Doctor,
     /// Register this machine as a relay (device flow) and store its credential.
     Enroll { name: String },
+    /// Rename a fire on the server (its owner or an admin). Its token keeps working.
+    Rename { name: String, new_name: String },
+    /// Delete a fire on the server: its tokens stop working. Asks first; `--yes` skips the question.
+    Rm {
+        name: String,
+        /// Do not ask first (required without a terminal).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
     /// Wake one local cook now, as a wake event would (checks the wiring end to end).
     Poke {
         /// The cook's name (its [[target]] in config.toml).
@@ -511,6 +547,40 @@ enum RelayCmd {
         #[arg(long, default_value = "PAY")]
         pot: String,
     },
+}
+
+/// Ask before deleting `what`. `--yes` skips the question; without a terminal and without `--yes` it refuses.
+fn confirm_delete(what: &str, yes: bool) -> Result<bool> {
+    use std::io::{IsTerminal, Write};
+    if yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!("refusing to delete {what} without a terminal to ask on: pass --yes");
+    }
+    print!("Delete {what}? This cannot be undone. [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut a = String::new();
+    if std::io::stdin().read_line(&mut a).is_ok() && matches!(a.trim(), "y" | "Y" | "yes") {
+        Ok(true)
+    } else {
+        println!("kept it");
+        Ok(false)
+    }
+}
+
+/// `<thing> rename <old> <new>` through the procedure `proc`.
+async fn rename_cmd(api: &Api, proc: &str, name: &str, new_name: &str, noun: &str) -> Result<()> {
+    let v = api
+        .procedure(proc, json!({"name": name, "newName": new_name}))
+        .await?;
+    ok_line(format!(
+        "{noun} {} is now {} (was {})",
+        name,
+        s(&v, "name"),
+        s(&v, "previous")
+    ));
+    Ok(())
 }
 
 fn out(v: &Value) {
@@ -561,6 +631,27 @@ async fn main() -> Result<()> {
             Some(RelayCmd::Doctor) => relay::doctor(false).await,
             Some(RelayCmd::Enroll { name }) => enroll(&name).await,
             Some(RelayCmd::Poke { cook, pot }) => relay::poke(&cook, &pot.to_uppercase()).await,
+            Some(RelayCmd::Rename { name, new_name }) => {
+                rename_cmd(
+                    &Api::from_creds(false)?,
+                    "fireRename",
+                    &name,
+                    &new_name,
+                    "fire",
+                )
+                .await
+            }
+            Some(RelayCmd::Rm { name, yes }) => {
+                let what = format!("fire {name}: its tokens stop working");
+                if !confirm_delete(&what, yes)? {
+                    return Ok(());
+                }
+                let v = Api::from_creds(false)?
+                    .procedure("fireDelete", json!({"name": name}))
+                    .await?;
+                ok_line(format!("fire {} deleted", s(&v, "name")));
+                Ok(())
+            }
         },
         Cmd::Agent(AgentCmd::Enroll {
             name,
@@ -837,6 +928,50 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
                 .await?;
             ok_line(format!("{principal} left team {team}"));
         }
+        Cmd::Team(TeamCmd::Rename { name, new_name }) => {
+            rename_cmd(&api, "teamRename", &name, &new_name, "team").await?
+        }
+        Cmd::Team(TeamCmd::Rm { name, yes }) => {
+            let what = format!("team {name} (it must have no pots left)");
+            if confirm_delete(&what, yes)? {
+                let v = api
+                    .procedure("teamDelete", json!({"name": name, "confirm": name}))
+                    .await?;
+                ok_line(format!("team {} deleted", s(&v, "name")));
+            }
+        }
+        Cmd::Project(ProjectCmd::Rename { key, name }) => {
+            let v = api
+                .procedure("potRename", json!({"key": key, "name": name}))
+                .await?;
+            ok_line(format!(
+                "pot {} is now called {} (was {}); the key stays",
+                s(&v, "key"),
+                s(&v, "name"),
+                s(&v, "previous")
+            ));
+        }
+        Cmd::Project(ProjectCmd::Rm { key, yes }) => {
+            let key = key.to_uppercase();
+            let what = format!(
+                "pot {key} and everything in it (tasks, comments, pass, pantry, views, files)"
+            );
+            if confirm_delete(&what, yes)? {
+                let v = api
+                    .procedure("potDelete", json!({"key": key, "confirm": key}))
+                    .await?;
+                ok_line(format!(
+                    "pot {} deleted ({} tasks, {} stored files removed{})",
+                    s(&v, "key"),
+                    v["tasks"].as_i64().unwrap_or(0),
+                    v["files"].as_i64().unwrap_or(0),
+                    match v["files_left"].as_i64().unwrap_or(0) {
+                        0 => String::new(),
+                        n => format!(", {n} could not be removed from storage"),
+                    }
+                ));
+            }
+        }
         Cmd::Project(ProjectCmd::Add {
             team,
             key,
@@ -1103,6 +1238,25 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                 s(&r, "name"),
                 s(&r, "token")
             );
+        }
+        AgentCmd::Rename { name, new_name } => {
+            rename_cmd(api, "cookRename", &name, &new_name, "cook").await?
+        }
+        AgentCmd::Rm { name, yes } => {
+            let what = format!("cook {name}: its leases are released and its tokens stop working");
+            if confirm_delete(&what, yes)? {
+                let v = api.procedure("cookDelete", json!({"name": name})).await?;
+                ok_line(format!(
+                    "cook {} deleted ({} lease{} released)",
+                    s(&v, "name"),
+                    v["released"].as_i64().unwrap_or(0),
+                    if v["released"].as_i64() == Some(1) {
+                        ""
+                    } else {
+                        "s"
+                    }
+                ));
+            }
         }
         AgentCmd::Disable { name } => {
             api.post(&format!("/agents/{name}/disable"), json!({}))
