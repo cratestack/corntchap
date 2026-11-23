@@ -22,7 +22,9 @@ const POT = "pot";
 /** "doug · quiet-planet" for a woken session, "doug" for a cook woken through its wake target. */
 function wokenName(w: WokenRef): string {
   const where = w.label ?? w.station;
-  return where ? `${w.cook} · ${where}` : w.cook;
+  const name = where ? `${w.cook} · ${where}` : w.cook;
+  // a cloud cook answers once in a fresh run, then stops
+  return w.cloud ? `${name} (cloud run, fire and forget)` : name;
 }
 
 /**
@@ -324,7 +326,10 @@ function Composer({ potKey, withWho, chefs }: { potKey: string; withWho: string;
         station: null,
       });
       void invalidate();
-      if (sent.woken.length > 0) toast(`Woke ${sent.woken.length === 1 ? wokenName(sent.woken[0]!) : `${sent.woken.length} sessions`}`);
+      if (sent.woken.length > 0)
+        toast(`Woke ${sent.woken.length === 1 ? wokenName(sent.woken[0]!) : `${sent.woken.length} sessions`}`, {
+          ...(sent.note ? { description: sent.note } : {}),
+        });
     } catch (e) {
       setText(body);
       toast.error("Could not send it", { description: errorMessage(e) });
