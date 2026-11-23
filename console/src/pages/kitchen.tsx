@@ -8,7 +8,7 @@ import { useProc, useProjects, useQuestions } from "@/lib/data";
 import { useLive } from "@/lib/live";
 import { useUi } from "@/lib/ui";
 import { BUCKETS, bucketOf, plural, type Bucket } from "@/lib/format";
-import { forgetView, isBaseView, lastView, rememberView, type BaseView, type Filters } from "@/lib/views";
+import { forgetView, isBaseView, lastPot, lastView, rememberPot, rememberView, type BaseView, type Filters } from "@/lib/views";
 import { useOpenTask } from "@/lib/nav";
 import { errorMessage } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -80,7 +80,8 @@ export function PotRedirect() {
       </div>
     );
   }
-  const first = projects.data?.[0];
+  const remembered = lastPot();
+  const first = projects.data?.find((p) => p.key === remembered) ?? projects.data?.[0];
   if (first) return <Navigate to={`/pots/${first.key}/${lastView(first.key)}`} replace />;
   return (
     <div className="mx-auto max-w-2xl px-5 py-16">
@@ -123,6 +124,7 @@ export function KitchenPage() {
     if (project && viewKey) {
       if (savedView) rememberView(potKey, `v/${viewKey}`);
     } else if (project) rememberView(potKey, base);
+    if (project) rememberPot(potKey);
     document.title = project ? `${project.name}${savedView ? ` · ${savedView.name}` : ""} · corntchap` : "corntchap";
   }, [potKey, base, project, viewKey, savedView]);
 

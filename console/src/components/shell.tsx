@@ -9,7 +9,6 @@ import {
   Flame,
   FolderKanban,
   LogOut,
-  Menu,
   Monitor,
   Moon,
   Pencil,
@@ -30,8 +29,8 @@ import { Avatar, PersonName, StateDot, STATE_LABEL, cookState } from "./bits";
 import { HandleDialog } from "./handle-dialog";
 import { LogoMark, Wordmark } from "./brand";
 import { CommandPalette } from "./command-palette";
+import { BottomTabs, PhoneTopBar, TabletRail } from "./mobile-nav";
 import { NewTaskDialog } from "./new-task";
-import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +41,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
 
 function navClass(active: boolean) {
   return cn(
@@ -85,7 +83,7 @@ function FireCard() {
   );
 }
 
-function AccountMenu({ compact = false }: { compact?: boolean }) {
+function AccountMenu({ compact = false, side }: { compact?: boolean; side?: "top" | "right" | "bottom" }) {
   const me = useSession();
   const { theme, setTheme } = useTheme();
   const [renaming, setRenaming] = useState(false);
@@ -98,7 +96,7 @@ function AccountMenu({ compact = false }: { compact?: boolean }) {
           aria-label="Account menu"
           className={cn(
             "flex w-full items-center gap-2.5 rounded-lg p-1.5 text-left transition-colors hover:bg-sidebar-panel focus-visible:bg-sidebar-panel",
-            compact && "w-auto",
+            compact && "size-12 w-auto justify-center rounded-xl",
           )}
         >
           <Avatar name={me.name} className="size-7 text-[13px]" />
@@ -113,7 +111,7 @@ function AccountMenu({ compact = false }: { compact?: boolean }) {
           )}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side={compact ? "bottom" : "top"} className="w-56">
+      <DropdownMenuContent align="start" side={side ?? (compact ? "bottom" : "top")} className="w-56">
         <DropdownMenuLabel className="font-normal">
           <span className="block text-[11px] text-muted-foreground">Signed in as</span>
           <PersonName name={me.name} displayName={me.display_name} className="block break-words font-semibold" />
@@ -301,7 +299,7 @@ function SideLink({
 }
 
 export function AppShell() {
-  const { menuOpen, setMenuOpen, setPaletteOpen } = useUi();
+  const { setMenuOpen, setPaletteOpen } = useUi();
   const loc = useLocation();
   const invalidateAll = useInvalidateAll();
 
@@ -338,30 +336,15 @@ export function AppShell() {
         <SidebarBody />
       </aside>
 
-      <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-        <SheetContent side="left" showCloseButton={false} className="w-[280px] max-w-[85vw] border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
-          <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <SheetDescription className="sr-only">Pots, cooks and admin pages</SheetDescription>
-          <SidebarBody onNavigate={() => setMenuOpen(false)} />
-        </SheetContent>
-      </Sheet>
+      <TabletRail account={<AccountMenu compact side="right" />} />
 
-      <div className="lg:pl-[256px]">
-        <div className="sticky top-0 z-20 flex h-12 items-center gap-2 border-b border-border bg-background/90 px-3 backdrop-blur lg:hidden">
-          <Button variant="ghost" size="icon" aria-label="Open menu" onClick={() => setMenuOpen(true)}>
-            <Menu />
-          </Button>
-          <LogoMark className="size-6" />
-          <Wordmark className="text-[17px]" />
-          <div className="flex-1" />
-          <Button variant="ghost" size="icon" aria-label="Search and jump" onClick={() => setPaletteOpen(true)}>
-            <Search />
-          </Button>
-        </div>
-        <main id="main" tabIndex={-1} className="outline-none">
+      <div className="md:pl-[72px] lg:pl-[256px]">
+        <PhoneTopBar />
+        <main id="main" tabIndex={-1} className="pb-[calc(4rem+env(safe-area-inset-bottom))] outline-none md:pb-0">
           <Outlet />
         </main>
       </div>
+      <BottomTabs />
       <CommandPalette />
       <UploadTray />
       <NewTaskDialog />

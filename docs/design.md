@@ -41,3 +41,32 @@ Wax-print band (concentric circles + zigzag, SVG, `aria-hidden`) only on sign-in
 - Kitchen · Board: 4 status columns, compact cards with progress.
 - Sign-in / Approve device: indigo left panel (wax band, logo, headline, signed-in-as + Log out) · right: code in Space Mono 46px, details card, Approve (primary) / Deny.
 - Cooks: card with avatar letter, kind/runtime, live state, current task, MCP config, Rotate token.
+
+## Mobile and tablet (mobile first)
+
+References (Refero): Linear iOS (grouped status lists, issue detail, display-options bottom sheet), Notion iOS (board as swipeable columns), Monday/Wrike web (list with a detail side panel on wide screens).
+
+**Tiers.** Write the phone layout first, then add `md:` and `lg:`.
+| tier | width | navigation | overlays |
+|---|---|---|---|
+| phone | < 768 (`max-md`) | top bar (pot switcher, search, +) and bottom tabs: Board · Pass · Questions · Cooks · More | dialogs become bottom sheets below 640px; the task sheet is full screen |
+| tablet | 768–1023 (`md`) | 72px icon rail: pots by key, Cooks, Fires, Teams, admin, search, account | dialogs centred, side sheets 3/4 wide (max 24rem) |
+| desktop | ≥ 1024 (`lg`) | the 256px sidebar | as before |
+
+In JS, `useIsPhone()` and `useIsDesktop()` come from `src/lib/media.ts`. Prefer CSS when it can do the job.
+
+**Phone rules.**
+- The top bar already names the pot. Pages under `/pots/:key/*` drop their big title on phones and keep one compact line of counts or actions.
+- Pot tabs outside the bottom bar (Activity, Pantry, Menus, Files, About) are in More. Saved views stay reachable from the Board tab.
+- Touch targets are at least 44px (`pointer-coarse:` sizes on `Button`). Rows are at least 48px. Never rely on hover alone: a hover-only action needs a visible or long-press path on touch.
+- Inputs are 16px on phones, set globally so iOS doesn't zoom on focus.
+- Anything fixed to the bottom clears the tab bar: use the `bottom-tabbar` and `pb-tabbar` utilities. Respect `env(safe-area-inset-*)`, since the page uses `viewport-fit=cover`.
+- Lists over tables: a table on a phone becomes stacked cards or two-line rows (title on line one, mono meta on line two). Horizontal scroll is only for boards and code.
+- Board: one column per screen width (`snap-x snap-mandatory`, columns about 85vw), with a status segmented control or chips to jump between columns.
+- Sheets and dialogs scroll inside themselves (`min-h-0 flex-1 overflow-y-auto`). Keep primary actions in a sticky footer.
+
+**Tablet.** Use the space for list and detail side by side where it helps (task list plus detail, pass plus thread). Keep desktop density, but with touch-size targets.
+
+**Native app.** The Tauri v2 shell (`apps/mobile`) loads the console from the server. `html[data-native]` marks the app for app-only tweaks, such as no overscroll bounce.
+
+**Checks.** `scripts/ui/devstack.sh` runs the stack and `scripts/ui/shots.mjs` screenshots pages at phone, tablet and desktop sizes. `scripts/ui/interact.mjs` clicks through a flow.

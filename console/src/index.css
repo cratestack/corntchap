@@ -169,6 +169,24 @@
   [role="button"]:not([aria-disabled="true"]) {
     cursor: pointer;
   }
+  /* touch: no grey flash on tap, no double-tap zoom delay */
+  a, button, [role="button"], input, label, select, textarea {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  /* the native app shell (Tauri) has no browser chrome to pull: no rubber band behind the tab bar */
+  html[data-native] body {
+    overscroll-behavior-y: none;
+  }
+}
+
+/* phones: 16px fields, or iOS zooms the page on focus (unlayered, so it wins over text-[13px] utilities) */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
 
 @layer utilities {
@@ -181,6 +199,11 @@
     color: var(--muted-foreground);
   }
   .scrollbar-thin { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+  /* bottom-anchored phone UI clears the tab bar and the home indicator */
+  .pb-tabbar { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
+  .bottom-tabbar { bottom: calc(4rem + env(safe-area-inset-bottom)); }
 }
 
 /* live signals: a soft pulse on saffron dots (lease ticking, cook awake, fire lit) */

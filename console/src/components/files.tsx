@@ -38,7 +38,7 @@ export function UploadTray() {
     <div
       role="region"
       aria-label="Uploads"
-      className="fixed bottom-4 left-4 z-50 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-2 lg:left-[272px]"
+      className="fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-4 z-50 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-2 md:bottom-4 md:left-[88px] lg:left-[272px]"
     >
       {uploads.map((u) => {
         const pct = u.size > 0 ? Math.min(100, Math.round((u.loaded / u.size) * 100)) : 100;
