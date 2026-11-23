@@ -360,18 +360,20 @@ export function PhoneTopBar() {
 }
 
 function RailLink({ to, label, children, active, badge }: { to: string; label: string; children: ReactNode; active?: boolean; badge?: number }) {
+  const loc = useLocation();
+  // a plain string: the tooltip's Slot cannot merge NavLink's className function (the styles were lost)
+  const on = active ?? (loc.pathname === to || loc.pathname.startsWith(`${to}/`));
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <NavLink
           to={to}
           aria-label={label}
-          className={({ isActive }) =>
-            cn(
-              "relative flex size-12 items-center justify-center rounded-xl text-sidebar-muted transition-colors hover:bg-sidebar-panel hover:text-sidebar-foreground",
-              (active ?? isActive) && "bg-sidebar-panel text-sidebar-foreground",
-            )
-          }
+          aria-current={on ? "page" : undefined}
+          className={cn(
+            "relative flex size-12 items-center justify-center rounded-xl text-sidebar-muted transition-colors hover:bg-sidebar-panel hover:text-sidebar-foreground",
+            on && "bg-sidebar-panel text-sidebar-foreground",
+          )}
         >
           {children}
           {!!badge && badge > 0 && <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-primary" aria-hidden="true" />}
