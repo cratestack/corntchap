@@ -125,3 +125,11 @@ mutation procedure adminDeleteWakeTarget(id: String): OkResult
 mutation procedure adminSetGrants(name: String, grants: String): GrantsView
   @allow(auth() != null)
   @mcp(tool: "set_grants", description: "Set what a cook may do beyond working its tasks: plan, manage, admin (comma-separated; empty for work only). Only a person can, never a cook. A cook never exceeds its owner's rights.")
+
+/// Set a pot's default lease length (team owner or admin). A cook can still ask for a longer
+/// lease when it claims (ttlS) or with heartbeat.
+/// @param project Pot key, e.g. PAY.
+/// @param ttlS Seconds, 10 to 86400.
+mutation procedure setLeaseTtl(project: String, ttlS: Int): PotLease
+  @allow(auth() != null)
+  @mcp(tool: "set_lease_ttl", description: "Set a pot's default lease length in seconds (its team's owner or an admin). Leases already held keep their expiry; cooks can still ask for longer on claim_next/claim_task (ttlS) or heartbeat.")

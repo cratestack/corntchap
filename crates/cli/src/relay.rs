@@ -245,7 +245,7 @@ impl SseParser {
 }
 
 /// Parses `45m`, `1h30m`, `90s` or a bare number of seconds (`90`). Units: h, m, s.
-fn parse_duration(s: &str) -> Result<Duration, String> {
+pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let bad =
         || format!("invalid duration {s:?}: use e.g. 90, 90s, 45m, 2h or 1h30m (units h, m, s)");
     let t = s.trim();

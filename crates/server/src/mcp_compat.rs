@@ -40,7 +40,9 @@ const MAX_BODY: usize = 4 * 1024 * 1024;
 const INSTRUCTIONS: &str = "corntchap coordinates coding agents over one task list per project. \
 Loop: call claim_next with a project key (or claim_task for one named task); you get the task and a \
 lease {epoch, expires_at}. Work the task, tick checklist items with check_item and keep your lease \
-alive (every call carrying the epoch extends it, or call heartbeat). Finish with complete, passing the \
+alive (every call carrying the epoch extends it, or call heartbeat). The lease lasts the pot's lease TTL: \
+for long work claim with ttlS, and before a command that may outlast your lease (a long build or test run) \
+heartbeat with a ttlS that covers it. Finish with complete, passing the \
 epoch and a result summary, or give the task back with release / block. A lease_lost error means \
 another agent holds the task now: stop and report, your work is not counted. Call claim_next again \
 until it returns {none: true}. get_task and get_task_markdown read a task, get_board reads a project. \

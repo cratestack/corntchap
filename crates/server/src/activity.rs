@@ -84,6 +84,16 @@ pub async fn record(db: &PgPool, p: &Principal, r: Record) -> Result<Value> {
             "message": "unregistered session: run corntchap-cli station scan"
         }));
     };
+    // an agent that is working keeps its leases: each tool use renews the leases this session holds
+    // to the pot's lease length (never shortening a longer one it asked for)
+    sqlx::query(
+        "update tasks t set lease_expires_at = greatest(t.lease_expires_at, now() + pr.lease_ttl), updated_at = now()
+         from projects pr where pr.id = t.project_id and t.station_id = $1
+           and t.status = 'claimed' and t.lease_expires_at > now()",
+    )
+    .bind(station_id)
+    .execute(&mut *tx)
+    .await?;
     // serialize the burst of one station so two calls cannot both open a new event
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(&station)
