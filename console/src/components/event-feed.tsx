@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { Fragment, memo, useMemo } from "react";
 import type { ChangeView } from "@corntchap/api";
 import {
   Trash2,
@@ -143,22 +143,23 @@ function FileLink({ e }: { e: ChangeView }) {
   );
 }
 
-const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: boolean; now: number }) {
+const Item = memo(function Item({ e, compact, now, last }: { e: ChangeView; compact: boolean; now: number; last: boolean }) {
   const open = useOpenTask();
   const openMemory = useOpenMemory();
   const d = describe(e);
   const Icon = d.icon;
   const actor = e.actor ?? "the kitchen";
   return (
-    <li className="flex gap-3 py-2.5">
-      <span className="relative mt-0.5">
+    <li className={cn("relative flex gap-3", compact ? "py-2.5" : "py-3")}>
+      {!compact && !last && <span aria-hidden="true" className="absolute top-11 -bottom-1 left-3 w-px bg-border" />}
+      <span className="relative mt-0.5 self-start">
         <Avatar name={actor} className="size-6 text-[11px]" />
         <span className="absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full bg-card ring-1 ring-border">
           <Icon className={cn("size-2.5", d.tone)} aria-hidden="true" />
         </span>
       </span>
       <div className="min-w-0 flex-1">
-        <p className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[13.5px]")}>
+        <p className={cn("leading-snug", compact ? "text-[12.5px]" : "text-[14.5px] md:text-[13.5px]")}>
           <span className="font-semibold">{actor}</span> <span className="text-muted-foreground">{d.verb}</span>{" "}
           {e.kind.startsWith("question.") && e.payload.question && (
             <>
@@ -178,7 +179,7 @@ const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: b
             <button
               type="button"
               onClick={() => open(e.task!)}
-              className="rounded font-mono text-[12px] font-bold underline-offset-2 hover:underline focus-visible:underline"
+              className="rounded font-mono text-[12px] font-bold underline-offset-2 hover:underline focus-visible:underline max-md:py-1"
             >
               {e.task}
             </button>
@@ -214,7 +215,7 @@ const Item = memo(function Item({ e, compact, now }: { e: ChangeView; compact: b
           )}
           {d.detail && <span className="text-muted-foreground"> · {d.detail}</span>}
         </p>
-        <p className="mt-0.5 font-mono text-[10.5px] text-muted-foreground">
+        <p className="mt-1 font-mono text-[10.5px] text-muted-foreground md:mt-0.5">
           {fmtAgo(e.at, now)}
           {!compact && <span> · {e.project}</span>}
         </p>
@@ -242,11 +243,42 @@ export function EventFeed({
   if (shown.length === 0) {
     return <p className="py-6 text-center text-muted-foreground">{empty ?? "Nothing has happened yet."}</p>;
   }
+  if (compact) {
+    return (
+      <ul className="divide-y divide-border">
+        {shown.map((e, i) => (
+          <Item key={e.seq} e={e} compact now={now} last={i === shown.length - 1} />
+        ))}
+      </ul>
+    );
+  }
+  // full feed: a timeline, with a heading per day
   return (
-    <ul className="divide-y divide-border">
-      {shown.map((e) => (
-        <Item key={e.seq} e={e} compact={compact} now={now} />
-      ))}
+    <ul>
+      {shown.map((e, i) => {
+        const day = dayKey(e.at);
+        const head = i === 0 || day !== dayKey(shown[i - 1]!.at);
+        return (
+          <Fragment key={e.seq}>
+            {head && (
+              <li className={cn("label-caps border-b border-border pb-2", i === 0 ? "pt-4" : "pt-5")} aria-label={dayLabel(e.at, now)}>
+                {dayLabel(e.at, now)}
+              </li>
+            )}
+            <Item e={e} compact={false} now={now} last={i === shown.length - 1 || day !== dayKey(shown[i + 1]!.at)} />
+          </Fragment>
+        );
+      })}
     </ul>
   );
+}
+
+const dayKey = (iso: string) => new Date(iso).toDateString();
+function dayLabel(iso: string, now: number): string {
+  const d = new Date(iso);
+  const today = new Date(now);
+  const yesterday = new Date(now - 86_400_000);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }

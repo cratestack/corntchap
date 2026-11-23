@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import type { MenuView, ProjectSummary, TaskView } from "@corntchap/api";
 import type { ViewOut } from "@corntchap/api";
-import { ChevronDown, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, Pencil, Plus, Settings2, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useProc, useProjects, useQuestions } from "@/lib/data";
 import { useLive } from "@/lib/live";
@@ -10,9 +10,12 @@ import { useUi } from "@/lib/ui";
 import { BUCKETS, bucketOf, plural, type Bucket } from "@/lib/format";
 import { forgetView, isBaseView, lastPot, lastView, rememberPot, rememberView, type BaseView, type Filters } from "@/lib/views";
 import { useOpenTask } from "@/lib/nav";
+import { useIsPhone } from "@/lib/media";
 import { errorMessage } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -167,7 +170,7 @@ export function KitchenPage() {
 
   if (projects.isLoading) {
     return (
-      <div className="px-5 py-8 lg:px-8">
+      <div className="px-4 py-6 md:px-5 md:py-8 lg:px-8">
         <RowSkeleton />
       </div>
     );
@@ -190,7 +193,7 @@ export function KitchenPage() {
   const chipNames = filters.menu ? {} : menus.names;
 
   return (
-    <div className="px-5 pt-6 pb-16 lg:px-8">
+    <div className="px-4 pt-3 pb-6 md:px-5 md:pt-6 md:pb-16 lg:px-8">
       <PotHeader
         project={project}
         base={base}
@@ -225,7 +228,7 @@ export function KitchenPage() {
 
       {selectedMenu && taskView && <MenuStrip menu={selectedMenu} />}
 
-      <div className="mt-6">
+      <div className="mt-3 md:mt-6">
         {viewKey ? (
           <SavedViewBody
             potKey={potKey}
@@ -294,21 +297,61 @@ export function KitchenPage() {
 
 // ---------------------------------------------------------------- header
 
-function PotHeader({
+const UNREAD_BADGE =
+  "relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground";
+
+const ALL_VIEWS = [...HEAD_VIEWS, ...TAIL_VIEWS];
+
+/** Counts per status as tappable chips: a tap filters the board to that status, a second tap clears it. */
+function StatusChips({
   project,
-  base,
-  viewKey,
-  saved,
-  taskView,
-  onNewView,
-  filters,
-  setFilter,
-  clearFilters,
-  tasks,
-  menus,
-  onNew,
-  openQuestions,
+  status,
+  onPick,
+  withLabels,
 }: {
+  project: ProjectSummary;
+  status: string | undefined;
+  onPick: (b: Bucket | undefined) => void;
+  withLabels: boolean;
+}) {
+  const items: { id: Bucket; n: number; short: string }[] = [
+    { id: "ready", n: project.ready, short: "ready to scoop" },
+    { id: "claimed", n: project.claimed, short: "on the fire" },
+    { id: "waiting", n: project.blocked, short: "waiting" },
+    { id: "done", n: project.done, short: "served" },
+    { id: "cancelled", n: project.tossed, short: "tossed" },
+  ];
+  return (
+    <div className={cn("flex items-center", withLabels ? "flex-wrap gap-1.5" : "gap-1")} role="group" aria-label="Filter by status">
+      {items
+        .filter((i) => i.id !== "cancelled" || i.n > 0)
+        .map((i) => {
+          const on = status === i.id;
+          return (
+            <button
+              key={i.id}
+              type="button"
+              aria-pressed={on}
+              aria-label={`${i.n} ${i.short}`}
+              title={`${i.n} ${i.short}`}
+              onClick={() => onPick(on ? undefined : i.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border text-[12.5px] transition-colors",
+                withLabels ? "h-8 px-3" : "h-10 px-2.5",
+                on ? "border-primary/60 bg-primary/10 font-medium" : "border-border bg-card text-muted-foreground hover:border-foreground/30",
+              )}
+            >
+              <span className={cn("size-2 rounded-full", BUCKET_DOT[i.id], i.id === "claimed" && i.n > 0 && "live-dot")} aria-hidden="true" />
+              <b className="font-mono text-[12px] font-bold text-foreground tabular-nums">{i.n}</b>
+              {withLabels && <span>{i.short}</span>}
+            </button>
+          );
+        })}
+    </div>
+  );
+}
+
+interface HeaderProps {
   project: ProjectSummary;
   base: BaseView;
   viewKey: string | undefined;
@@ -322,7 +365,184 @@ function PotHeader({
   menus: MenuView[];
   onNew: () => void;
   openQuestions: number;
+}
+
+function PotHeader(props: HeaderProps) {
+  return useIsPhone() ? <PhoneHeader {...props} /> : <WideHeader {...props} />;
+}
+
+function PhoneHeader({ project, base, viewKey, saved, taskView, onNewView, filters, setFilter, clearFilters, tasks, menus, onNew }: HeaderProps) {
+  const [sheet, setSheet] = useState(false);
+  const activeCount = Object.values(filters).filter(Boolean).length;
+  const current = viewKey ? (saved.find((v) => v.key === viewKey)?.name ?? "View") : "Board";
+
+  if (!taskView) {
+    const label = ALL_VIEWS.find((v) => v.id === base)?.label ?? "Pot";
+    const action = base === "pantry" ? "Stock" : base === "menus" ? "New menu" : base === "questions" ? "Ask" : null;
+    return (
+      <header className="flex h-10 items-center justify-between gap-3">
+        <h1 className="text-[22px] leading-none">{label}</h1>
+        {action && (
+          <Button size="sm" variant="outline" onClick={onNew}>
+            <Plus /> {action}
+          </Button>
+        )}
+      </header>
+    );
+  }
+
+  return (
+    <header className="flex items-center gap-2">
+      <DropdownMenu>
+        <DropdownMenuTrigger className="inline-flex h-10 max-w-32 shrink-0 items-center gap-1 rounded-full border border-border bg-card pr-2.5 pl-3.5 text-[13px] font-medium active:bg-muted">
+          <span className="truncate">{current}</span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-48">
+          <DropdownMenuLabel className="label-caps py-1">Views</DropdownMenuLabel>
+          <DropdownMenuItem asChild className="min-h-11">
+            <Link to={`/pots/${project.key}/board`}>
+              Board {!viewKey && <Check className="ml-auto size-4" aria-hidden="true" />}
+            </Link>
+          </DropdownMenuItem>
+          {saved.map((v) => (
+            <DropdownMenuItem key={v.key} asChild className="min-h-11">
+              <Link to={`/pots/${project.key}/v/${v.key}`}>
+                <span className="truncate">{v.name}</span>
+                {viewKey === v.key && <Check className="ml-auto size-4" aria-hidden="true" />}
+              </Link>
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={onNewView} className="min-h-11">
+            <Plus /> New view
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
+        <StatusChips project={project} status={filters.status} onPick={(b) => setFilter("status", b)} withLabels={false} />
+      </div>
+      <button
+        type="button"
+        onClick={() => setSheet(true)}
+        aria-label={activeCount ? `Display and filter, ${activeCount} active` : "Display and filter"}
+        className={cn(
+          "relative inline-flex size-10 shrink-0 items-center justify-center rounded-full border active:bg-muted",
+          activeCount ? "border-primary/60 bg-primary/10" : "border-border bg-card",
+        )}
+      >
+        <SlidersHorizontal className="size-4" aria-hidden="true" />
+        {activeCount > 0 && (
+          <span className="absolute -top-1 -right-1 grid min-w-4 place-items-center rounded-full bg-primary px-1 font-mono text-[10px] leading-4 font-bold text-primary-foreground">{activeCount}</span>
+        )}
+      </button>
+      <FilterSheet open={sheet} onOpenChange={setSheet} project={project} filters={filters} setFilter={setFilter} clearFilters={clearFilters} tasks={tasks} menus={menus} />
+    </header>
+  );
+}
+
+function Pill({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={cn(
+        "inline-flex min-h-10 items-center gap-1.5 rounded-full border px-3.5 text-[14px] transition-colors active:bg-muted",
+        on ? "border-primary/60 bg-primary/10 font-medium" : "border-border bg-background",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Phone: Menu, Status, Label, Cook and the text filter in one bottom sheet (Linear's display options). */
+function FilterSheet({
+  open,
+  onOpenChange,
+  project,
+  filters,
+  setFilter,
+  clearFilters,
+  tasks,
+  menus,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  project: ProjectSummary;
+  filters: Filters;
+  setFilter: (k: keyof Filters, v: string | undefined) => void;
+  clearFilters: () => void;
+  tasks: TaskView[];
+  menus: MenuView[];
 }) {
+  const labels = useMemo(() => [...new Set(tasks.flatMap((t) => t.labels))].sort(), [tasks]);
+  const holders = useMemo(() => [...new Set(tasks.map((t) => t.claimed_by).filter((h): h is string => !!h))].sort(), [tasks]);
+  const toggle = (k: keyof Filters, v: string) => setFilter(k, filters[k] === v ? undefined : v);
+  const active = Object.values(filters).some(Boolean);
+  const section = (title: string, body: React.ReactNode) => (
+    <section className="space-y-2">
+      <h3 className="label-caps">{title}</h3>
+      <div className="flex flex-wrap gap-2">{body}</div>
+    </section>
+  );
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-sm:flex max-sm:flex-col max-sm:gap-0 max-sm:p-0" onOpenAutoFocus={(e) => e.preventDefault()}>
+        <DialogHeader className="flex-row items-center justify-between gap-2 px-5 pt-1 pb-3 text-left max-sm:pt-7">
+          <div>
+            <DialogTitle>Display and filter</DialogTitle>
+            <DialogDescription className="sr-only">Narrow the {project.key} board by menu, status, label, cook or text.</DialogDescription>
+          </div>
+          <div className="mr-8 flex items-center gap-2">
+            <RefreshButton />
+            <PotOptions project={project} />
+          </div>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto border-t border-border px-5 py-4">
+          <div className="space-y-2">
+            <Label htmlFor="f-q" className="label-caps">Text</Label>
+            <Input id="f-q" value={filters.q ?? ""} onChange={(e) => setFilter("q", e.target.value || undefined)} placeholder="Search id or title" className="h-11" />
+          </div>
+          {section(
+            "Status",
+            BUCKETS.map((b) => (
+              <Pill key={b.id} on={filters.status === b.id} onClick={() => toggle("status", b.id)}>
+                <span className={cn("size-2 rounded-full", BUCKET_DOT[b.id])} aria-hidden="true" /> {b.label}
+              </Pill>
+            )),
+          )}
+          {section(
+            "Menu",
+            <>
+              {menus
+                .filter((m) => m.status !== "served")
+                .map((m) => (
+                  <Pill key={m.key} on={filters.menu === m.key} onClick={() => toggle("menu", m.key)}>
+                    {m.name} <span className="font-mono text-[11px] text-muted-foreground">{m.done}/{m.total}</span>
+                  </Pill>
+                ))}
+              <Pill on={filters.menu === "-"} onClick={() => toggle("menu", "-")}>No menu</Pill>
+            </>,
+          )}
+          {labels.length > 0 && section("Label", labels.map((l) => <Pill key={l} on={filters.label === l} onClick={() => toggle("label", l)}>{l}</Pill>))}
+          {holders.length > 0 && section("Cook", holders.map((h) => <Pill key={h} on={filters.holder === h} onClick={() => toggle("holder", h)}>{h}</Pill>))}
+        </div>
+        <div className="flex gap-2 border-t border-border bg-card px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+          <Button variant="outline" className="flex-1" onClick={clearFilters} disabled={!active}>
+            Clear
+          </Button>
+          <Button className="flex-1" onClick={() => onOpenChange(false)}>
+            Done
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WideHeader({ project, base, viewKey, saved, taskView, onNewView, filters, setFilter, clearFilters, tasks, menus, onNew, openQuestions }: HeaderProps) {
   const loc = useLocation();
   const labels = useMemo(() => [...new Set(tasks.flatMap((t) => t.labels))].sort(), [tasks]);
   const holders = useMemo(() => [...new Set(tasks.map((t) => t.claimed_by).filter((h): h is string => !!h))].sort(), [tasks]);
@@ -334,19 +554,19 @@ function PotHeader({
       to={{ pathname: `/pots/${project.key}/${v.id}`, search: v.id !== "board" || !taskView ? "" : loc.search }}
       aria-current={!viewKey && base === v.id && !(active && taskView) ? "page" : undefined}
       className={cn(
-        "rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
+        "shrink-0 rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground pointer-coarse:py-2.5",
         !viewKey && base === v.id && "bg-card text-foreground shadow-sm",
       )}
     >
       {v.label}
       {v.id === "pass" && project.unread_pass > 0 && (
-        <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
+        <span className={UNREAD_BADGE}>
           <span aria-hidden="true">{project.unread_pass}</span>
           <span className="sr-only"> unread {project.unread_pass === 1 ? "message" : "messages"}</span>
         </span>
       )}
       {v.id === "questions" && openQuestions > 0 && (
-        <span className="relative ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-primary px-1 font-mono text-[10.5px] leading-4 font-bold text-primary-foreground">
+        <span className={UNREAD_BADGE}>
           <span aria-hidden="true">{openQuestions}</span>
           <span className="sr-only"> open {openQuestions === 1 ? "question" : "questions"}</span>
         </span>
@@ -362,21 +582,13 @@ function PotHeader({
             <Link to={`/pots/${project.key}/about`} title={`About ${project.name}`} className="rounded bg-corn px-1.5 py-px font-bold !text-corn-foreground hover:underline focus-visible:underline">{project.key}</Link>
             {project.team && <span>team {project.team}</span>}
           </p>
-          <h1 className="mt-1.5 truncate text-[30px] leading-[1.1] sm:text-[34px]">{project.name}</h1>
-          <p className="mt-1.5 text-[13px] text-muted-foreground">
-            <b className="font-semibold text-foreground">{project.claimed}</b> on the fire ·{" "}
-            <b className="font-semibold text-foreground">{project.ready}</b> ready to scoop ·{" "}
-            <b className="font-semibold text-foreground">{project.blocked}</b> waiting ·{" "}
-            <b className="font-semibold text-foreground">{project.done}</b> served
-            {project.tossed > 0 && (
-              <>
-                {" "}· <b className="font-semibold text-foreground">{project.tossed}</b> tossed
-              </>
-            )}
-          </p>
+          <h1 className="mt-1.5 truncate text-[28px] leading-[1.1] lg:text-[34px]">{project.name}</h1>
+          <div className="mt-2.5">
+            <StatusChips project={project} status={filters.status} onPick={(b) => setFilter("status", b)} withLabels />
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          <PaletteButton />
+          <PaletteButton className="sm:hidden lg:inline-flex" />
           <RefreshButton />
           <PotOptions project={project} />
           <Button onClick={onNew}>
@@ -385,119 +597,115 @@ function PotHeader({
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <nav aria-label="Views" className="flex max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
-          {HEAD_VIEWS.map(tab)}
-          {saved.map((v) => (
-            <Link
-              key={v.key}
-              to={{ pathname: `/pots/${project.key}/v/${v.key}`, search: taskView ? loc.search : "" }}
-              aria-current={viewKey === v.key && !active ? "page" : undefined}
-              className={cn(
-                "rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground",
-                viewKey === v.key && "bg-card text-foreground shadow-sm",
-              )}
-            >
-              {v.name}
-            </Link>
-          ))}
-          <button
-            type="button"
-            onClick={onNewView}
-            className="rounded-lg px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground hover:text-foreground"
-          >
-            + View
-          </button>
-          {TAIL_VIEWS.map(tab)}
-        </nav>
-
-        {taskView && (
-          <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
-            <FilterChip
-              label="Menu"
-              value={filters.menu === "-" ? "No menu" : filters.menu ? (menus.find((m) => m.key === filters.menu)?.name ?? filters.menu) : undefined}
-              onClear={() => setFilter("menu", undefined)}
-            >
-              <DropdownMenuRadioGroup value={filters.menu ?? ""} onValueChange={(v) => setFilter("menu", v || undefined)}>
-                <DropdownMenuRadioItem value="">All menus</DropdownMenuRadioItem>
-                {menus
-                  .filter((m) => m.status !== "served")
-                  .map((m) => (
-                    <DropdownMenuRadioItem key={m.key} value={m.key}>
-                      {m.name}
-                      <span className="ml-auto pl-3 font-mono text-[11px] text-muted-foreground">
-                        {m.done}/{m.total}
-                      </span>
-                    </DropdownMenuRadioItem>
-                  ))}
-                <DropdownMenuRadioItem value="-">No menu</DropdownMenuRadioItem>
-                {menus.some((m) => m.status === "served") && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="label-caps py-1">Served</DropdownMenuLabel>
-                    {menus
-                      .filter((m) => m.status === "served")
-                      .map((m) => (
-                        <DropdownMenuRadioItem key={m.key} value={m.key}>
-                          {m.name}
-                        </DropdownMenuRadioItem>
-                      ))}
-                  </>
-                )}
-              </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link to={`/pots/${project.key}/menus`}>Manage menus…</Link>
-              </DropdownMenuItem>
-            </FilterChip>
-            <FilterChip
-              label="Status"
-              value={filters.status ? BUCKETS.find((b) => b.id === filters.status)?.label : undefined}
-              onClear={() => setFilter("status", undefined)}
-            >
-              <DropdownMenuRadioGroup value={filters.status ?? ""} onValueChange={(v) => setFilter("status", v || undefined)}>
-                {BUCKETS.map((b) => (
-                  <DropdownMenuRadioItem key={b.id} value={b.id}>
-                    <span className={cn("size-2 rounded-full", BUCKET_DOT[b.id])} /> {b.label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </FilterChip>
-            <FilterChip label="Label" value={filters.label} onClear={() => setFilter("label", undefined)} disabled={labels.length === 0}>
-              <DropdownMenuRadioGroup value={filters.label ?? ""} onValueChange={(v) => setFilter("label", v || undefined)}>
-                {labels.map((l) => (
-                  <DropdownMenuRadioItem key={l} value={l}>
-                    {l}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </FilterChip>
-            <FilterChip label="Cook" value={filters.holder} onClear={() => setFilter("holder", undefined)} disabled={holders.length === 0}>
-              <DropdownMenuRadioGroup value={filters.holder ?? ""} onValueChange={(v) => setFilter("holder", v || undefined)}>
-                {holders.map((h) => (
-                  <DropdownMenuRadioItem key={h} value={h}>
-                    {h}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </FilterChip>
-            <div className="relative">
-              <Input
-                aria-label="Filter tasks by text"
-                value={filters.q ?? ""}
-                onChange={(e) => setFilter("q", e.target.value || undefined)}
-                placeholder="Filter…"
-                className="h-8 w-32 rounded-full pr-2 pl-3 text-[13px]"
-              />
-            </div>
-            {active && (
-              <button type="button" onClick={clearFilters} className="text-[12.5px] text-primary hover:underline">
-                Clear filters
-              </button>
+      <nav aria-label="Views" className="scrollbar-none mt-5 flex max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
+        {HEAD_VIEWS.map(tab)}
+        {saved.map((v) => (
+          <Link
+            key={v.key}
+            to={{ pathname: `/pots/${project.key}/v/${v.key}`, search: taskView ? loc.search : "" }}
+            aria-current={viewKey === v.key && !active ? "page" : undefined}
+            className={cn(
+              "shrink-0 rounded-lg px-3.5 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground pointer-coarse:py-2.5",
+              viewKey === v.key && "bg-card text-foreground shadow-sm",
             )}
-          </div>
-        )}
-      </div>
+          >
+            {v.name}
+          </Link>
+        ))}
+        <button
+          type="button"
+          onClick={onNewView}
+          className="shrink-0 rounded-lg px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-muted-foreground hover:text-foreground pointer-coarse:py-2.5"
+        >
+          + View
+        </button>
+        {TAIL_VIEWS.map(tab)}
+      </nav>
+
+      {taskView && (
+        <div className="scrollbar-none mt-3 flex items-center gap-2 overflow-x-auto pb-0.5" role="group" aria-label="Filters">
+          <FilterChip
+            label="Menu"
+            value={filters.menu === "-" ? "No menu" : filters.menu ? (menus.find((m) => m.key === filters.menu)?.name ?? filters.menu) : undefined}
+            onClear={() => setFilter("menu", undefined)}
+          >
+            <DropdownMenuRadioGroup value={filters.menu ?? ""} onValueChange={(v) => setFilter("menu", v || undefined)}>
+              <DropdownMenuRadioItem value="">All menus</DropdownMenuRadioItem>
+              {menus
+                .filter((m) => m.status !== "served")
+                .map((m) => (
+                  <DropdownMenuRadioItem key={m.key} value={m.key}>
+                    {m.name}
+                    <span className="ml-auto pl-3 font-mono text-[11px] text-muted-foreground">
+                      {m.done}/{m.total}
+                    </span>
+                  </DropdownMenuRadioItem>
+                ))}
+              <DropdownMenuRadioItem value="-">No menu</DropdownMenuRadioItem>
+              {menus.some((m) => m.status === "served") && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="label-caps py-1">Served</DropdownMenuLabel>
+                  {menus
+                    .filter((m) => m.status === "served")
+                    .map((m) => (
+                      <DropdownMenuRadioItem key={m.key} value={m.key}>
+                        {m.name}
+                      </DropdownMenuRadioItem>
+                    ))}
+                </>
+              )}
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link to={`/pots/${project.key}/menus`}>Manage menus…</Link>
+            </DropdownMenuItem>
+          </FilterChip>
+          <FilterChip
+            label="Status"
+            value={filters.status ? BUCKETS.find((b) => b.id === filters.status)?.label : undefined}
+            onClear={() => setFilter("status", undefined)}
+          >
+            <DropdownMenuRadioGroup value={filters.status ?? ""} onValueChange={(v) => setFilter("status", v || undefined)}>
+              {BUCKETS.map((b) => (
+                <DropdownMenuRadioItem key={b.id} value={b.id}>
+                  <span className={cn("size-2 rounded-full", BUCKET_DOT[b.id])} /> {b.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </FilterChip>
+          <FilterChip label="Label" value={filters.label} onClear={() => setFilter("label", undefined)} disabled={labels.length === 0}>
+            <DropdownMenuRadioGroup value={filters.label ?? ""} onValueChange={(v) => setFilter("label", v || undefined)}>
+              {labels.map((l) => (
+                <DropdownMenuRadioItem key={l} value={l}>
+                  {l}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </FilterChip>
+          <FilterChip label="Cook" value={filters.holder} onClear={() => setFilter("holder", undefined)} disabled={holders.length === 0}>
+            <DropdownMenuRadioGroup value={filters.holder ?? ""} onValueChange={(v) => setFilter("holder", v || undefined)}>
+              {holders.map((h) => (
+                <DropdownMenuRadioItem key={h} value={h}>
+                  {h}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </FilterChip>
+          <Input
+            aria-label="Filter tasks by text"
+            value={filters.q ?? ""}
+            onChange={(e) => setFilter("q", e.target.value || undefined)}
+            placeholder="Filter…"
+            className="h-8 w-36 shrink-0 rounded-full pr-2 pl-3 text-[13px]"
+          />
+          {active && (
+            <button type="button" onClick={clearFilters} className="shrink-0 px-1 text-[12.5px] whitespace-nowrap text-primary hover:underline">
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
     </header>
   );
 }
@@ -546,7 +754,7 @@ function FilterChip({
 
 function ViewBar({ view, onEdit, onDelete }: { view: ViewOut; onEdit: () => void; onDelete: () => void }) {
   return (
-    <div className="mt-4 flex items-start gap-3 rounded-[14px] border border-border bg-card px-4 py-3">
+    <div className="mt-3 flex items-start gap-3 rounded-[14px] border border-border bg-card px-3.5 py-2.5 md:mt-4 md:px-4 md:py-3">
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-baseline gap-x-2 text-[13px]">
           <b className="font-semibold">{view.name}</b>
@@ -564,7 +772,7 @@ function ViewBar({ view, onEdit, onDelete }: { view: ViewOut; onEdit: () => void
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label={`Options for the ${view.name} view`}
-          className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground md:size-8"
         >
           <Settings2 className="size-4" aria-hidden="true" />
         </DropdownMenuTrigger>
@@ -749,7 +957,8 @@ function BoardView({
   keepOrder?: boolean;
 }) {
   const groups = useMemo(() => groupTasks(tasks, keepOrder), [tasks, keepOrder]);
-  if (loading) return <RowSkeleton rows={3} />;
+  const phone = useIsPhone();
+  if (loading) return <BoardSkeleton phone={phone} />;
   if (total === 0) {
     return (
       <EmptyState title="The board is bare" action={<Button onClick={onNew}>New task</Button>}>
@@ -757,6 +966,7 @@ function BoardView({
       </EmptyState>
     );
   }
+  if (phone) return <PhoneBoard groups={groups} selected={selected} onOpen={onOpen} menus={menus} />;
   return (
     <div
       role="region"
@@ -795,6 +1005,125 @@ function BoardView({
   );
 }
 
+
+const BOARD_SHORT: Record<Bucket, string> = { ready: "Ready", claimed: "Fire", waiting: "Waiting", done: "Served", cancelled: "Tossed" };
+const BOARD_EMPTY: Record<Bucket, string> = {
+  ready: "Nothing is waiting to be scooped.",
+  claimed: "No cook has anything on the fire.",
+  waiting: "Nothing is stuck.",
+  done: "Nothing served yet.",
+  cancelled: "Nothing tossed.",
+};
+
+function BoardSkeleton({ phone }: { phone: boolean }) {
+  return (
+    <div className="flex gap-3 overflow-hidden" aria-busy="true" aria-label="Loading the board">
+      {Array.from({ length: phone ? 1 : 3 }).map((_, c) => (
+        <div key={c} className={cn("shrink-0 space-y-2 rounded-[14px] bg-column p-2.5", phone ? "w-full" : "w-[19rem]")}>
+          {Array.from({ length: 3 }).map((__, i) => (
+            <div key={i} className="space-y-2.5 rounded-[10px] border border-border bg-card p-3">
+              <div className="h-2.5 w-12 animate-pulse rounded bg-muted" />
+              <div className="h-3.5 animate-pulse rounded bg-muted" style={{ width: `${88 - i * 14}%` }} />
+              <div className="h-2 w-2/3 animate-pulse rounded-full bg-muted" />
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Phone board: one column per screen (snap scrolling) and a sticky segmented control that jumps between them. */
+function PhoneBoard({
+  groups,
+  selected,
+  onOpen,
+  menus,
+}: {
+  groups: Record<Bucket, TaskView[]>;
+  selected: string | null;
+  onOpen: (id: string) => void;
+  menus: Record<string, string>;
+}) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState(0);
+  const start = () => {
+    const el = scroller.current;
+    return el ? parseFloat(getComputedStyle(el).paddingLeft) || 0 : 0;
+  };
+  const onScroll = () => {
+    const el = scroller.current;
+    const first = el?.children[0] as HTMLElement | undefined;
+    const second = el?.children[1] as HTMLElement | undefined;
+    if (!el || !first || !second) return;
+    const step = second.offsetLeft - first.offsetLeft;
+    setActive(Math.max(0, Math.min(BOARD_COLS.length - 1, Math.round(el.scrollLeft / step))));
+  };
+  const jump = (i: number) => {
+    const el = scroller.current;
+    const col = el?.children[i] as HTMLElement | undefined;
+    if (!el || !col) return;
+    setActive(i);
+    el.scrollTo({ left: col.offsetLeft - start(), behavior: "smooth" });
+  };
+  return (
+    <div>
+      <div
+        role="tablist"
+        aria-label="Board columns"
+        className="sticky top-[calc(3.5rem+env(safe-area-inset-top))] z-20 -mx-4 bg-background/95 px-4 pb-2 backdrop-blur-md supports-[backdrop-filter]:bg-background/80"
+      >
+        <div className="grid grid-cols-5 gap-0.5 rounded-xl bg-muted p-1">
+          {BOARD_COLS.map((id, i) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={active === i}
+              onClick={() => jump(i)}
+              className={cn(
+                "flex min-h-10 flex-col items-center justify-center rounded-lg px-0.5 text-[11.5px] leading-tight font-medium transition-colors",
+                active === i ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
+              )}
+            >
+              <span className="flex items-center gap-1">
+                <span className={cn("size-1.5 rounded-full", BUCKET_DOT[id], id === "claimed" && groups[id].length > 0 && "live-dot")} aria-hidden="true" />
+                {BOARD_SHORT[id]}
+              </span>
+              <span className="font-mono text-[11px] tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>{groups[id].length}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div
+        ref={scroller}
+        role="region"
+        aria-label="Board"
+        onScroll={onScroll}
+        className="scrollbar-none relative -mx-4 flex snap-x snap-mandatory items-start gap-3 overflow-x-auto overscroll-x-contain scroll-px-4 px-4 pb-2"
+      >
+        {BOARD_COLS.map((id) => {
+          const meta = BUCKETS.find((b) => b.id === id)!;
+          const col = groups[id];
+          return (
+            <section key={id} aria-labelledby={`col-${id}`} className={cn("w-[85vw] shrink-0 snap-start rounded-[14px] bg-column p-2", id === "cancelled" && "opacity-80")}>
+              <h2 id={`col-${id}`} className="sr-only">
+                {meta.label}, {col.length}
+              </h2>
+              <div className="space-y-2">
+                {col.length === 0 && <p className="px-2 py-8 text-center text-[13px] text-muted-foreground">{BOARD_EMPTY[id]}</p>}
+                {col.map((t) => (
+                  <TaskCard key={t.id} task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[] = [
   { id: "all", label: "Everything", match: () => true },
   { id: "moves", label: "Scoops and moves", match: (k) => ["task.claimed", "task.released", "task.blocked", "task.unblocked", "task.lease_expired", "task.cancelled", "task.restored"].includes(k) },
@@ -821,7 +1150,7 @@ function ActivityView({ events }: { events: ReturnType<typeof useLive>["events"]
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Activity filters">
+      <div className="scrollbar-none -mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-wrap md:overflow-visible md:px-0 md:pb-0" role="group" aria-label="Activity filters">
         {KIND_GROUPS.map((g) => (
           <button
             key={g.id}
@@ -829,7 +1158,7 @@ function ActivityView({ events }: { events: ReturnType<typeof useLive>["events"]
             aria-pressed={kind === g.id}
             onClick={() => setKind(g.id)}
             className={cn(
-              "h-8 rounded-full border px-3 text-[12.5px] transition-colors",
+              "h-10 shrink-0 rounded-full border px-3.5 text-[13px] whitespace-nowrap transition-colors md:h-8 md:px-3 md:text-[12.5px]",
               kind === g.id ? "border-primary/60 bg-primary/10 font-medium" : "border-input bg-card text-muted-foreground hover:border-foreground/30",
             )}
           >
@@ -837,7 +1166,7 @@ function ActivityView({ events }: { events: ReturnType<typeof useLive>["events"]
           </button>
         ))}
         <DropdownMenu>
-          <DropdownMenuTrigger className={cn("inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px]", actor ? "border-primary/60 bg-primary/10" : "border-input bg-card text-muted-foreground")}>
+          <DropdownMenuTrigger className={cn("inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] whitespace-nowrap md:h-8 md:px-3 md:text-[12.5px]", actor ? "border-primary/60 bg-primary/10" : "border-input bg-card text-muted-foreground")}>
             {actor || "Anyone"} <ChevronDown className="size-3" aria-hidden="true" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
@@ -852,7 +1181,7 @@ function ActivityView({ events }: { events: ReturnType<typeof useLive>["events"]
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <div className="mt-4 rounded-[14px] border border-border bg-card px-5">
+      <div className="mt-3 rounded-[14px] border border-border bg-card px-4 md:mt-4 md:px-5">
         {!ready ? (
           <div className="py-6"><RowSkeleton rows={3} /></div>
         ) : filtered.length === 0 ? (
