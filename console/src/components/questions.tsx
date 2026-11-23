@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import type { QuestionView } from "@corntchap/api";
-import { Check, ChevronRight, Hourglass, Loader2, MessageCircleQuestion, Plus, Send, X } from "lucide-react";
+import { Check, Hourglass, Loader2, MessageCircle, MessageCircleQuestion, Plus, Send, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useProc, useProcCall, useQuestions } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
+import { useIsPhone } from "@/lib/media";
 import { projectOfTask, useOpenTask } from "@/lib/nav";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, EmptyState, IdChip, RowSkeleton, SectionLabel } from "./bits";
 import { Markdown } from "./markdown";
@@ -39,10 +41,22 @@ function answeredBy(q: QuestionView): string {
  * Option buttons (pick one, then confirm, so a stray click never wakes a cook) plus a free-text box.
  * Enter sends, Shift+Enter adds a line.
  */
-export function AnswerControls({ q, compact = false, idPrefix }: { q: QuestionView; compact?: boolean; idPrefix: string }) {
+export function AnswerControls({
+  q,
+  compact = false,
+  idPrefix,
+  initialPick = null,
+  onDone,
+}: {
+  q: QuestionView;
+  compact?: boolean;
+  idPrefix: string;
+  initialPick?: string | null;
+  onDone?: () => void;
+}) {
   const call = useProcCall();
   const [text, setText] = useState("");
-  const [picked, setPicked] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(initialPick);
   const [busy, setBusy] = useState(false);
 
   async function send(answer: string) {
@@ -56,6 +70,7 @@ export function AnswerControls({ q, compact = false, idPrefix }: { q: QuestionVi
       });
       setText("");
       setPicked(null);
+      onDone?.();
     } catch (e) {
       toast.error("Could not send the answer", { description: errorMessage(e) });
     } finally {
@@ -76,7 +91,7 @@ export function AnswerControls({ q, compact = false, idPrefix }: { q: QuestionVi
               disabled={busy}
               onClick={() => setPicked((p) => (p === o ? null : o))}
               className={cn(
-                "max-w-full rounded-lg border px-3 py-1.5 text-left text-[13px] leading-snug transition-colors",
+                "min-h-11 max-w-full rounded-xl border px-3.5 py-2 text-left text-[14px] leading-snug transition-colors",
                 picked === o
                   ? "border-primary bg-primary/10 font-medium text-foreground"
                   : "border-input bg-background hover:border-foreground/40",
@@ -120,7 +135,7 @@ export function AnswerControls({ q, compact = false, idPrefix }: { q: QuestionVi
               if (e.target.value) setPicked(null);
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !window.matchMedia("(pointer: coarse)").matches) {
                 e.preventDefault();
                 void send(text);
               }
@@ -132,7 +147,7 @@ export function AnswerControls({ q, compact = false, idPrefix }: { q: QuestionVi
             {busy ? <Loader2 className="animate-spin" /> : <Send />} <span className="max-sm:sr-only">Answer</span>
           </Button>
         </div>
-        <p className="font-mono text-[10.5px] text-muted-foreground">↵ to send · shift+↵ for a new line · markdown ok</p>
+        <p className="hidden font-mono text-[10.5px] text-muted-foreground sm:block">↵ to send · shift+↵ for a new line · markdown ok</p>
       </form>
     </div>
   );
@@ -228,9 +243,8 @@ function NoteForm({ q }: { q: QuestionView }) {
   );
 }
 
-function DismissButton({ q }: { q: QuestionView }) {
+function DismissForm({ q, onDone }: { q: QuestionView; onDone: () => void }) {
   const call = useProcCall();
-  const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   async function dismiss(e: FormEvent) {
@@ -239,8 +253,7 @@ function DismissButton({ q }: { q: QuestionView }) {
     try {
       await call("questionDismiss", { id: q.id, reason: reason.trim() || null });
       toast.success(`${q.id} dismissed`, { description: q.wait && q.task ? `${q.task} goes back to its cook.` : undefined });
-      setOpen(false);
-      setReason("");
+      onDone();
     } catch (err) {
       toast.error("Could not dismiss it", { description: errorMessage(err) });
     } finally {
@@ -248,40 +261,107 @@ function DismissButton({ q }: { q: QuestionView }) {
     }
   }
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" className="text-muted-foreground">
-          <X /> Dismiss
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 space-y-3">
-        <form onSubmit={dismiss} className="space-y-3">
-          <div>
-            <p className="font-display text-[15px]">Dismiss {q.id}?</p>
-            <p className="mt-0.5 text-[12px] text-muted-foreground">
-              Closes it without an answer
-              {q.wait && q.task ? `; ${q.task} goes back to its cook` : ""}. The cook is told why.
-            </p>
-          </div>
-          <Label htmlFor={`dismiss-${q.id}`} className="sr-only">
-            Reason (optional)
-          </Label>
-          <Input id={`dismiss-${q.id}`} autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)" />
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
-              Keep it
-            </Button>
-            <Button type="submit" size="sm" disabled={busy}>
-              {busy && <Loader2 className="animate-spin" />} Dismiss
-            </Button>
-          </div>
-        </form>
-      </PopoverContent>
-    </Popover>
+    <form onSubmit={dismiss} className="space-y-3">
+      <p className="text-[13px] text-muted-foreground">
+        Closes it without an answer
+        {q.wait && q.task ? `; ${q.task} goes back to its cook` : ""}. The cook is told why.
+      </p>
+      <Label htmlFor={`dismiss-${q.id}`} className="sr-only">
+        Reason (optional)
+      </Label>
+      <Textarea id={`dismiss-${q.id}`} rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (optional)" />
+      <Button type="submit" variant="outline" className="w-full text-destructive hover:text-destructive" disabled={busy}>
+        {busy ? <Loader2 className="animate-spin" /> : <X />} Dismiss {q.id}
+      </Button>
+    </form>
   );
 }
 
-function QuestionCard({ q, highlight }: { q: QuestionView; highlight: boolean }) {
+type Mode = "answer" | "note" | "dismiss";
+type SheetState = { id: string | null; mode: Mode; option?: string | undefined };
+
+/** Answer, reply or dismiss one question: a bottom sheet on phones, a side sheet on wider screens. */
+function QuestionSheet({ state, setMode, onClose }: { state: SheetState; setMode: (m: Mode) => void; onClose: () => void }) {
+  const phone = useIsPhone();
+  const { id, mode, option } = state;
+  const res = useProc("questionGet", { id: id ?? "" }, { enabled: !!id });
+  const q = res.data;
+  const now = useNow();
+  return (
+    <Sheet open={!!id} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent side={phone ? "bottom" : "right"} className="gap-0 px-0 pt-7 pb-3 max-sm:max-h-[90dvh] sm:max-w-md sm:pt-4" showCloseButton={false}>
+        <SheetTitle className="sr-only">Question {id}</SheetTitle>
+        <SheetDescription className="sr-only">Answer, reply in the thread, or dismiss the question</SheetDescription>
+        {!q ? (
+          <div className="space-y-3 p-5 pt-8" aria-busy="true">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex items-center gap-2 px-4 pb-2">
+              <Avatar name={q.asked_by ?? "?"} className="size-7 text-[12px]" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[14px] font-semibold">
+                  {q.asked_by ?? "someone"}
+                  {q.to && <span className="font-normal text-muted-foreground"> to {q.to}</span>}
+                </p>
+                <p className="font-mono text-[11px] text-muted-foreground">
+                  {q.id} · {fmtAgo(q.created_at, now)}
+                </p>
+              </div>
+              <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close">
+                <X />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 pb-3">
+              <Markdown className="text-[14.5px]">{q.body}</Markdown>
+              <Thread q={q} />
+            </div>
+            <div className="space-y-3 border-t border-border px-4 pt-3 pb-1">
+              <div role="tablist" aria-label="Reply as" className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1">
+                {(["answer", "note", "dismiss"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === m}
+                    onClick={() => setMode(m)}
+                    className={cn(
+                      "min-h-9 rounded-lg text-[13px] font-medium capitalize transition-colors",
+                      mode === m ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
+                    )}
+                  >
+                    {m === "note" ? "Reply" : m}
+                  </button>
+                ))}
+              </div>
+              {q.status !== "open" ? (
+                <p className="text-[13px] text-muted-foreground">This question is {q.status === "dismissed" ? "dismissed" : "answered"}.</p>
+              ) : mode === "answer" ? (
+                <AnswerControls q={q} idPrefix={`sheet-${q.id}`} initialPick={option ?? null} onDone={onClose} />
+              ) : mode === "note" ? (
+                <NoteForm q={q} />
+              ) : (
+                <DismissForm q={q} onDone={onClose} />
+              )}
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function QuestionCard({
+  q,
+  highlight,
+  onOpen,
+}: {
+  q: QuestionView;
+  highlight: boolean;
+  onOpen: (id: string, mode: Mode, option?: string) => void;
+}) {
   const now = useNow();
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
@@ -293,20 +373,22 @@ function QuestionCard({ q, highlight }: { q: QuestionView; highlight: boolean })
       id={`q-${q.id}`}
       aria-label={`Question ${q.id}`}
       className={cn(
-        "scroll-mt-24 space-y-3.5 rounded-[14px] border bg-card px-4 py-4",
+        "relative scroll-mt-24 space-y-3 overflow-hidden rounded-[14px] border bg-card py-3.5 pr-3.5 pl-4.5 before:absolute before:inset-y-0 before:left-0 before:w-1.5 before:bg-primary md:pr-4 md:pl-5",
         highlight ? "border-primary ring-2 ring-primary/30" : "border-border",
       )}
     >
-      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-        <Avatar name={q.asked_by ?? "?"} className="size-6 text-[11px]" />
-        <span className="text-[13.5px] font-semibold">{q.asked_by ?? "someone"}</span>
-        {q.to && <span className="text-[12.5px] text-muted-foreground">to {q.to}</span>}
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {q.id} · {fmtAgo(q.created_at, now)}
-        </span>
-        <span className="ml-auto flex flex-wrap items-center gap-1.5">
-          {q.task && <TaskChip id={q.task} />}
-        </span>
+      <div className="flex items-center gap-2.5">
+        <Avatar name={q.asked_by ?? "?"} className="size-8 text-[13px]" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[14px] leading-tight font-semibold">
+            {q.asked_by ?? "someone"}
+            {q.to && <span className="font-normal text-muted-foreground"> to {q.to}</span>}
+          </p>
+          <p className="font-mono text-[11px] text-muted-foreground">
+            {q.id} · {fmtAgo(q.created_at, now)}
+          </p>
+        </div>
+        {q.task && <TaskChip id={q.task} />}
       </div>
 
       {(q.wait || q.picked_by) && (
@@ -330,15 +412,37 @@ function QuestionCard({ q, highlight }: { q: QuestionView; highlight: boolean })
 
       <Attachments compact target={{ pot: projectOfTask(q.id), question: q.id }} files={q.files} />
 
-      <Thread q={q} />
-
-      <AnswerControls q={q} idPrefix={`q-${q.id}`} />
-
-      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-t border-border pt-3">
-        <div className="min-w-0 flex-1 basis-64">
-          <NoteForm q={q} />
+      {q.options.length > 0 && (
+        <div role="group" aria-label={`Suggested answers for ${q.id}`} className="flex flex-wrap gap-2">
+          {q.options.map((o) => (
+            <button
+              key={o}
+              type="button"
+              onClick={() => onOpen(q.id, "answer", o)}
+              className="min-h-11 max-w-full rounded-xl border border-input bg-background px-3.5 py-2 text-left text-[14px] leading-snug font-medium transition-colors hover:border-primary/60 hover:bg-primary/5 active:bg-primary/10"
+            >
+              {o}
+            </button>
+          ))}
         </div>
-        <DismissButton q={q} />
+      )}
+
+      {q.notes.length > 0 && (
+        <button type="button" onClick={() => onOpen(q.id, "note")} className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground hover:text-foreground">
+          <MessageCircle className="size-3.5" aria-hidden="true" /> {plural(q.notes.length, "reply", "replies")}
+        </button>
+      )}
+
+      <div className="flex items-center gap-2 border-t border-border pt-3">
+        <Button className="flex-1 sm:flex-none" onClick={() => onOpen(q.id, "answer")}>
+          <Send /> Answer
+        </Button>
+        <Button variant="outline" onClick={() => onOpen(q.id, "note")}>
+          <MessageCircle /> Reply
+        </Button>
+        <Button variant="ghost" className="text-muted-foreground" onClick={() => onOpen(q.id, "dismiss")}>
+          <X /> <span className="max-sm:sr-only">Dismiss</span>
+        </Button>
       </div>
     </li>
   );
@@ -356,7 +460,7 @@ function ClosedCard({ q, highlight }: { q: QuestionView; highlight: boolean }) {
       ref={ref}
       id={`q-${q.id}`}
       aria-label={`Question ${q.id}`}
-      className={cn("scroll-mt-24 space-y-2 rounded-[14px] border bg-card/60 px-4 py-3.5", highlight ? "border-primary ring-2 ring-primary/30" : "border-border")}
+      className={cn("relative scroll-mt-24 space-y-2 overflow-hidden rounded-[14px] border bg-card/70 py-3.5 pr-3.5 pl-4.5 before:absolute before:inset-y-0 before:left-0 before:w-1.5", dismissed ? "before:bg-muted-foreground/40" : "before:bg-success", highlight ? "border-primary ring-2 ring-primary/30" : "border-border")}
     >
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
         <span className="font-mono text-[11.5px] font-bold">{q.id}</span>
@@ -385,19 +489,29 @@ function ClosedCard({ q, highlight }: { q: QuestionView; highlight: boolean }) {
 
 // ---------------------------------------------------------------- the view
 
+type Filter = "open" | "answered" | "dismissed";
+
 export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => void }) {
   const open = useQuestions(potKey, "open");
   const all = useQuestions(potKey, "all");
   const [params] = useSearchParams();
   const focus = params.get("question");
-  const [showClosed, setShowClosed] = useState(false);
+  const [filter, setFilter] = useState<Filter>("open");
+  const [sheet, setSheet] = useState<SheetState>({ id: null, mode: "answer" });
 
   const openList = useMemo(() => open.data ?? [], [open.data]);
-  const closed = useMemo(() => (all.data ?? []).filter((q) => q.status !== "open"), [all.data]);
-  const focusClosed = !!focus && closed.some((q) => q.id === focus);
+  const answered = useMemo(() => (all.data ?? []).filter((q) => q.status === "answered"), [all.data]);
+  const dismissed = useMemo(() => (all.data ?? []).filter((q) => q.status === "dismissed"), [all.data]);
+  const focusFilter: Filter | null = !focus
+    ? null
+    : answered.some((q) => q.id === focus)
+      ? "answered"
+      : dismissed.some((q) => q.id === focus)
+        ? "dismissed"
+        : null;
   useEffect(() => {
-    if (focusClosed) setShowClosed(true);
-  }, [focusClosed]);
+    if (focusFilter) setFilter(focusFilter);
+  }, [focusFilter]);
 
   if (open.isLoading) return <RowSkeleton rows={3} />;
   if (open.error) {
@@ -408,60 +522,87 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
     );
   }
 
+  const tabs: { id: Filter; label: string; n: number }[] = [
+    { id: "open", label: "Open", n: openList.length },
+    { id: "answered", label: "Answered", n: answered.length },
+    { id: "dismissed", label: "Dismissed", n: dismissed.length },
+  ];
+  const shown = filter === "answered" ? answered : dismissed;
+
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-[22px]">For the chef</h2>
-        <p className="text-[13px] text-muted-foreground">
-          {openList.length === 0
-            ? "Nothing waiting on you."
-            : `${plural(openList.length, "question")} waiting for a decision, oldest first.`}
-        </p>
+      <div className="flex items-center gap-2">
+        <div role="tablist" aria-label="Question status" className="grid flex-1 grid-cols-3 gap-1 rounded-xl bg-muted p-1 sm:flex-none sm:grid-cols-[repeat(3,8rem)]">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={filter === t.id}
+              onClick={() => setFilter(t.id)}
+              className={cn(
+                "flex min-h-10 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium transition-colors",
+                filter === t.id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
+              )}
+            >
+              {t.label}
+              <span
+                className={cn(
+                  "font-mono text-[11px]",
+                  t.id === "open" && t.n > 0 ? "rounded-full bg-primary px-1.5 leading-4 text-primary-foreground" : "text-muted-foreground",
+                )}
+              >
+                {t.n}
+              </span>
+            </button>
+          ))}
+        </div>
+        <Button variant="outline" size="icon" onClick={onAsk} aria-label="Ask a question" className="shrink-0 sm:ml-auto sm:w-auto sm:px-3">
+          <Plus /> <span className="max-sm:sr-only">Ask a question</span>
+        </Button>
       </div>
 
-      {openList.length === 0 ? (
-        <EmptyState
-          className="mt-4"
-          title="No questions for the chef"
-          action={
-            <Button variant="outline" onClick={onAsk}>
-              <Plus /> Ask a question
-            </Button>
-          }
-        >
-          Cooks ask here when they need a decision. Answer in the console, or in a chat with your own agent.
+      {filter === "open" ? (
+        openList.length === 0 ? (
+          <EmptyState
+            className="mt-4"
+            title="Nothing waiting on you"
+            action={
+              <Button variant="outline" onClick={onAsk}>
+                <Plus /> Ask a question
+              </Button>
+            }
+          >
+            Cooks ask here when they need a decision. Answer in the console, or in a chat with your own agent.
+          </EmptyState>
+        ) : (
+          <>
+            <p className="label-caps mt-4 mb-2 px-0.5">{plural(openList.length, "question")} waiting · oldest first</p>
+            <ul className="space-y-3" aria-label="Open questions">
+              {openList.map((q) => (
+                <QuestionCard key={q.id} q={q} highlight={focus === q.id} onOpen={(id, mode, option) => setSheet({ id, mode, option })} />
+              ))}
+            </ul>
+          </>
+        )
+      ) : shown.length === 0 ? (
+        <EmptyState band={false} className="mt-4" title={`No ${filter} questions`}>
+          {filter === "answered" ? "Questions you answer show up here." : "Questions you dismiss show up here, with the reason you gave."}
         </EmptyState>
       ) : (
-        <ul className="mt-4 space-y-3" aria-label="Open questions">
-          {openList.map((q) => (
-            <QuestionCard key={q.id} q={q} highlight={focus === q.id} />
+        <ul className="mt-4 space-y-2.5" aria-label={`${filter} questions`}>
+          {shown.map((q) => (
+            <ClosedCard key={q.id} q={q} highlight={focus === q.id} />
           ))}
         </ul>
       )}
 
-      {closed.length > 0 && (
-        <section className="mt-8" aria-labelledby="answered-questions">
-          <h2 id="answered-questions" className="m-0">
-            <button
-              type="button"
-              aria-expanded={showClosed}
-              onClick={() => setShowClosed((o) => !o)}
-              className="flex w-full items-center gap-2 rounded-md py-1 text-left"
-            >
-              <ChevronRight className={cn("size-4 text-muted-foreground transition-transform", showClosed && "rotate-90")} aria-hidden="true" />
-              <span className="font-display text-[16px]">Answered</span>
-              <span className="font-mono text-[11.5px] text-muted-foreground">{closed.length}</span>
-            </button>
-          </h2>
-          {showClosed && (
-            <ul className="mt-2 space-y-2.5">
-              {closed.map((q) => (
-                <ClosedCard key={q.id} q={q} highlight={focus === q.id} />
-              ))}
-            </ul>
-          )}
-        </section>
-      )}
+      <QuestionSheet
+        key={sheet.id ? `${sheet.id}/${sheet.option ?? ""}` : "none"}
+        state={sheet}
+        setMode={(mode) => setSheet((st) => ({ ...st, mode }))}
+        onClose={() => setSheet((st) => ({ ...st, id: null }))}
+      />
     </div>
   );
 }

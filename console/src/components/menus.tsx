@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import type { MenuView } from "@corntchap/api";
-import { ChevronRight, Loader2, PartyPopper, Pencil, Plus, RotateCcw, Soup } from "lucide-react";
+import { ChevronRight, Loader2, MoreHorizontal, PartyPopper, Pencil, Plus, RotateCcw, Soup } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useProc, useProcCall } from "@/lib/data";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -188,9 +189,7 @@ export function MenusView({
       ) : (
         <>
           <div className="flex items-center justify-between gap-3">
-            <p className="text-[13px] text-muted-foreground">
-              {open.length === 0 ? "Nothing is cooking right now." : `${plural(open.length, "menu")} being cooked.`}
-            </p>
+            <p className="label-caps">{open.length === 0 ? "Nothing is cooking right now" : `Cooking · ${open.length}`}</p>
             <Button variant="outline" size="sm" onClick={onNew}>
               <Plus /> New menu
             </Button>
@@ -248,8 +247,8 @@ function MenuCard({
   const served = menu.status === "served";
   const finished = menu.total > 0 && menu.open + menu.claimed + menu.blocked === 0;
   return (
-    <li className={cn("rounded-[14px] border border-border bg-card px-4 py-3.5", served && "bg-card/60")}>
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+    <li className={cn("rounded-[14px] border border-border bg-card px-3.5 py-3.5 md:px-4", served && "bg-card/60")}>
+      <div className="flex items-start justify-between gap-x-3">
         <div className="min-w-0">
           <h3 className="flex flex-wrap items-center gap-x-2 text-[17px]">
             <Link
@@ -264,20 +263,34 @@ function MenuCard({
           </h3>
           {menu.description && <p className="mt-0.5 max-w-xl text-[13px] text-muted-foreground">{menu.description}</p>}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={onEdit} aria-label={`Edit ${menu.name}`}>
-            <Pencil /> Edit
-          </Button>
-          {onServe && (
-            <Button size="sm" variant={finished ? "default" : "outline"} onClick={onServe}>
-              <PartyPopper /> Serve menu
+        <div className="flex shrink-0 items-center gap-1">
+          {onServe && finished && (
+            <Button size="sm" onClick={onServe}>
+              <PartyPopper /> Serve
             </Button>
           )}
-          {onReopen && (
-            <Button size="sm" variant="outline" onClick={onReopen} disabled={reopening}>
-              {reopening ? <Loader2 className="animate-spin" /> : <RotateCcw />} Reopen
-            </Button>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${menu.name}`}>
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuItem onSelect={onEdit} className="min-h-10">
+                <Pencil /> Edit
+              </DropdownMenuItem>
+              {onServe && !finished && (
+                <DropdownMenuItem onSelect={onServe} className="min-h-10">
+                  <PartyPopper /> Serve menu
+                </DropdownMenuItem>
+              )}
+              {onReopen && (
+                <DropdownMenuItem onSelect={onReopen} disabled={reopening} className="min-h-10">
+                  {reopening ? <Loader2 className="animate-spin" /> : <RotateCcw />} Reopen
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
       <div className="mt-3 flex items-center gap-3">
