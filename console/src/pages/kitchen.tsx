@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import type { MenuView, ProjectSummary, TaskView } from "@corntchap/api";
 import type { ViewOut } from "@corntchap/api";
-import { Check, ChevronDown, Pencil, Plus, Settings2, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, GitBranch, Pencil, Plus, Settings2, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useProc, useProjects, useQuestions } from "@/lib/data";
 import { useLive } from "@/lib/live";
@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState, RowSkeleton, BUCKET_DOT } from "@/components/bits";
+import { NoPot } from "@/components/no-pot";
 import { PaletteButton } from "@/components/shell";
 import { RefreshButton } from "@/components/refresh-button";
 import { EventFeed } from "@/components/event-feed";
@@ -76,7 +77,6 @@ function applyFilters(tasks: TaskView[], f: Filters): TaskView[] {
 
 export function PotRedirect() {
   const projects = useProjects();
-  const { setPaletteOpen: _p, openNewTask } = useUi();
   if (projects.isLoading) {
     return (
       <div className="px-8 py-10">
@@ -87,16 +87,7 @@ export function PotRedirect() {
   const remembered = lastPot();
   const first = projects.data?.find((p) => p.key === remembered) ?? projects.data?.[0];
   if (first) return <Navigate to={`/pots/${first.key}/${lastView(first.key)}`} replace />;
-  return (
-    <div className="mx-auto max-w-2xl px-5 py-16">
-      <EmptyState
-        title="The pot is empty"
-        action={<Button onClick={() => openNewTask()}>New task</Button>}
-      >
-        No pots yet. An admin starts one under Pots, then tasks can go in and cooks can scoop them.
-      </EmptyState>
-    </div>
-  );
+  return <NoPot />;
 }
 
 export function KitchenPage() {
@@ -176,9 +167,10 @@ export function KitchenPage() {
       </div>
     );
   }
+  if (!project && (projects.data ?? []).length === 0 && !projects.error) return <NoPot />;
   if (!project) {
     return (
-      <div className="mx-auto max-w-2xl px-5 py-16">
+      <div className="mx-auto max-w-2xl px-4 py-10 sm:px-5 sm:py-16">
         <EmptyState title={`No pot called ${potKey}`} action={<Button asChild variant="outline"><Link to="/">Back to the kitchen</Link></Button>}>
           Either it does not exist or you are not on its team.
         </EmptyState>
@@ -531,7 +523,7 @@ function FilterSheet({
             </>,
           )}
           {labels.length > 0 && section("Label", labels.map((l) => <Pill key={l} on={filters.label === l} onClick={() => toggle("label", l)}>{l}</Pill>))}
-          {repos.length > 0 && section("Repository", repos.map((r) => <Pill key={r} on={filters.repo === r} onClick={() => toggle("repo", r)}>{r}</Pill>))}
+          {repos.length > 0 && section("Repository", repos.map((r) => <Pill key={r} on={filters.repo === r} onClick={() => toggle("repo", r)}><GitBranch className="size-3.5 text-primary" aria-hidden="true" /><span className="font-mono text-[13px]">{r}</span></Pill>))}
           {holders.length > 0 && section("Cook", holders.map((h) => <Pill key={h} on={filters.holder === h} onClick={() => toggle("holder", h)}>{h}</Pill>))}
         </div>
         <div className="flex gap-2 border-t border-border bg-card px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
@@ -690,10 +682,10 @@ function WideHeader({ project, base, viewKey, saved, taskView, onNewView, filter
             </DropdownMenuRadioGroup>
           </FilterChip>
           {repos.length > 0 && (
-            <FilterChip label="Repository" value={filters.repo} onClear={() => setFilter("repo", undefined)}>
+            <FilterChip label="Repository" icon={<GitBranch className="size-3 text-primary" aria-hidden="true" />} value={filters.repo} onClear={() => setFilter("repo", undefined)}>
               <DropdownMenuRadioGroup value={filters.repo ?? ""} onValueChange={(v) => setFilter("repo", v || undefined)}>
                 {repos.map((r) => (
-                  <DropdownMenuRadioItem key={r} value={r}>
+                  <DropdownMenuRadioItem key={r} value={r} className="font-mono text-[12.5px]">
                     {r}
                   </DropdownMenuRadioItem>
                 ))}
@@ -733,8 +725,10 @@ function FilterChip({
   onClear,
   children,
   disabled,
+  icon,
 }: {
   label: string;
+  icon?: React.ReactNode;
   value: string | undefined;
   onClear: () => void;
   children: React.ReactNode;
@@ -750,8 +744,9 @@ function FilterChip({
         )}
       >
         <DropdownMenuTrigger disabled={disabled} className="inline-flex h-full items-center gap-1.5 rounded-full pr-2 pl-3">
+          {icon}
           <span className="text-muted-foreground">{label}</span>
-          {value && <span className="font-medium">{value}</span>}
+          {value && <span className={cn("font-medium", icon && "font-mono")}>{value}</span>}
           <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
         </DropdownMenuTrigger>
         {value && (

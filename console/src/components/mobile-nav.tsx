@@ -306,7 +306,7 @@ export function PotSheet({ open, onOpenChange }: { open: boolean; onOpenChange: 
             );
           })}
           {projects.data?.length === 0 && (
-            <li className="px-3 py-4 text-[14px] text-muted-foreground">No pots yet.{me.is_admin ? " Start one under More, Pots." : " Ask an admin to start one."}</li>
+            <li className="px-3 py-4 text-[14px] text-muted-foreground">No pots yet.{me.is_admin ? " Start one under More, Pots." : " Ask an admin to add you to a team."}</li>
           )}
         </ul>
       </SheetContent>
@@ -317,6 +317,7 @@ export function PotSheet({ open, onOpenChange }: { open: boolean; onOpenChange: 
 /** Phones: the top bar with the pot switcher, search and New task. */
 export function PhoneTopBar() {
   const pot = useCurrentPot();
+  const hasPots = (useProjects().data ?? []).length > 0;
   const { setPaletteOpen, openNewTask } = useUi();
   const [pots, setPots] = useState(false);
   return (
@@ -344,14 +345,16 @@ export function PhoneTopBar() {
           <button type="button" onClick={() => setPaletteOpen(true)} aria-label="Search and jump" className="flex size-11 items-center justify-center rounded-xl active:bg-accent">
             <Search className="size-5" />
           </button>
-          <button
-            type="button"
-            onClick={() => openNewTask(pot?.key)}
-            aria-label="New task"
-            className="flex size-11 items-center justify-center rounded-xl text-primary active:bg-accent"
-          >
-            <Plus className="size-6" />
-          </button>
+          {hasPots && (
+            <button
+              type="button"
+              onClick={() => openNewTask(pot?.key)}
+              aria-label="New task"
+              className="flex size-11 items-center justify-center rounded-xl text-primary active:bg-accent"
+            >
+              <Plus className="size-6" />
+            </button>
+          )}
         </div>
       </header>
       <PotSheet open={pots} onOpenChange={setPots} />

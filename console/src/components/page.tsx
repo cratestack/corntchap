@@ -19,7 +19,7 @@ export function PageShell({
   className?: string;
 }) {
   return (
-    <div className={cn("px-4 pt-4 pb-10 sm:px-5 sm:pt-6 sm:pb-16 lg:px-8", className)}>
+    <div className={cn("px-4 pt-4 pb-10 md:px-5 md:pt-6 md:pb-16 lg:px-8", className)}>
       <header>
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
           <div className="min-w-0 flex-1 basis-40">

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, GitBranch } from "lucide-react";
 import type { TaskView } from "@corntchap/api";
 import { cn } from "@/lib/utils";
 import { colorFor, fmtLease, initial, leaseLeftMs, useNow, type Bucket } from "@/lib/format";
@@ -91,16 +91,20 @@ export function ProgressBar({ done, total, className }: { done: number; total: n
   );
 }
 
-/** A repository alias on a task or a cook scope: mono, with a primary tint so it does not read as a label. */
+/**
+ * A repository on a task, a filter or a cook scope. Deliberately unlike a label: a squared chip with a git-branch icon
+ * and a solid indigo hairline, where labels are quiet pills. `size-3` icon scales with the text.
+ */
 export function RepoChip({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border border-primary/30 bg-primary/5 px-2 py-px font-mono text-[11px] font-medium text-foreground",
+        "inline-flex max-w-full items-center gap-1 rounded-[5px] border border-foreground/25 bg-card px-1.5 py-px font-mono text-[11px] font-medium text-foreground",
         className,
       )}
     >
-      {children}
+      <GitBranch className="size-[1em] shrink-0 text-primary" aria-hidden="true" />
+      <span className="min-w-0 truncate">{children}</span>
     </span>
   );
 }

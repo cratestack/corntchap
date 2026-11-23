@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, type FormEvent, type ReactNode } from "react";
-import { Link, Navigate, useNavigate } from "react-router";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { Check, ChevronRight, Flame, Loader2, Pencil, Plus, Power, RotateCw, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -348,7 +348,15 @@ export function PotsAdminPage() {
   const projects = useProjects();
   const teams = useV1<TeamRow[]>("/teams");
   const call = useV1Call();
-  const [creating, setCreating] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const [creating, setCreating] = useState(params.get("new") === "1");
+  useEffect(() => {
+    if (params.get("new") === "1") {
+      const n = new URLSearchParams(params);
+      n.delete("new");
+      setParams(n, { replace: true });
+    }
+  }, [params, setParams]);
   const [team, setTeam] = useState("");
   const [key, setKey] = useState("");
   const [name, setName] = useState("");

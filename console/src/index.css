@@ -215,7 +215,13 @@
 .live-dot { animation: corn-pulse 2s ease-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   .live-dot { animation: none; }
-  * { scroll-behavior: auto !important; }
+  /* no decorative motion: transitions and one-shot animations collapse; spinners (animate-spin) keep turning */
+  *, ::before, ::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+  .animate-pulse, [class*="animate-in"], [class*="animate-out"] { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
 
 /* skeleton shimmer in the cream palette */
