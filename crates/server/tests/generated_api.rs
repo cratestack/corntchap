@@ -511,6 +511,7 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "save_view",
             "set_enabled",
             "set_grants",
+            "set_lease_ttl",
             "set_main_station",
             "start_station",
             "toss_task",

@@ -437,6 +437,11 @@ async fn live_leases(c: &mut PgConnection, agent: Uuid) -> Result<i64> {
     .await?)
 }
 
+/// A lease length asked for (seconds), else the pot's: at least 10 seconds, at most a day.
+fn lease_ttl(asked: Option<f64>, pot: f64) -> f64 {
+    asked.unwrap_or(pot).clamp(10.0, MAX_TTL_SECS)
+}
+
 fn lease_view(t: Value, epoch: i64, expires: DateTime<Utc>) -> Value {
     json!({ "task": t, "lease": { "epoch": epoch, "expires_at": expires } })
 }
@@ -448,9 +453,11 @@ pub async fn claim_next(
     labels: &[String],
     menu: Option<&str>,
     station: Option<&str>,
+    ttl_s: Option<f64>,
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let pr = project_by_key(&mut tx, p, project).await?;
+    let ttl = lease_ttl(ttl_s, pr.ttl_secs);
     let st = crate::stations::for_claim(&mut tx, p, station, pr.id).await?;
     let menu = menu.map(crate::menus::slug).filter(|m| !m.is_empty());
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
@@ -478,7 +485,7 @@ pub async fn claim_next(
     )
     .bind(pr.id)
     .bind(p.id)
-    .bind(pr.ttl_secs)
+    .bind(ttl)
     .bind(labels)
     .bind(menu)
     .bind(st)
@@ -515,10 +522,12 @@ pub async fn claim_task(
     p: &Principal,
     r: &str,
     station: Option<&str>,
+    ttl_s: Option<f64>,
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
     let st = crate::stations::for_claim(&mut tx, p, station, t.project_id).await?;
+    let ttl = lease_ttl(ttl_s, t.ttl_secs);
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
         .bind(p.id.to_string())
         .execute(&mut *tx)
@@ -537,7 +546,7 @@ pub async fn claim_task(
     )
     .bind(t.id)
     .bind(p.id)
-    .bind(t.ttl_secs)
+    .bind(ttl)
     .bind(st)
     .fetch_optional(&mut *tx)
     .await?;

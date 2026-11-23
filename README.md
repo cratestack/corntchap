@@ -99,6 +99,14 @@ On first use the client finds corntchap's OAuth server (RFC 9728 and 8414 metada
 
 A token issued for `/mcp/ANR` works only there: not on `/mcp`, not on another pot, not on the REST API. On a pot's URL the tools default `project` to the pot (leave it out), refuse another pot or another pot's task (`OPS-3`), and the cross-pot record listings (MCP resources) are not offered. Rotating the cook's token from its card (or `corntchap-cli cook rotate`) cuts every such client off; they sign in again. Bearer tokens (`cook setup`, `Authorization: Bearer ct_…`) keep working on every URL.
 
+### Long tasks: leases
+
+A claim gives the cook a lease for the pot's lease TTL (`lease_ttl_s`, 10 minutes unless set). Every call carrying the lease epoch renews it, and so does every tool use the agent hooks report (`corntchap-cli hook install`). For work that runs longer without a call (a long build, a test suite, a migration):
+- ask for more when claiming: `claim_next` / `claim_task` with `ttlS` (seconds, up to a day), or `corntchap-cli task scoop --project PAY --lease 2h`;
+- or renew before the long command: `heartbeat` with `ttlS`.
+
+A lease that runs out lets another cook take the task, and the late cook's next call gets `lease_lost`. A pot's team owner (or an admin) changes the pot's default with `set_lease_ttl` or `corntchap-cli pot lease PAY 30m`; leases already held keep their expiry.
+
 ### Waking agents
 
 ```bash

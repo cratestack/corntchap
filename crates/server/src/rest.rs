@@ -280,6 +280,7 @@ async fn claim_next(
         &arr(&b, "labels"),
         menu.as_deref(),
         station.as_deref(),
+        b["ttl_s"].as_f64(),
     )
     .await?)
 }
@@ -659,8 +660,16 @@ async fn task_claim(
     Path(id): Path<String>,
     body: Option<Json<Value>>,
 ) -> J {
-    let station = body.and_then(|Json(b)| s(&b, "station"));
-    ok(service::claim_task(&st.db, &p.worker()?, &id, station.as_deref()).await?)
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let station = s(&b, "station");
+    ok(service::claim_task(
+        &st.db,
+        &p.worker()?,
+        &id,
+        station.as_deref(),
+        b["ttl_s"].as_f64(),
+    )
+    .await?)
 }
 async fn task_heartbeat(
     State(st): State<AppState>,
