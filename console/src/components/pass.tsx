@@ -160,7 +160,8 @@ export function PassView({ potKey }: { potKey: string }) {
 
   // your own cooks that are not chefs of this pot's team
   const teams = useV1<TeamRow[]>("/teams");
-  const canManage = me.is_admin || teams.data?.find((t) => t.name === team)?.role === "owner";
+  // your own cooks may be added by you, whatever your role in the team
+  const canManage = me.is_admin || !!teams.data?.find((t) => t.name === team)?.role;
   const outside = useMemo(
     () =>
       (cooks.agents ?? [])
@@ -497,7 +498,7 @@ function OutsideRow({ cook, team, canManage }: { cook: CookInfo; team: string | 
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[14.5px] font-medium text-muted-foreground">{cook.name}</span>
           <span className="block text-[12px] leading-snug text-muted-foreground">
-            {canManage ? `Not in ${team ?? "this pot's"} team yet.` : "Not in this pot's team: ask the team owner to add it."}
+            Not in {team ?? "this pot's"} team yet.
           </span>
         </span>
       </div>

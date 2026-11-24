@@ -584,7 +584,7 @@ export function TeamsAdminPage() {
           <Input id="team-name" required autoFocus autoCapitalize="none" value={name} onChange={(e) => setName(e.target.value)} placeholder="acme" className="h-11" />
         </div>
       </FormDialog>
-      <AddMember team={adding} onClose={() => setAdding(null)} />
+      <AddMember team={adding} onClose={() => setAdding(null)} ownCooksOnly={!!adding && !me.is_admin && teams.data?.find((t) => t.name === adding)?.role !== "owner"} />
     </PageShell>
   );
 }
@@ -615,11 +615,9 @@ function TeamCard({ team, canManage, onAdd }: { team: TeamRow; canManage: boolea
           {list.length > 6 && <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">+{list.length - 6}</span>}
           {members.isLoading && <span className="text-[12px] text-muted-foreground">Loading…</span>}
         </div>
-        {canManage && (
-          <Button variant="outline" size="sm" onClick={onAdd}>
-            <UserPlus /> Add chef
-          </Button>
-        )}
+        <Button variant="outline" size="sm" onClick={onAdd}>
+          <UserPlus /> {canManage ? "Add chef" : "Add my cook"}
+        </Button>
       </div>
     </li>
   );
@@ -633,7 +631,8 @@ interface Candidate {
   kind: "user" | "cook";
 }
 
-export function AddMember({ team, onClose }: { team: string | null; onClose: () => void }) {
+/** `ownCooksOnly`: a plain chef of the team, who may add only their own cooks (as chefs). */
+export function AddMember({ team, onClose, ownCooksOnly = false }: { team: string | null; onClose: () => void; ownCooksOnly?: boolean }) {
   const call = useV1Call();
   const me = useSession();
   const open = !!team;
@@ -653,10 +652,10 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
       .filter((u) => !u.disabled && !taken.has(u.name))
       .map((u) => ({ principal: u.name, label: u.name, display: u.display_name, kind: "user" as const }));
     const cookList: Candidate[] = (cooks.data ?? [])
-      .filter((c) => !c.disabled && !taken.has(c.name))
+      .filter((c) => !c.disabled && !taken.has(c.name) && (!ownCooksOnly || c.owner === me.name))
       .map((c) => ({ principal: c.name, label: c.name, kind: "cook" as const }));
     return [...people, ...cookList];
-  }, [users.data, cooks.data, members.data]);
+  }, [users.data, cooks.data, members.data, ownCooksOnly, me.name]);
   const q = query.trim().toLowerCase();
   const shown = candidates.filter((c) => !q || `${c.label} ${c.display ?? ""} ${c.kind}`.toLowerCase().includes(q));
   const loading = (me.is_admin && users.isLoading) || cooks.isLoading || members.isLoading;
@@ -669,14 +668,14 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
       setHandle("");
     }
   }, [open]);
-  const principal = who?.principal ?? (me.is_admin ? "" : handle.trim().replace(/^@/, ""));
+  const principal = who?.principal ?? (me.is_admin || ownCooksOnly ? "" : handle.trim().replace(/^@/, ""));
 
   return (
     <FormDialog
       open={open}
       onOpenChange={(o) => !o && onClose()}
-      title={`Add to ${team}`}
-      description={me.is_admin ? "Pick a person or a cook that is not on this team yet." : "Pick one of your cooks, or type a person's handle."}
+      title={ownCooksOnly ? `Add my cook to ${team}` : `Add to ${team}`}
+      description={ownCooksOnly ? "Pick one of your cooks that is not on this team yet. It joins as a chef." : me.is_admin ? "Pick a person or a cook that is not on this team yet." : "Pick one of your cooks, or type a person's handle."}
       busy={busy}
       submitLabel="Add"
       disabled={!principal}
@@ -684,7 +683,7 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
         if (!principal) return;
         setBusy(true);
         try {
-          await call("POST", `/teams/${team}/members`, { principal, role });
+          await call("POST", `/teams/${team}/members`, { principal, role: ownCooksOnly ? "member" : role });
           toast.success(`${principal} joined ${team}`);
           onClose();
         } catch (e) {
@@ -704,7 +703,7 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
             autoComplete="off"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={me.is_admin ? "Search people and cooks" : "Search your cooks"}
+            placeholder={me.is_admin && !ownCooksOnly ? "Search people and cooks" : "Search your cooks"}
             className="h-11 pl-9"
           />
         </div>
@@ -731,12 +730,13 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
           })}
         </div>
       </div>
-      {!me.is_admin && (
+      {!me.is_admin && !ownCooksOnly && (
         <div className="space-y-1.5">
           <Label htmlFor="mem-handle">Or a person's handle</Label>
           <Input id="mem-handle" value={handle} disabled={!!who} onChange={(e) => setHandle(e.target.value)} placeholder="ada" autoComplete="off" autoCapitalize="none" className="h-11 font-mono" />
         </div>
       )}
+      {!ownCooksOnly && (
       <div className="space-y-1.5">
         <Label>Role</Label>
         <div role="radiogroup" aria-label="Role" className="grid grid-cols-2 gap-2">
@@ -757,6 +757,7 @@ export function AddMember({ team, onClose }: { team: string | null; onClose: () 
           ))}
         </div>
       </div>
+      )}
     </FormDialog>
   );
 }

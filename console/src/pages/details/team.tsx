@@ -8,7 +8,7 @@ import { ConfirmDialog, DeleteDialog, RenameDialog } from "@/components/rename-d
 import { AddMember } from "@/pages/admin";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api";
-import { useProcCall, useProjects, useTeamChefs, useV1, useV1Call, type MemberRow, type TeamRow } from "@/lib/data";
+import { useAgents, useProcCall, useProjects, useTeamChefs, useV1, useV1Call, type MemberRow, type TeamRow } from "@/lib/data";
 import { useSession } from "@/lib/session";
 import { Crumb, linkClass } from "./common";
 
@@ -26,6 +26,9 @@ export function TeamDetailsPage() {
 
   const team = (teams.data ?? []).find((t) => t.name.toLowerCase() === name.toLowerCase());
   const members = useTeamChefs(team?.name);
+  const agents = useAgents();
+  // a chef may remove the cooks they own
+  const ownCooks = new Set((agents.data ?? []).filter((a) => a.owner === me.name).map((a) => a.name));
   const canManage = !!team && (me.is_admin || team.role === "owner");
   const pots = (projects.data ?? []).filter((p) => p.team?.toLowerCase() === name.toLowerCase());
 
@@ -73,11 +76,9 @@ export function TeamDetailsPage() {
           </>
         }
         actions={
-          canManage ? (
-            <Button onClick={() => setAdding(true)}>
-              <UserPlus /> Add chef
-            </Button>
-          ) : undefined
+          <Button onClick={() => setAdding(true)}>
+            <UserPlus /> {canManage ? "Add chef" : "Add my cook"}
+          </Button>
         }
       >
         <div className="space-y-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-6 lg:space-y-0 lg:gap-y-6">
@@ -87,7 +88,7 @@ export function TeamDetailsPage() {
                 <RowSkeleton rows={2} />
               </div>
             ) : (members.data ?? []).length === 0 ? (
-              <GroupRow label="Nobody is in this team yet" hint={canManage ? "Add a person or a cook." : undefined} />
+              <GroupRow label="Nobody is in this team yet" hint={canManage ? "Add a person or a cook." : "Add one of your cooks."} />
             ) : (
               members.data!.map((m) => (
                 <div key={m.name} className="flex min-h-14 items-center gap-3 px-4 py-2">
@@ -106,7 +107,7 @@ export function TeamDetailsPage() {
                       {m.kind === "user" ? "person" : "cook"} · {m.role === "member" ? "chef" : m.role}
                     </p>
                   </div>
-                  {canManage && (
+                  {(canManage || ownCooks.has(m.name)) && (
                     <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${m.name} from ${team.name}`} onClick={() => setRemoving(m)}>
                       <Minus />
                     </Button>
@@ -114,7 +115,7 @@ export function TeamDetailsPage() {
                 </div>
               ))
             )}
-            {canManage && <GroupRow icon={<UserPlus />} label="Add a chef" onClick={() => setAdding(true)} />}
+            <GroupRow icon={<UserPlus />} label={canManage ? "Add a chef" : "Add my cook"} onClick={() => setAdding(true)} />
           </Group>
 
           <div className="space-y-6">
@@ -151,7 +152,7 @@ export function TeamDetailsPage() {
             )}
           </div>
         </div>
-        <AddMember team={adding ? team.name : null} onClose={() => setAdding(false)} />
+        <AddMember team={adding ? team.name : null} onClose={() => setAdding(false)} ownCooksOnly={!canManage} />
       </PageShell>
 
       <ConfirmDialog

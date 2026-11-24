@@ -286,7 +286,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
     }
   }
   useEffect(() => {
-    if (open) setTeam((t) => t || teams.data?.find((x) => me.is_admin || x.role === "owner")?.name || "");
+    if (open) setTeam((t) => t || (teams.data?.find((x) => x.role === "owner")?.name ?? teams.data?.[0]?.name) || "");
   }, [open, teams.data, me.is_admin]);
 
   const cloud = runtime === "cloud";
@@ -462,13 +462,11 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
                     <SelectValue placeholder="No team yet: it sees no pot" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(teams.data ?? [])
-                      .filter((t) => me.is_admin || t.role === "owner")
-                      .map((t) => (
-                        <SelectItem key={t.name} value={t.name}>
-                          {t.name}
-                        </SelectItem>
-                      ))}
+                    {(teams.data ?? []).map((t) => (
+                      <SelectItem key={t.name} value={t.name}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

@@ -174,7 +174,7 @@ function TeamPicker({ open, onOpenChange, a, addable }: { open: boolean; onOpenC
         </FormSheetHead>
         <FormSheetBody className="space-y-0 px-0 pb-4">
           <ul className="divide-y divide-border border-y border-border">
-            {addable.length === 0 && <li className="px-6 py-4 text-[13px] text-muted-foreground">Every team you manage already has it.</li>}
+            {addable.length === 0 && <li className="px-6 py-4 text-[13px] text-muted-foreground">Every team you are in already has it.</li>}
             {addable.map((t) => (
               <li key={t.name}>
                 <button
@@ -200,7 +200,7 @@ function TeamPicker({ open, onOpenChange, a, addable }: { open: boolean; onOpenC
   );
 }
 
-/** The teams a cook is in: they decide which pots it sees. Owners of a team (and admins) can move the cook in and out. */
+/** The teams a cook is in: they decide which pots it sees. Its owner, a team's owners and admins can move the cook in and out. */
 function TeamGroup({ a, pots }: { a: AgentRow; pots: { key: string; team?: string | null }[] }) {
   const me = useSession();
   const call = useV1Call();
@@ -208,8 +208,10 @@ function TeamGroup({ a, pots }: { a: AgentRow; pots: { key: string; team?: strin
   const [picking, setPicking] = useState(false);
   const [leaving, setLeaving] = useState<string | null>(null);
   const mine = a.teams ?? [];
-  const manageable = (t: string) => me.is_admin || (teams.data ?? []).some((x) => x.name === t && x.role === "owner");
-  const addable = (teams.data ?? []).filter((t) => !mine.includes(t.name) && (me.is_admin || t.role === "owner"));
+  // a team's owners and admins manage any cook in it; any chef may add or remove a cook they own
+  const mineOwn = a.owner === me.name;
+  const manageable = (t: string) => me.is_admin || mineOwn || (teams.data ?? []).some((x) => x.name === t && x.role === "owner");
+  const addable = (teams.data ?? []).filter((t) => !mine.includes(t.name) && (me.is_admin || mineOwn));
   return (
     <Group title="Teams" hint="The teams decide which pots this cook sees. With no team it sees none.">
       {mine.length === 0 && <GroupRow label="In no team" hint="It sees no pot yet." />}

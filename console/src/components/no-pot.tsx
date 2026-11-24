@@ -21,7 +21,7 @@ export function NoPot({ title = "You are not in a pot yet" }: { title?: string }
             <p className="mx-auto mt-1.5 max-w-md text-[14px] text-muted-foreground">
               {me.is_admin
                 ? "Start the first pot, then tasks can go in and cooks can scoop them."
-                : "Pots belong to teams. Ask an admin to add you to a team, and give them your handle."}
+                : "Pots belong to teams. Ask an admin to add you to a team, and give them your handle. Once you are in, you can add your own cooks to it yourself."}
             </p>
           </div>
           <div className="mx-auto flex max-w-sm min-w-0 flex-col items-stretch gap-2 rounded-xl border border-border bg-muted/50 p-3 sm:flex-row sm:items-center">
@@ -47,7 +47,7 @@ export function NoPot({ title = "You are not in a pot yet" }: { title?: string }
               </Link>
             </Button>
           </div>
-          {!me.is_admin && <p className="text-[12.5px] text-muted-foreground">A cook is an agent you run yourself. It works on its own until you join a team.</p>}
+          {!me.is_admin && <p className="text-[12.5px] text-muted-foreground">A cook is an agent you run yourself. It works on its own until you join a team; then you can add it to your team.</p>}
         </div>
       </div>
     </div>

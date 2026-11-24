@@ -418,15 +418,10 @@ pub async fn authorize(
         }
     };
     let pot_html = match &pot_row {
-        Some((_, key, team, _, owns)) => format!(
-            "<div><dt>Pot</dt><dd><code>{}</code> (team {}){}</dd></div>",
+        Some((_, key, team, _, _)) => format!(
+            "<div><dt>Pot</dt><dd><code>{}</code> (team {}) &middot; <small>a cook outside the team cannot see it: add your cook to the team first (any chef of the team can)</small></dd></div>",
             esc(key),
             esc(team),
-            if *owns {
-                ""
-            } else {
-                " &middot; <small>a cook outside the team cannot see it: ask the team's owner to add it</small>"
-            }
         ),
         None => "<div><dt>Pots</dt><dd>every pot of the cook's teams</dd></div>".into(),
     };
