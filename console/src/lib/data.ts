@@ -205,6 +205,8 @@ export interface AgentRow {
   disabled: boolean;
   last_seen_at: string | null;
   busy: number;
+  /** Cloud targets only: takes ready work, opens a pull request and stops (see the README). */
+  fireAndForget?: boolean;
 }
 
 export interface UserRow {
@@ -229,6 +231,8 @@ export interface MemberRow {
   display_name?: string | null;
   kind: string;
   role: string;
+  /** Cloud targets only: takes ready work, opens a pull request and stops. */
+  fireAndForget?: boolean;
 }
 
 export interface WakeTargetRow {

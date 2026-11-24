@@ -128,24 +128,39 @@ async fn run_jobs(state: AppState) {
 
 /// Expired claims go back to `open`, with an event, in one statement.
 pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
-    let n = sqlx::query(
+    let mut tx = state.db.begin().await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
         "with old as (
            select id, claimed_by from tasks where status = 'claimed' and lease_expires_at < now() for update skip locked),
          expired as (
            update tasks t set status = 'open', claimed_by = null, lease_expires_at = null, updated_at = now()
            from old where t.id = old.id
-           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch, t.station_id)
-         insert into events (project_id, task_id, kind, actor_id, payload)
-         select project_id, id, 'task.lease_expired', null,
-                jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
-                                   'agent_id', expired.was,
-                                   'station', (select s.ref from stations s where s.id = expired.station_id))
-         from expired",
+           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch, t.station_id),
+         logged as (
+           insert into events (project_id, task_id, kind, actor_id, payload)
+           select project_id, id, 'task.lease_expired', null,
+                  jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
+                                     'agent_id', expired.was,
+                                     'station', (select s.ref from stations s where s.id = expired.station_id))
+           from expired returning task_id)
+         select id from expired",
     )
-    .execute(&state.db)
-    .await?
-    .rows_affected();
-    Ok(n)
+    .fetch_all(&mut *tx)
+    .await?;
+    // a task whose PR merged while it was held is done, not free work
+    for id in &ids {
+        // a savepoint: one task that cannot be completed must not undo the reaping of the rest
+        let mut sp = tx.begin().await?;
+        match crate::forge::events::complete_if_merged(&mut sp, *id, None).await {
+            Ok(_) => sp.commit().await?,
+            Err(e) => {
+                tracing::warn!("reaper: completing {id} on merge: {e}");
+                sp.rollback().await?;
+            }
+        }
+    }
+    tx.commit().await?;
+    Ok(ids.len() as u64)
 }
 
 /// People's comments a cook has not answered in time (no comment, completion, release or block
@@ -164,13 +179,10 @@ pub async fn nudge_unanswered(state: &AppState) -> Result<u64, crate::error::Err
     .execute(&mut *tx)
     .await?;
     #[allow(clippy::type_complexity)]
-    let due: Vec<(Uuid, Uuid, Uuid, Uuid, String, i64, String, String, Option<String>, chrono::DateTime<chrono::Utc>, bool)> =
+    let due: Vec<(Uuid, Uuid, Uuid, Uuid, String, i64, String, String, Option<String>, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
-            // the last column: the cook is on call (only cloud targets, no relay)
             "select r.comment_id, r.agent_id, r.task_id, r.project_id, pr.key, t.number, t.title, cm.body,
-                    (select name from principals where id = r.author_id), r.created_at,
-                    (exists (select 1 from wake_targets oc where oc.agent_id = r.agent_id and oc.type = any($2))
-                     and not exists (select 1 from wake_targets oc where oc.agent_id = r.agent_id and oc.type <> all($2)))
+                    (select name from principals where id = r.author_id), r.created_at
              from comment_replies r
              join tasks t on t.id = r.task_id join projects pr on pr.id = r.project_id
              join comments cm on cm.id = r.comment_id
@@ -179,20 +191,10 @@ pub async fn nudge_unanswered(state: &AppState) -> Result<u64, crate::error::Err
              for update of r skip locked",
         )
         .bind(state.config.comment_nudge_minutes as i32)
-        .bind(crate::cloud::CLOUD_TYPES)
         .fetch_all(&mut *tx)
         .await?;
     let n = due.len() as u64;
-    for (comment, agent, task, project, key, number, title, body, author, at, on_call) in due {
-        // a cloud cook is not reminded: the comment already started a run, another would be a new session
-        if on_call {
-            sqlx::query("update comment_replies set nudged_at = now() where comment_id = $1 and agent_id = $2")
-                .bind(comment)
-                .bind(agent)
-                .execute(&mut *tx)
-                .await?;
-            continue;
-        }
+    for (comment, agent, task, project, key, number, title, body, author, at) in due {
         let main: Option<Uuid> = sqlx::query_scalar(
             "select id from stations where agent_id = $1 and project_id = $2 and main",
         )
@@ -398,33 +400,25 @@ impl Dispatcher {
                 .bind(seq)
                 .fetch_optional(&self.state.db)
                 .await;
-        // A message wake (it has a reason) for a cook with cloud targets: batch it for a cloud run.
+        // A message wake (it has a reason) for a fire-and-forget cook: only its owner's direct
+        // message gets here (see questions::wake), and it is batched for one cloud run.
         if let Ok(Some((kind, Some(project), _, payload))) = &row
             && kind == "wake"
             && payload["reason"].is_string()
-            && !crate::cloud::NOT_ON_CALL.contains(&payload["reason"].as_str().unwrap_or(""))
             && let Some(agent) = payload["agent_id"]
                 .as_str()
                 .and_then(|a| a.parse::<Uuid>().ok())
         {
-            // an upstream wake (and a merge notice) is work or news, not a call: it starts a cloud run
-            // only for targets that take work. A CI failure, requested changes or a comment on the
-            // cook's task (reason "forge") is someone talking to it about its task, like a comment.
-            let work = matches!(
-                payload["reason"].as_str(),
-                Some("upstream") | Some(crate::forge::events::REASON_MERGED)
-            );
-            let has_cloud: bool = sqlx::query_scalar(
-                "select exists (select 1 from wake_targets where agent_id = $1 and type = any($2)
-                   and (not $3 or coalesce(config->>'on_call', 'false') <> 'true'))",
-            )
+            let ff: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "select {}",
+                crate::cloud::fire_and_forget_sql("$1")
+            )))
             .bind(agent)
-            .bind(crate::cloud::CLOUD_TYPES)
-            .bind(work)
             .fetch_one(&self.state.db)
             .await
             .unwrap_or(false);
-            if has_cloud {
+            // defense in depth: only a direct message on the pass starts a cloud run
+            if ff && payload["reason"].as_str() == Some("pass") {
                 self.cloud.push((agent, *project, payload.clone()));
             }
             return;
@@ -464,8 +458,6 @@ impl Dispatcher {
                and ($2::uuid is null or a.id <> $2)
                and (not $4 or wt.type = any($3))
                and (wt.projects is null or cardinality(wt.projects) = 0 or pr.key = any(wt.projects))
-               -- a cloud target that is on call is started only when someone calls it
-               and (wt.type <> all($3) or coalesce(wt.config->>'on_call', 'false') <> 'true')
                and exists (select 1 from tasks t where t.project_id = pr.id
                       and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
                       and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
@@ -596,8 +588,8 @@ impl Dispatcher {
             .ok()
             .flatten();
             let Some((name, key)) = row else { continue };
-            let targets: Vec<(Uuid, String, Value)> = sqlx::query_as(
-                "select id, type, config from wake_targets where agent_id = $1 and type = any($2)
+            let targets: Vec<(Uuid, String, Value, Vec<String>)> = sqlx::query_as(
+                "select id, type, config, coalesce(labels, '{}') from wake_targets where agent_id = $1 and type = any($2)
                    and (projects is null or cardinality(projects) = 0 or $3 = any(projects))",
             )
             .bind(agent)
@@ -606,9 +598,11 @@ impl Dispatcher {
             .fetch_all(&mut *conn)
             .await
             .unwrap_or_default();
-            let text =
-                crate::cloud::messages_text(&mut conn, agent, &name, project, &key, &wakes).await;
-            for (target, typ, config) in targets {
+            for (target, typ, config, labels) in targets {
+                let text = crate::cloud::messages_text(
+                    &mut conn, agent, &name, project, &key, &wakes, &labels,
+                )
+                .await;
                 if self
                     .cloud_wait
                     .get(&target)

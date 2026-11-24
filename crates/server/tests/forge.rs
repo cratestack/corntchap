@@ -1,6 +1,6 @@
 //! Forge events (src/forge): signed deliveries, deduplication, which repositories are followed,
 //! how a PR finds its task, what each event does to `forge_prs`, who is woken (and who is not), that
-//! a merge never changes a status, the cloud rules, and the GitHub App manifest flow against a fake
+//! a merge completes only a task nobody holds, the cloud rules, and the GitHub App manifest flow against a fake
 //! GitHub.
 mod common;
 use std::{
@@ -924,7 +924,7 @@ async fn reviews_and_comments_wake_the_holder_but_not_for_its_own_words() {
 }
 
 #[tokio::test]
-async fn a_merge_notifies_and_never_changes_the_status() {
+async fn a_merge_notifies_the_holder_and_leaves_a_held_task_alone() {
     let w = world(false).await;
     w.task("Cart").await;
     w.task("Served").await;
@@ -952,8 +952,9 @@ async fn a_merge_notifies_and_never_changes_the_status() {
         // the same event again (a redelivery with another id) tells nobody twice
         w.send("pull_request", pr_event("closed", "shop", p)).await;
     }
+    // SHOP-2 was already done: its merge says nothing to anyone
     let wakes = w.wakes("cookie", "forge-merged").await;
-    assert_eq!(wakes.len(), 2, "{wakes:?}");
+    assert_eq!(wakes.len(), 1, "{wakes:?}");
     assert!(
         wakes[0].contains("Acme/shop#1 merged")
             && wakes[0].contains("SHOP-1's status is unchanged"),
@@ -963,7 +964,7 @@ async fn a_merge_notifies_and_never_changes_the_status() {
     assert_eq!(
         w.status("SHOP-1").await,
         "claimed",
-        "a merge never serves the task"
+        "a merge does not serve a held task"
     );
     assert_eq!(w.status("SHOP-2").await, "done");
     assert_eq!(w.events("forge.merged").await, 2);
@@ -984,7 +985,7 @@ async fn a_merge_notifies_and_never_changes_the_status() {
     )
     .await;
     assert_eq!(w.status("SHOP-3").await, "open");
-    assert_eq!(w.wakes("cookie", "forge-merged").await.len(), 2);
+    assert_eq!(w.wakes("cookie", "forge-merged").await.len(), 1);
 }
 
 #[tokio::test]
@@ -1085,6 +1086,51 @@ async fn a_merge_reaches_the_repositories_that_depend_on_it() {
     assert_eq!(after, before + 2, "SHOP-2 and its follow-up only");
 }
 
+#[tokio::test]
+async fn a_merge_that_completes_a_task_propagates_its_repos_once() {
+    let w = world(false).await;
+    tool(
+        &w.app,
+        &w.alice,
+        "add_repo",
+        json!({"project": "SHOP", "url": "https://github.com/acme/web.git"}),
+    )
+    .await;
+    tool(
+        &w.app,
+        &w.alice,
+        "link_repo",
+        json!({"project": "SHOP", "repo": "web", "on": "shop", "mode": "task"}),
+    )
+    .await;
+    tool(
+        &w.app,
+        &w.alice,
+        "create_task",
+        json!({"project": "SHOP", "title": "Cart", "repos": "shop"}),
+    )
+    .await;
+    w.send("pull_request", merged(1, "shop-1-cart", "Cart", ""))
+        .await;
+    assert_eq!(w.status("SHOP-1").await, "done");
+    let titles: Vec<String> =
+        sqlx::query_scalar("select title from tasks where from_upstream order by number")
+            .fetch_all(&w.app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        titles.len(),
+        1,
+        "one follow-up for the task's repos: {titles:?}"
+    );
+    assert!(
+        titles[0].starts_with("[web] Follow up on SHOP-1"),
+        "{}",
+        titles[0]
+    );
+    assert_eq!(w.events("task.propagated").await, 1);
+}
+
 // ---------- cloud ----------
 
 type Seen = Arc<Mutex<Vec<String>>>;
@@ -1169,25 +1215,27 @@ async fn until(seen: &Seen, path: &str, n: usize) {
 }
 
 #[tokio::test]
-async fn cloud_cooks_start_on_ci_and_comments_but_on_merges_only_when_they_take_work() {
+async fn forge_events_never_start_a_cloud_cook() {
     let (base, seen) = fake_hooks().await;
     let w = world(true).await;
-    let a = w.cook("oncall", "cloud").await;
-    let b = w.cook("worker", "cloud").await;
-    for (name, work) in [("oncall", false), ("worker", true)] {
+    let a = w.cook("alpha", "cloud").await;
+    let b = w.cook("beta", "cloud").await;
+    for name in ["alpha", "beta"] {
         let (code, r) = w
             .app
             .post(
                 &w.root,
                 &format!("/agents/{name}/wake-targets"),
-                json!({"type": "webhook", "config": {"url": format!("{base}/hook/{name}"), "on_call": !work}}),
+                json!({"type": "webhook", "config": {"url": format!("{base}/hook/{name}")}}),
             )
             .await;
         assert_eq!(code, 200, "{r}");
     }
-    // let the dispatcher settle: the targets are new and no task is open
+    // ready work starts them (the only thing that does); then they take a task each
     w.task("One").await;
     w.task("Two").await;
+    until(&seen, "/hook/alpha", 1).await;
+    until(&seen, "/hook/beta", 1).await;
     w.hold(&a, "SHOP-1").await;
     w.hold(&b, "SHOP-2").await;
     seen.lock().unwrap().clear();
@@ -1200,33 +1248,245 @@ async fn cloud_cooks_start_on_ci_and_comments_but_on_merges_only_when_they_take_
         w.send("check_suite", suite("shop", n, "aaa", "failure"))
             .await;
     }
-    // a CI failure is someone talking to the cook about its task: both are started
-    until(&seen, "/hook/oncall", 1).await;
-    until(&seen, "/hook/worker", 1).await;
-    // changes requested and a comment too
     let p = pr("shop", 1, "shop-1-x", "aaa", "t");
     w.send(
         "pull_request_review",
         review("shop", p, "changes_requested", "bob", "no"),
     )
     .await;
-    until(&seen, "/hook/oncall", 2).await;
-    // a merge: only the one that takes work
+    w.send("issue_comment", comment("shop", 1, "carol", "hello"))
+        .await;
     for n in [1, 2] {
         let mut p = pr("shop", n, "x", "aaa", "t");
         p["state"] = json!("closed");
         p["merged"] = json!(true);
         w.send("pull_request", pr_event("closed", "shop", p)).await;
     }
-    until(&seen, "/hook/worker", 2).await;
     tokio::time::sleep(Duration::from_secs(7)).await;
-    assert_eq!(
-        hits(&seen, "/hook/oncall"),
-        2,
-        "a merge notice does not start an on-call cook: {:?}",
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "forge events start no cloud run: {:?}",
         seen.lock().unwrap()
     );
-    assert!(hits(&seen, "/hook/worker") >= 2);
+    let n: i64 = sqlx::query_scalar(
+        "select count(*) from events where kind = 'wake' and payload->>'agent' in ('alpha', 'beta')",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(n, 0, "nothing was even emitted for them");
+    assert_eq!(w.status("SHOP-1").await, "claimed", "held: unchanged");
+}
+
+#[tokio::test]
+async fn a_merge_completes_a_task_nobody_holds() {
+    let w = world(false).await;
+    w.task("Cart").await;
+    tool(
+        &w.app,
+        &w.alice,
+        "create_task",
+        json!({"project": "SHOP", "title": "After cart", "dependsOn": "SHOP-1"}),
+    )
+    .await;
+    w.send(
+        "pull_request",
+        pr_event("opened", "shop", pr("shop", 1, "shop-1-cart", "aaa", "t")),
+    )
+    .await;
+    // a second open PR for the same task keeps it open when the first merges
+    w.send(
+        "pull_request",
+        pr_event("opened", "shop", pr("shop", 2, "shop-1-more", "bbb", "t")),
+    )
+    .await;
+    let merge = |n: i64, branch: &'static str| {
+        let mut p = pr("shop", n, branch, "x", "t");
+        p["state"] = json!("closed");
+        p["merged"] = json!(true);
+        pr_event("closed", "shop", p)
+    };
+    w.send("pull_request", merge(1, "shop-1-cart")).await;
+    assert_eq!(w.status("SHOP-1").await, "open", "another PR is still open");
+    assert_eq!(w.events("task.completed").await, 0);
+    w.send("pull_request", merge(2, "shop-1-more")).await;
+    assert_eq!(w.status("SHOP-1").await, "done");
+    let t = tool(&w.app, &w.alice, "get_task", json!({"id": "SHOP-1"})).await;
+    assert!(
+        t["result"]
+            .as_str()
+            .unwrap()
+            .starts_with("Merged https://github.com/Acme/shop/pull/2"),
+        "{t}"
+    );
+    let (n, actors): (i64, i64) = sqlx::query_as(
+        "select count(*), count(actor_id) from events where kind = 'task.completed'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!((n, actors), (1, 0), "one completion, no actor");
+    // what depends on it is ready now
+    let next = tool(&w.app, &w.alice, "get_task", json!({"id": "SHOP-2"})).await;
+    assert_eq!(next["ready"], true, "{next}");
+    // a redelivery completes nothing twice
+    w.send("pull_request", merge(2, "shop-1-more")).await;
+    assert_eq!(w.events("task.completed").await, 1);
+}
+
+fn merged(n: i64, branch: &str, title: &str, body: &str) -> Value {
+    let mut p = pr("shop", n, branch, "x", title);
+    p["body"] = json!(body);
+    p["state"] = json!("closed");
+    p["merged"] = json!(true);
+    pr_event("closed", "shop", p)
+}
+
+#[tokio::test]
+async fn only_an_explicit_branch_or_title_link_completes_on_merge() {
+    let w = world(false).await;
+    for t in ["Body", "Title", "Branch", "Hand"] {
+        w.task(t).await;
+    }
+    // a body that merely mentions the task links it but never completes it
+    w.send(
+        "pull_request",
+        merged(1, "plain", "nothing", "see SHOP-1 for context"),
+    )
+    .await;
+    assert_eq!(
+        w.pr_row("shop", 1).await.unwrap().6.as_deref(),
+        Some("SHOP-1")
+    );
+    assert_eq!(
+        w.status("SHOP-1").await,
+        "open",
+        "a body mention is not a claim"
+    );
+    assert_eq!(w.events("task.completed").await, 0);
+    // the title, the branch and a person's link do
+    w.send("pull_request", merged(2, "plain", "Fix (SHOP-2)", ""))
+        .await;
+    assert_eq!(w.status("SHOP-2").await, "done");
+    w.send("pull_request", merged(3, "shop-3-x", "t", "")).await;
+    assert_eq!(w.status("SHOP-3").await, "done");
+    tool(
+        &w.app,
+        &w.alice,
+        "link_pr",
+        json!({"id": "SHOP-4", "url": "https://github.com/acme/shop/pull/4"}),
+    )
+    .await;
+    w.send("pull_request", merged(4, "plain", "nothing", ""))
+        .await;
+    assert_eq!(w.status("SHOP-4").await, "done");
+    assert_eq!(w.events("task.completed").await, 3);
+}
+
+#[tokio::test]
+async fn a_merge_while_held_completes_the_task_on_release_or_lease_expiry() {
+    let w = world(false).await;
+    w.task("Released").await;
+    w.task("Reaped").await;
+    w.task("Reaped too").await;
+    w.task("Body only").await;
+    let cook = w.cook("cookie", "local").await;
+    let mut epochs = vec![];
+    for t in ["SHOP-1", "SHOP-2", "SHOP-3", "SHOP-4"] {
+        let c = tool(&w.app, &cook, "claim_task", json!({"id": t})).await;
+        epochs.push(c["lease"]["epoch"].clone());
+    }
+    for (n, t) in [(1, "SHOP-1"), (2, "SHOP-2"), (3, "SHOP-3")] {
+        tool(
+            &w.app,
+            &w.alice,
+            "link_pr",
+            json!({"id": t, "url": format!("https://github.com/acme/shop/pull/{n}")}),
+        )
+        .await;
+        w.send("pull_request", merged(n, "plain", "nothing", ""))
+            .await;
+        assert_eq!(w.status(t).await, "claimed", "a held task stays held");
+    }
+    // a body-only link does not complete on release (SHOP-4: merged PR, no qualifying link)
+    w.send(
+        "pull_request",
+        merged(5, "plain", "nothing", "about SHOP-4"),
+    )
+    .await;
+    assert_eq!(w.status("SHOP-4").await, "claimed");
+    // release: done
+    tool(
+        &w.app,
+        &cook,
+        "release",
+        json!({"id": "SHOP-1", "epoch": epochs[0], "reason": "PR open"}),
+    )
+    .await;
+    assert_eq!(w.status("SHOP-1").await, "done");
+    // lease expiry: done
+    sqlx::query(
+        "update tasks set lease_expires_at = now() - interval '1 second' where status = 'claimed'",
+    )
+    .execute(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(corntchap::jobs::reap(&w.app.state).await.unwrap(), 3);
+    assert_eq!(w.status("SHOP-2").await, "done");
+    assert_eq!(w.status("SHOP-3").await, "done");
+    assert_eq!(
+        w.status("SHOP-4").await,
+        "open",
+        "a body mention never completes"
+    );
+    let (n, actors): (i64, i64) = sqlx::query_as(
+        "select count(*), count(actor_id) from events where kind = 'task.completed'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!((n, actors), (3, 0));
+}
+
+#[tokio::test]
+async fn a_merge_waits_for_the_tasks_dependencies() {
+    let w = world(false).await;
+    w.task("Base").await;
+    tool(
+        &w.app,
+        &w.alice,
+        "create_task",
+        json!({"project": "SHOP", "title": "Needs base", "dependsOn": "SHOP-1"}),
+    )
+    .await;
+    // the dependent is open but not ready: its own PR merging must not complete it
+    w.send("pull_request", merged(2, "shop-2-x", "t", "")).await;
+    assert_eq!(w.status("SHOP-2").await, "open", "a dependency is not done");
+    w.send("pull_request", merged(1, "shop-1-x", "t", "")).await;
+    assert_eq!(w.status("SHOP-1").await, "done");
+}
+
+#[tokio::test]
+async fn a_merge_does_not_complete_a_task_with_open_subtasks() {
+    let w = world(false).await;
+    w.task("Parent").await;
+    tool(
+        &w.app,
+        &w.alice,
+        "create_task",
+        json!({"project": "SHOP", "title": "Child", "parent": "SHOP-1"}),
+    )
+    .await;
+    w.send(
+        "pull_request",
+        pr_event("opened", "shop", pr("shop", 1, "shop-1-p", "aaa", "t")),
+    )
+    .await;
+    let mut p = pr("shop", 1, "shop-1-p", "aaa", "t");
+    p["state"] = json!("closed");
+    p["merged"] = json!(true);
+    w.send("pull_request", pr_event("closed", "shop", p)).await;
+    assert_eq!(w.status("SHOP-1").await, "open");
 }
 
 // ---------- the manifest flow against a fake GitHub ----------

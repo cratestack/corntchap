@@ -261,6 +261,15 @@ type OkResult {
   ok Boolean
 }
 
+/// A comment was added.
+type CommentPosted {
+  ok Boolean
+  /// The cooks it woke.
+  woken String[]
+  /// Set when a fire-and-forget cook it reached was not woken: it only takes ready work.
+  note String?
+}
+
 type PotLease {
   /// Pot key.
   key String

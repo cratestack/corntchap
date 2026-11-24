@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{Error, Result, invalid},
-    questions::{short, wake},
+    questions::{short, wake, wake_from},
     service::{emit_to, project_by_key, task_by_ref},
     state::Principal,
 };
@@ -146,6 +146,26 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             Some((id, name))
         }
     };
+    // A fire-and-forget cook takes direct messages from its own owner only: sent by the owner
+    // person, or relayed (fromOwner) by a cook that is not itself fire and forget. A
+    // fire-and-forget cook cannot speak for its owner: that would let cooks start each other's
+    // paid runs.
+    let relayer_ff = match relayed_by {
+        Some(_) => crate::cloud::is_fire_and_forget(&mut tx, p.id).await?,
+        None => false,
+    };
+    if let Some((id, name)) = &to
+        && crate::cloud::is_fire_and_forget(&mut tx, *id).await?
+    {
+        let owner: Option<Uuid> =
+            sqlx::query_scalar("select owner_id from principals where id = $1")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+        if owner != Some(author) || relayer_ff {
+            return Err(crate::cloud::refusal(name));
+        }
+    }
     let task = match a.task.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         None => None,
         Some(r) => {
@@ -202,21 +222,20 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     }
     let mut reached: Vec<Value> = vec![];
     if broadcast {
-        // cloud cooks are on call (each wake a new, paid run): a broadcast does not start them
-        let rows: Vec<(Uuid, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
-            "select a.id, a.name, st.id, st.ref from principals a
-             join team_members tm on tm.principal_id = a.id and tm.team_id = $1
-             left join stations st on st.agent_id = a.id and st.project_id = $2
-             where a.kind = 'agent' and a.disabled_at is null
-               and not (exists (select 1 from wake_targets oc where oc.agent_id = a.id and oc.type = any($3))
-                        and not exists (select 1 from wake_targets oc where oc.agent_id = a.id and oc.type <> all($3)))
-             order by a.name, st.created_at",
-        )
-        .bind(pr.team_id)
-        .bind(pr.id)
-        .bind(crate::cloud::CLOUD_TYPES)
-        .fetch_all(&mut *tx)
-        .await?;
+        // a fire-and-forget cook is not woken by a broadcast (see questions::wake)
+        let rows: Vec<(Uuid, String, Option<Uuid>, Option<String>)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "select a.id, a.name, st.id, st.ref from principals a
+                 join team_members tm on tm.principal_id = a.id and tm.team_id = $1
+                 left join stations st on st.agent_id = a.id and st.project_id = $2
+                 where a.kind = 'agent' and a.disabled_at is null and not {}
+                 order by a.name, st.created_at",
+                crate::cloud::fire_and_forget_sql("a.id")
+            )))
+            .bind(pr.team_id)
+            .bind(pr.id)
+            .fetch_all(&mut *tx)
+            .await?;
         let prompt = format!(
             "{signature} wrote to everyone on {}'s pass (every chef's sessions got it):\n\n{body}\n\n\
              Read it, and answer on the pass (the `pass` tool, project {}) only if you have something to add; \
@@ -247,13 +266,15 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             );
             let _ = (name, sref);
         }
-        let out = record_woken(&mut tx, id, &reached).await?;
+        let out = record_woken(&mut tx, id, &reached, &[], &[], &pr.key).await?;
         tx.commit().await?;
         return Ok(out);
     }
 
     // Wake the cooks it is for: the recipient of a direct message, or the cooks @mentioned.
     let mut woken: BTreeSet<Uuid> = BTreeSet::new();
+    let mut not_woken: Vec<String> = vec![];
+    let mut uncovered: Vec<String> = vec![];
     let targets: Vec<(Uuid, bool)> = match &to {
         Some((id, _)) => vec![(*id, true)],
         None => {
@@ -303,44 +324,102 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
         } else {
             None
         };
-        reached.push(wake(&mut tx, pr.id, &pr.key, id, station, task, &prompt, "pass").await?);
+        let w = wake_from(
+            &mut tx,
+            pr.id,
+            &pr.key,
+            id,
+            station,
+            task,
+            &prompt,
+            "pass",
+            // only a direct message can start a fire-and-forget cook, not a mention, and not
+            // one relayed by a fire-and-forget cook
+            (direct && !relayer_ff).then_some(author),
+        )
+        .await?;
+        if w["woken"] == false {
+            if let Some(n) = w["cook"].as_str() {
+                if w["uncovered"] == true {
+                    uncovered.push(n.to_string());
+                } else {
+                    not_woken.push(n.to_string());
+                }
+            }
+        } else {
+            reached.push(w);
+        }
     }
-    let out = record_woken(&mut tx, id, &reached).await?;
+    let out = record_woken(&mut tx, id, &reached, &not_woken, &uncovered, &pr.key).await?;
     tx.commit().await?;
     Ok(out)
 }
 
 /// Keep who a message woke with the message itself, so every reader sees it. The sender is told
-/// when a cloud cook was among them: that is fire and forget.
-async fn record_woken(c: &mut PgConnection, id: Uuid, woken: &[Value]) -> Result<Value> {
+/// about the fire-and-forget cooks it did not wake (`not_woken`) or started (`woken`).
+async fn record_woken(
+    c: &mut PgConnection,
+    id: Uuid,
+    woken: &[Value],
+    not_woken: &[String],
+    uncovered: &[String],
+    pot: &str,
+) -> Result<Value> {
     sqlx::query("update pass_messages set woken = $2 where id = $1")
         .bind(id)
         .bind(json!(woken))
         .execute(&mut *c)
         .await?;
     let mut out = one(c, id).await?;
-    if let Some(n) = cloud_note(woken) {
+    if let Some(n) = cloud_note(woken, not_woken, uncovered, pot) {
         out["note"] = json!(n);
     }
     Ok(out)
 }
 
-/// What to know about the cloud cooks a message woke, if any.
-pub fn cloud_note(woken: &[Value]) -> Option<String> {
-    let mut names: Vec<&str> = woken
+/// What the sender should know about fire-and-forget cooks: the ones a message started (it came
+/// from their owner), the ones it did not wake (a mention) and the ones no cloud target of which
+/// serves the pot (`uncovered`).
+pub fn cloud_note(
+    woken: &[Value],
+    not_woken: &[String],
+    uncovered: &[String],
+    pot: &str,
+) -> Option<String> {
+    let mut started: Vec<&str> = woken
         .iter()
         .filter(|w| w["cloud"] == true)
         .filter_map(|w| w["cook"].as_str())
         .collect();
-    names.dedup();
-    if names.is_empty() {
-        return None;
+    started.dedup();
+    let mut notes: Vec<String> = vec![];
+    if !started.is_empty() {
+        notes.push(format!(
+            "{} {} fire-and-forget: your message starts a fresh run that answers on the pass and then does ready work; it does not stay to chat.",
+            started.join(", "),
+            if started.len() == 1 { "is" } else { "are" }
+        ));
     }
-    Some(format!(
-        "{} {} a cloud cook: fire and forget. Each message starts a fresh run that reads the recent conversation, acts, answers once and stops; it does not stay to chat or keep working between messages. Put everything it needs in one message, or in a task.",
-        names.join(", "),
-        if names.len() == 1 { "is" } else { "are" }
-    ))
+    notes.extend(not_woken_note(not_woken));
+    if !uncovered.is_empty() {
+        notes.push(format!(
+            "{} {} fire-and-forget but no cloud target serves {pot}: nothing was started. Add {pot} to a cloud target's pots (or leave them empty for every pot).",
+            uncovered.join(", "),
+            if uncovered.len() == 1 { "is" } else { "are" },
+        ));
+    }
+    (!notes.is_empty()).then(|| notes.join(" "))
+}
+
+/// The note for fire-and-forget cooks a mention or comment did not wake.
+pub fn not_woken_note(names: &[String]) -> Option<String> {
+    (!names.is_empty()).then(|| {
+        format!(
+            "{} {} fire-and-forget and was not woken: it only takes ready work (give it a task); its owner can message it directly.",
+            names.join(", "),
+            if names.len() == 1 { "is" } else { "are" }
+        )
+    })
 }
 
 /// Read a pot's pass. `chef`: none for everything you can read (the pass and your direct

@@ -38,6 +38,9 @@ type MemberView {
   kind String
   /// owner, or member (a chef).
   role String
+  /// A cook with cloud wake targets only: it takes ready work, opens a pull request and stops.
+  /// Do not message, ask or assign reviews to it; give it a task (its owner may message it).
+  fireAndForget Boolean
 }
 
 type MemberAdded {
@@ -77,6 +80,9 @@ type PrincipalView {
   busy Int
   /// Teams it is in (its pots come from them).
   teams String[]
+  /// A cook with cloud wake targets only: it takes ready work, opens a pull request and stops.
+  /// Only its owner's direct messages wake it besides; give it a task.
+  fireAndForget Boolean
 }
 
 /// A new cook or fire, or a rotated token. The token is shown once: treat it as a secret.
@@ -105,9 +111,6 @@ type WakeTargetView {
   labels String[]
   /// Where it goes: the webhook URL or owner/repo#issue (secrets are never shown).
   target String?
-  /// Only started when called (a direct message, an @mention or a comment on its task), never for
-  /// new ready work. Cloud targets only; relays always take work.
-  onCall Boolean
 }
 
 type WakeTargetAdded {

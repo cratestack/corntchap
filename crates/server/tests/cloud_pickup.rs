@@ -2,7 +2,7 @@
 //! delivery is retried by the dispatcher's sweep, a cook that finishes one of two tasks is woken for
 //! the other, a target added later hears of work already there, a 429's `Retry-After` is honoured,
 //! a task the cook gave back is not offered again until someone touches it, a cook that never
-//! claims is woken at most three times, and an `on_call` target gets no work wake.
+//! claims is woken at most three times, and a cook's owner message is not followed by a second run from the sweep.
 mod common;
 use std::{
     collections::VecDeque,
@@ -117,13 +117,13 @@ async fn world_with(coalesce: Duration) -> World {
 }
 
 impl World {
-    async fn target(&self, url: &str, labels: &[&str], on_call: bool) {
+    async fn target(&self, url: &str, labels: &[&str]) {
         let (code, r) = self
             .app
             .post(
                 &self.root,
                 "/agents/chef/wake-targets",
-                json!({"type": "webhook", "labels": labels, "config": {"url": url, "on_call": on_call}}),
+                json!({"type": "webhook", "labels": labels, "config": {"url": url}}),
             )
             .await;
         assert_eq!(code, 200, "{r}");
@@ -155,7 +155,7 @@ impl World {
 async fn a_failed_delivery_is_retried_by_the_sweep() {
     let (url, fake) = fake_endpoint(&[(500, None)]).await;
     let w = world().await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     w.task("Refund screen", &[]).await;
     let h = wait_hits(&fake, 2, 15).await;
     assert!(
@@ -168,7 +168,7 @@ async fn a_failed_delivery_is_retried_by_the_sweep() {
 async fn a_cook_that_finishes_one_of_two_tasks_is_woken_for_the_other() {
     let (url, fake) = fake_endpoint(&[]).await;
     let w = world().await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     w.task("One", &[]).await;
     w.task("Two", &[]).await;
     wait_hits(&fake, 1, 10).await;
@@ -195,7 +195,7 @@ async fn a_cook_that_finishes_one_of_two_tasks_is_woken_for_the_other() {
 async fn a_released_task_is_not_offered_again_until_someone_touches_it() {
     let (url, fake) = fake_endpoint(&[]).await;
     let w = world().await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     w.task("Too big", &[]).await;
     wait_hits(&fake, 1, 10).await;
     let c = w.claim().await;
@@ -239,7 +239,7 @@ async fn a_released_task_is_not_offered_again_until_someone_touches_it() {
 async fn the_wake_names_the_targets_labels() {
     let (url, fake) = fake_endpoint(&[]).await;
     let w = world().await;
-    w.target(&url, &["backend", "api"], false).await;
+    w.target(&url, &["backend", "api"]).await;
     w.task("Endpoint", &["backend"]).await;
     let h = wait_hits(&fake, 1, 10).await;
     assert!(
@@ -254,7 +254,7 @@ async fn the_wake_names_the_targets_labels() {
 async fn a_429_waits_for_retry_after() {
     let (url, fake) = fake_endpoint(&[(429, Some(3))]).await;
     let w = world().await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     w.task("Refund screen", &[]).await;
     let first = wait_hits(&fake, 1, 10).await[0].0;
     tokio::time::sleep(Duration::from_millis(2300)).await;
@@ -274,7 +274,7 @@ async fn a_target_added_after_the_task_is_woken_by_the_sweep() {
     w.task("Waiting already", &[]).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(hits(&fake).is_empty());
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     wait_hits(&fake, 1, 10).await;
 }
 
@@ -282,7 +282,7 @@ async fn a_target_added_after_the_task_is_woken_by_the_sweep() {
 async fn a_cook_that_never_claims_is_woken_three_times() {
     let (url, fake) = fake_endpoint(&[]).await;
     let w = world().await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     w.task("Nobody takes it", &[]).await;
     wait_hits(&fake, 3, 15).await;
     tokio::time::sleep(Duration::from_secs(6)).await;
@@ -290,31 +290,10 @@ async fn a_cook_that_never_claims_is_woken_three_times() {
 }
 
 #[tokio::test]
-async fn an_on_call_target_gets_no_work_wake() {
-    let (url, fake) = fake_endpoint(&[]).await;
-    let w = world().await;
-    w.target(&url, &[], true).await;
-    w.task("Refund screen", &[]).await;
-    tokio::time::sleep(Duration::from_secs(4)).await;
-    assert!(hits(&fake).is_empty(), "{:?}", hits(&fake));
-    // a call still starts it
-    let r = w
-        .app
-        .mcp(
-            &w.root,
-            "pass",
-            json!({"project": "PAY", "message": "ping", "to": "chef"}),
-        )
-        .await;
-    assert_ne!(r["isError"], true, "{r}");
-    wait_hits(&fake, 1, 10).await;
-}
-
-#[tokio::test]
 async fn a_lapsed_lease_is_not_offered_again_until_someone_touches_it() {
     let (url, fake) = fake_endpoint(&[]).await;
     let w = world().await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     w.task("Run dies", &[]).await;
     wait_hits(&fake, 1, 10).await;
     w.claim().await;
@@ -355,7 +334,7 @@ async fn a_lapsed_lease_is_not_offered_again_until_someone_touches_it() {
 async fn a_cook_holding_a_live_lease_is_not_swept() {
     let (url, fake) = fake_endpoint(&[]).await;
     let w = world().await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     w.task("One", &[]).await;
     w.task("Two", &[]).await;
     wait_hits(&fake, 1, 10).await;
@@ -367,10 +346,10 @@ async fn a_cook_holding_a_live_lease_is_not_swept() {
 }
 
 #[tokio::test]
-async fn a_message_wake_is_not_followed_by_a_sweep_run() {
+async fn an_owner_message_is_not_followed_by_a_sweep_run() {
     let (url, fake) = fake_endpoint(&[]).await;
     let w = world_with(Duration::from_secs(10)).await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     let r = w
         .app
         .mcp(
@@ -393,7 +372,7 @@ async fn a_failing_target_gets_at_most_three_work_deliveries() {
     let plan: Vec<(u16, Option<u64>)> = vec![(500, None); 50];
     let (url, fake) = fake_endpoint(&plan).await;
     let w = world().await;
-    w.target(&url, &[], false).await;
+    w.target(&url, &[]).await;
     w.task("Refund screen", &[]).await;
     wait_hits(&fake, 3, 20).await;
     tokio::time::sleep(Duration::from_secs(6)).await;

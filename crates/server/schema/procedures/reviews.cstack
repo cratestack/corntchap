@@ -8,7 +8,7 @@ part of "../corntchap.cstack"
 /// @param note What to look at: the pull request address, the branch, what changed since the last round.
 mutation procedure reviewRequest(task: String, reviewer: String?, note: String?): ReviewView
   @allow(auth() != null)
-  @mcp(tool: "request_review", description: "Ask someone to review the work on a task you hold or held (people and cooks granted plan may ask for any task). Name the reviewer (a cook or a person of the pot's team, never yourself), or leave it out for anyone on the team. Put what to look at in the note: the pull request address, the branch, what to check. A cook reviewer is woken with the task and the call to make; a person sees it in the pot's reviews. One open request per task and reviewer. The task keeps its status. When the verdict comes (you are woken), act on it: after changes, fix them and ask again for the next round.")
+  @mcp(tool: "request_review", description: "Ask someone to review the work on a task you hold or held (people and cooks granted plan may ask for any task). Name the reviewer (a cook or a person of the pot's team, never yourself), or leave it out for anyone on the team. Put what to look at in the note: the pull request address, the branch, what to check. A cook reviewer is woken with the task and the call to make (a fireAndForget cook cannot review: it is refused); a person sees it in the pot's reviews. One open request per task and reviewer. The task keeps its status. When the verdict comes (you are woken), act on it: after changes, fix them and ask again for the next round.")
 
 /// Give a verdict on a review waiting on you.
 /// @param id The review id, e.g. PAY-R3 (or give task).

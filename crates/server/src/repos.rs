@@ -598,7 +598,7 @@ async fn repo_ids(c: &mut PgConnection, project: Uuid, names: &[&str]) -> Result
 /// ping-pong. Nothing happens for a task with no repositories or one that is itself a follow-up.
 pub async fn propagate(
     c: &mut PgConnection,
-    actor: &Principal,
+    actor: Option<Uuid>,
     task: Uuid,
     result: &str,
 ) -> Result<Value> {
@@ -633,7 +633,7 @@ pub async fn propagate(
         menu,
         priority,
     };
-    pass_on(c, Some(actor.id), project, &key, &repos, &up).await
+    pass_on(c, actor, project, &key, &repos, &up).await
 }
 
 /// What happened upstream, for [`pass_on`]: a served task, or a merged pull request (forge events).
@@ -750,8 +750,12 @@ pub async fn pass_on(
             );
             let mut names = vec![];
             for (id, name) in cooks {
-                crate::questions::wake(c, project, key, id, None, task, &text, "upstream").await?;
-                names.push(name);
+                let w = crate::questions::wake(c, project, key, id, None, task, &text, "upstream")
+                    .await?;
+                // a fire-and-forget cook is not woken: do not list it as told
+                if w["woken"] != false {
+                    names.push(name);
+                }
             }
             told.push(json!({"repo": dep, "mode": "notify", "cooks": names}));
         }

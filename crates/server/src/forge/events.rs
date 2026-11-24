@@ -5,10 +5,15 @@
 //! * A PR is linked to a task by a person (explicit, wins), else by the task's ref in the head
 //!   branch, the title or the body (`SHOP-12`, any case), never by creating anything.
 //! * Every event updates the row and, when the PR is linked, emits a `forge.*` task event. It never
-//!   changes the task's status, not on merge and not on close.
+//!   changes the task's status, except for a merge: a merged PR linked by a person or by the task's
+//!   ref in its branch or title (never by the body alone) completes a task that is `open` (nobody
+//!   holds it), with no other open pull request, no open subtask and every dependency done. A task
+//!   that was held while its PR merged is completed when it is released or its lease expires
+//!   (`complete_if_merged`).
 //! * The task's holder (its claimer, else the cook that held it last; never a person) is woken for
 //!   a CI failure (once per head sha), a conflict (once per head sha), changes requested and
-//!   comments by others, and told about a merge.
+//!   comments by others, and told about a merge of a task that is still held. A fire-and-forget
+//!   cook is never woken by these (see `questions::wake`).
 
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
@@ -21,10 +26,10 @@ use crate::{
     service,
 };
 
-/// Wake reason for something a cook should act on: starts a cloud run, like a comment on its task.
+/// Wake reason for something a cook should act on (a CI failure, requested changes, a comment, a
+/// conflict). It never starts a fire-and-forget cook.
 pub const REASON: &str = "forge";
-/// Wake reason for a merge notification: information, not a call. Starts a cloud run only for
-/// targets that take work, like `upstream`.
+/// Wake reason for a merge notification of a task that is still held: information, not a call.
 pub const REASON_MERGED: &str = "forge-merged";
 
 const MAX_FAILING: usize = 10;
@@ -53,6 +58,8 @@ pub struct Pr {
     pub task_id: Option<Uuid>,
     pub explicit: bool,
     pub unlinked: bool,
+    /// How the words linked it: `branch`, `title` or `body` (none when a person linked it).
+    pub linked_via: Option<String>,
     pub notified: Vec<String>,
 }
 
@@ -253,7 +260,7 @@ async fn tell(
     if by.is_some_and(|b| same_account(b, &name)) {
         return Ok(None);
     }
-    crate::questions::wake(
+    let w = crate::questions::wake(
         c,
         ctx.project,
         &ctx.key,
@@ -264,7 +271,8 @@ async fn tell(
         reason,
     )
     .await?;
-    Ok(Some(name))
+    // a fire-and-forget cook is not woken: do not list it as told
+    Ok((w["woken"] != false).then_some(name))
 }
 
 async fn note(c: &mut PgConnection, ctx: &Ctx, row: &Pr, kind: &str, extra: Value) -> Result<()> {
@@ -397,7 +405,7 @@ pub async fn apply(db: &PgPool, connection: Uuid, ev: &ForgeEvent) -> Result<App
         }
     };
     // one event at a time per PR: a burst of deliveries must tell a cook once
-    let mut row: Pr = sqlx::query_as("select id, provider, repo, norm_url, number, url, title, author, state, draft, head_branch, head_sha, base_branch, checks, failing, failing_sha, checks_url, review, mergeable, task_id, explicit, unlinked, notified from forge_prs where id = $1 for update")
+    let mut row: Pr = sqlx::query_as("select id, provider, repo, norm_url, number, url, title, author, state, draft, head_branch, head_sha, base_branch, checks, failing, failing_sha, checks_url, review, mergeable, task_id, explicit, unlinked, linked_via, notified from forge_prs where id = $1 for update")
         .bind(id)
         .fetch_one(&mut *c)
         .await?;
@@ -530,6 +538,7 @@ pub async fn apply(db: &PgPool, connection: Uuid, ev: &ForgeEvent) -> Result<App
         .await?
     {
         row.task_id = Some(t);
+        row.linked_via = Some(via.to_string());
         linked_now = Some(via);
     }
     let ctx = match row.task_id {
@@ -549,7 +558,7 @@ pub async fn apply(db: &PgPool, connection: Uuid, ev: &ForgeEvent) -> Result<App
 
     sqlx::query(
         "update forge_prs set url=$2, title=$3, author=$4, state=$5, draft=$6, head_branch=$7, head_sha=$8, base_branch=$9,
-           checks=$10, failing=$11, failing_sha=$12, checks_url=$13, review=$14, mergeable=$15, task_id=$16, notified=$17,
+           checks=$10, failing=$11, failing_sha=$12, checks_url=$13, review=$14, mergeable=$15, task_id=$16, notified=$17, linked_via=$18,
            updated_at = now() where id = $1",
     )
     .bind(row.id)
@@ -569,6 +578,7 @@ pub async fn apply(db: &PgPool, connection: Uuid, ev: &ForgeEvent) -> Result<App
     .bind(&row.mergeable)
     .bind(row.task_id)
     .bind(&row.notified)
+    .bind(&row.linked_via)
     .execute(&mut *c)
     .await?;
     tx.commit().await?;
@@ -628,11 +638,15 @@ async fn react(
         }
         ForgeKind::PrMerged if first_merge => {
             note(c, ctx, row, "forge.merged", json!({})).await?;
-            let text = format!(
-                "{word} merged ({}); {tref}'s status is unchanged, serve it if the work is done.",
-                row.url
-            );
-            told.extend(tell(c, ctx, None, REASON_MERGED, &text).await?);
+            if complete_if_merged(c, ctx.task, Some((row.id, &row.url, row.qualifies()))).await? {
+                told.push(format!("{tref} done"));
+            } else if !task_finished(c, ctx.task).await? {
+                let text = format!(
+                    "{word} merged ({}); {tref}'s status is unchanged, serve it if the work is done.",
+                    row.url
+                );
+                told.extend(tell(c, ctx, None, REASON_MERGED, &text).await?);
+            }
         }
         ForgeKind::ChecksCompleted {
             source,
@@ -746,8 +760,82 @@ async fn react(
     Ok(told)
 }
 
+/// The task is done or cancelled: a merge of another PR has nothing left to say about it.
+async fn task_finished(c: &mut PgConnection, task: Uuid) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar("select status in ('done','cancelled') from tasks where id = $1")
+            .bind(task)
+            .fetch_one(c)
+            .await?,
+    )
+}
+
+impl Pr {
+    /// Whether its link to the task may complete it on a merge (see [`QUALIFYING_LINK_SQL`]).
+    fn qualifies(&self) -> bool {
+        !self.unlinked
+            && (self.explicit || matches!(self.linked_via.as_deref(), Some("branch" | "title")))
+    }
+}
+
+/// SQL predicate on a `forge_prs` row `m`: the link may complete the task on a merge. A person's
+/// link (`link_pr`) or the task's ref in the branch or the title does; a body that merely mentions
+/// the task does not.
+const QUALIFYING_LINK_SQL: &str =
+    "not m.unlinked and (m.explicit or m.linked_via in ('branch','title'))";
+
+/// A merged pull request completes its task when nothing else is going on: the task is `open` (not
+/// held, not parked, not reserved), at least one pull request linked to it by a person or by its
+/// branch or title is merged, no linked pull request is open, no subtask is open and every
+/// dependency is done. It is a completion like any other (`task.completed`, no actor, and
+/// `repos::propagate` for the task's repositories), so dependents become ready. Run when a PR
+/// merges (`merging`: that PR, its url and whether its link qualifies; its row is not saved yet) and when a task that was held while its
+/// PR merged is released or its lease expires. Returns whether the task was completed.
+pub async fn complete_if_merged(
+    c: &mut PgConnection,
+    task: Uuid,
+    merging: Option<(Uuid, &str, bool)>,
+) -> Result<bool> {
+    let sql = format!(
+        "update tasks set status = 'done', claimed_by = null, lease_expires_at = null, updated_at = now(),
+           result = 'Merged ' || coalesce($2, (select m.url from forge_prs m where m.task_id = tasks.id and m.state = 'merged'
+                                                 and {QUALIFYING_LINK_SQL} order by m.updated_at desc limit 1), '')
+         where id = $1 and status = 'open' and claimed_by is null and reserved_for is null
+           and ($4 or exists (select 1 from forge_prs m where m.task_id = tasks.id and {QUALIFYING_LINK_SQL}
+                                and m.state = 'merged'))
+           and not exists (select 1 from forge_prs o where o.task_id = tasks.id and o.id is distinct from $3
+                             and o.state = 'open' and not o.unlinked)
+           and not exists (select 1 from tasks c where c.parent_id = tasks.id and c.status not in ('done','cancelled'))
+           and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
+                             where d.task_id = tasks.id and dt.status not in ('done','cancelled'))
+         returning project_id, result"
+    );
+    let done: Option<(Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(task)
+        .bind(merging.map(|m| m.1))
+        .bind(merging.map(|m| m.0))
+        .bind(merging.is_some_and(|m| m.2))
+        .fetch_optional(&mut *c)
+        .await?;
+    let Some((project, result)) = done else {
+        return Ok(false);
+    };
+    service::emit(
+        c,
+        Some(project),
+        Some(task),
+        "task.completed",
+        None,
+        json!({"result": result, "merged": merging.map(|m| m.1)}),
+    )
+    .await?;
+    repos::propagate(c, None, task, &result).await?;
+    Ok(true)
+}
+
 /// A merge reaches the repositories that depend on this one (what a served task does, see
-/// `repos::pass_on`): their scoped cooks are told, or a follow-up task is opened (mode task).
+/// `repos::pass_on`): their scoped cooks are told, or a follow-up task is opened (mode task). A
+/// linked task that names repositories is left to `repos::propagate` (see below).
 async fn pass_on_merge(c: &mut PgConnection, row: &Pr, ctx: Option<&Ctx>) -> Result<()> {
     for (project, key) in pots_for(c, &row.norm_url).await? {
         let aliases: Vec<String> = sqlx::query_scalar(
@@ -762,6 +850,20 @@ async fn pass_on_merge(c: &mut PgConnection, row: &Pr, ctx: Option<&Ctx>) -> Res
             continue;
         }
         let task = ctx.filter(|x| x.project == project).map(|x| x.task);
+        // The linked task carries the repositories it touched: serving it (now, when the merge
+        // completes it, or later by its holder) tells what depends on them through
+        // `repos::propagate`. Telling about the PR's repository as well would tell twice, and a
+        // follow-up (`from_upstream`) passes nothing on.
+        if let Some(t) = task {
+            let (repos, from_upstream): (Vec<String>, bool) =
+                sqlx::query_as("select repos, from_upstream from tasks where id = $1")
+                    .bind(t)
+                    .fetch_one(&mut *c)
+                    .await?;
+            if from_upstream || !repos.is_empty() {
+                continue;
+            }
+        }
         let up = Upstream {
             label: pr_word(row),
             title: row.title.clone(),
@@ -803,7 +905,7 @@ async fn push(
     .await?;
     let mut n = 0;
     for id in ids {
-        let mut row: Pr = sqlx::query_as("select id, provider, repo, norm_url, number, url, title, author, state, draft, head_branch, head_sha, base_branch, checks, failing, failing_sha, checks_url, review, mergeable, task_id, explicit, unlinked, notified from forge_prs where id = $1")
+        let mut row: Pr = sqlx::query_as("select id, provider, repo, norm_url, number, url, title, author, state, draft, head_branch, head_sha, base_branch, checks, failing, failing_sha, checks_url, review, mergeable, task_id, explicit, unlinked, linked_via, notified from forge_prs where id = $1")
             .bind(id)
             .fetch_one(&mut *c)
             .await?;

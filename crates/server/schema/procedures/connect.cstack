@@ -26,7 +26,6 @@ mutation procedure cloudConnect(kind: String?, cook: String?, projects: String?,
 /// @param owner coder (Coder Tasks): the Coder user the task belongs to (default me).
 /// @param organization coder (Coder Agents, current Coder): the organization id. Give this or template. devin: the Devin organization id (org-...).
 /// @param workspace coder (Coder Agents): a workspace id to run in (optional).
-/// @param onCall Start it only when called: a direct message, an @mention or a comment on its task (default false: it also takes new ready work).
-mutation procedure cloudConnectSave(code: String, url: String?, token: String?, secret: String?, repo: String?, issue: Int?, mention: String?, template: String?, preset: String?, owner: String?, organization: String?, workspace: String?, onCall: Boolean?): CloudSetup
+mutation procedure cloudConnectSave(code: String, url: String?, token: String?, secret: String?, repo: String?, issue: Int?, mention: String?, template: String?, preset: String?, owner: String?, organization: String?, workspace: String?): CloudSetup
   @allow(auth() != null)
   @mcp(tool: "connect_cloud_save", description: "Finish a cloud setup from connect_cloud with its values (trigger URL and token, GitHub repo, issue and token, webhook URL and secret, Coder URL, token and organization, or Devin key and organization) and make the wake target. The corntchap form calls it itself; call it only when the user chose to give you the values.")

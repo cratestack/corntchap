@@ -1,6 +1,6 @@
 //! Devin as a cloud wake target: a wake starts a Devin session, a later wake for the same pot is a
 //! message to it, a gone session starts a new one, the API key is never shown back, and
-//! `on_call = true` keeps new work from starting it while a message still does.
+//! a direct message from the cook's owner follows up.
 //! Runs against a fake Devin (axum).
 mod common;
 use std::{
@@ -215,7 +215,7 @@ async fn a_wake_starts_a_session_and_the_next_one_follows_up() {
     let prompt = r.body["prompt"].as_str().unwrap();
     assert!(
         prompt.contains("You are a corntchap cook")
-            && prompt.contains("my_questions")
+            && prompt.contains("link_pr")
             && prompt.contains("new work is ready for devin-cook in PAY")
             && prompt.contains("claim_next"),
         "{prompt}"
@@ -295,7 +295,6 @@ async fn a_wake_starts_a_session_and_the_next_one_follows_up() {
         "list",
     );
     assert_eq!(mcp[0]["type"], "devin");
-    assert_eq!(mcp[0]["onCall"], false);
     let (_, cook_page) = app.get(&root, "/agents/devin-cook").await;
     let (_, cooks) = app.get(&root, "/agents").await;
     let events: Vec<Value> = sqlx::query_scalar("select payload from events")
@@ -314,28 +313,16 @@ async fn a_wake_starts_a_session_and_the_next_one_follows_up() {
 }
 
 #[tokio::test]
-async fn on_call_targets_get_no_work_and_failures_are_recorded() {
+async fn a_broadcast_starts_nothing_and_failures_are_recorded() {
     let (base, fake) = fake_devin().await;
     let (app, root) = world("onduty").await;
-    // on_call: new work starts nothing, a direct message does
+    // no ready work: a broadcast starts nothing, a direct message from the owner does
     app.post(
         &root,
         "/agents/onduty/wake-targets",
-        json!({"type": "devin", "config": {"url": base, "token": TOKEN, "organization": ORG, "on_call": true}}),
+        json!({"type": "devin", "config": {"url": base, "token": TOKEN, "organization": ORG}}),
     )
     .await;
-    app.post(
-        &root,
-        "/projects/PAY/tasks",
-        json!({"title": "Refund screen"}),
-    )
-    .await;
-    tokio::time::sleep(Duration::from_secs(4)).await;
-    assert_eq!(
-        fake.count(),
-        0,
-        "new work does not start an on-call session"
-    );
     ok(
         &app.mcp(
             &root,

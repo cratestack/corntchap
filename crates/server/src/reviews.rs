@@ -216,6 +216,9 @@ pub async fn request(
                     "you cannot review your own work: ask someone else".into(),
                 ));
             }
+            if crate::cloud::is_fire_and_forget(&mut tx, id).await? {
+                return Err(crate::cloud::refusal(&name));
+            }
             Some(id)
         }
     };

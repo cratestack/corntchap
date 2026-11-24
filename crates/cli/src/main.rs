@@ -667,10 +667,6 @@ enum WakeCmd {
         /// coder (Coder Tasks): the Coder user the task belongs to (default me)
         #[arg(long = "coder-owner")]
         coder_owner: Option<String>,
-        /// cloud targets: start a run only when called (a direct message, an @mention or a comment
-        /// on its task), not for new ready work (default: it takes ready work; narrow it with --label)
-        #[arg(long)]
-        on_call: bool,
     },
     /// List wake targets (of one agent, or of all your agents).
     Ls {
@@ -1507,7 +1503,6 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                 template,
                 preset,
                 coder_owner,
-                on_call,
             } => {
                 let mut config = json!({});
                 match typ.as_str() {
@@ -1539,9 +1534,6 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                         }
                     }
                     _ => {}
-                }
-                if on_call && typ != "relay" {
-                    config["on_call"] = json!(true);
                 }
                 let r = api.post(&format!("/agents/{agent}/wake-targets"), json!({"type": typ, "projects": projects, "labels": labels, "config": config})).await?;
                 ok_line(format!(

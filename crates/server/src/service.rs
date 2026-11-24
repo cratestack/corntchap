@@ -1126,14 +1126,19 @@ pub async fn comment(
         json!({}),
     )
     .await?;
-    let woken = notify_comment(&mut tx, p, &t, body, comment_id, seq).await?;
+    let (woken, not_woken) = notify_comment(&mut tx, p, &t, body, comment_id, seq).await?;
     tx.commit().await?;
-    Ok(json!({"ok": true, "woken": woken}))
+    let mut out = json!({"ok": true, "woken": woken});
+    if let Some(n) = crate::pass::not_woken_note(&not_woken) {
+        out["note"] = json!(n);
+    }
+    Ok(out)
 }
 
 /// A comment reaches the cook responsible for the task (the one holding it, parked on it waiting
 /// for an answer, or the one that last held it) and the cooks it @mentions, on the session that
-/// holds the task when there is one. Never the commenter itself. Returns who was woken.
+/// holds the task when there is one. Never the commenter itself. Returns who was woken and the
+/// fire-and-forget cooks that were not (they only take ready work).
 async fn notify_comment(
     c: &mut PgConnection,
     p: &Principal,
@@ -1141,9 +1146,9 @@ async fn notify_comment(
     body: &str,
     comment_id: Uuid,
     seq: i64,
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, Vec<String>)> {
     if t.status == "cancelled" {
-        return Ok(vec![]);
+        return Ok((vec![], vec![]));
     }
     let (title, team, responsible): (String, Uuid, Option<Uuid>) = sqlx::query_as(
         "select t.title, pr.team_id,
@@ -1186,6 +1191,7 @@ async fn notify_comment(
         }
     }
     let mut woken: Vec<String> = vec![];
+    let mut not_woken: Vec<String> = vec![];
     let mut seen = std::collections::BTreeSet::new();
     for (agent, prompt) in targets {
         if agent == p.id || !seen.insert(agent) {
@@ -1198,7 +1204,7 @@ async fn notify_comment(
         .fetch_optional(&mut *c)
         .await?;
         let Some(name) = row else { continue };
-        crate::questions::wake(
+        let w = crate::questions::wake(
             &mut *c,
             t.project_id,
             &t.key,
@@ -1209,6 +1215,10 @@ async fn notify_comment(
             "comment",
         )
         .await?;
+        if w["woken"] == false {
+            not_woken.push(name);
+            continue;
+        }
         // A person's comment waits for an answer; unanswered, the cook's main station hears again.
         if p.is_user() {
             sqlx::query(
@@ -1226,7 +1236,7 @@ async fn notify_comment(
         }
         woken.push(name);
     }
-    Ok(woken)
+    Ok((woken, not_woken))
 }
 
 async fn add_comment(c: &mut PgConnection, t: &TaskRef, author: Uuid, body: &str) -> Result<Uuid> {
@@ -1291,7 +1301,7 @@ pub async fn complete(
     )
     .await?;
     if !no_propagate {
-        crate::repos::propagate(&mut tx, p, t.id, result).await?;
+        crate::repos::propagate(&mut tx, Some(p.id), t.id, result).await?;
     }
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
@@ -1335,6 +1345,10 @@ async fn end_lease(
         json!({"reason": reason}),
     )
     .await?;
+    // its PR merged while it was held: nobody is left to serve it
+    if new_status == "open" {
+        crate::forge::events::complete_if_merged(&mut tx, t.id, None).await?;
+    }
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(out)

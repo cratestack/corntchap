@@ -58,8 +58,7 @@
   <div class="row"><button type="button" id="copy-prompt">Copy the prompt</button></div></details>
 <form id="form" class="hidden" autocomplete="off">
   <div id="fields"></div>
-  <label class="check"><input type="checkbox" id="on-call"> Only when called (no new work)</label>
-  <div class="help">Off: it also starts for ready tasks in its pots. On: only a direct message, an @mention or a comment on its task starts a run; broadcasts and answers do not (it reads answers on its next run).</div>
+  <div class="help">A cook with cloud targets only is fire and forget: ready tasks in its pots (and its owner's direct messages) start a run; it opens a pull request and stops.</div>
   <div class="row">
     <button type="submit" class="primary" id="save">Connect</button>
     <button type="button" id="open-link">Open in corntchap instead</button>
@@ -147,7 +146,6 @@
       if (!i.value.trim()) continue;
       args[i.name] = i.name === "issue" ? Number(i.value) : i.value.trim();
     }
-    if ($("on-call").checked) args.onCall = true;
     $("save").disabled = true; say("Connecting…");
     try {
       const s = await call("connect_cloud_save", args);

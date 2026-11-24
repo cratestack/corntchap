@@ -105,6 +105,7 @@ export function TeamDetailsPage() {
                     </p>
                     <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
                       {m.kind === "user" ? "person" : "cook"} · {m.role === "member" ? "chef" : m.role}
+                      {m.fireAndForget && " · fire and forget"}
                     </p>
                   </div>
                   {(canManage || ownCooks.has(m.name)) && (

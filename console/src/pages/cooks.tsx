@@ -198,7 +198,7 @@ function CookItem({ a, current, now }: { a: AgentRow; current: string | null; no
               <span className="truncate font-display text-[17px] leading-tight">{a.name}</span>
               {cloud && (
                 <LabelChip className="gap-1 px-1.5">
-                  <Cloud className="size-3" aria-hidden="true" /> cloud
+                  <Cloud className="size-3" aria-hidden="true" /> {a.fireAndForget ? "fire and forget" : "cloud"}
                 </LabelChip>
               )}
             </p>
@@ -377,7 +377,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
             {step === "who" && "Name the agent and say where it runs. Its token is made when you hire it."}
             {step === "where" && "The team decides which pots it sees; the lease limit is how many tasks it holds at once."}
             {step === "token" && "Copy the token now: it is shown once and the server keeps only a hash. Then paste the config where the agent runs."}
-            {step === "wake" && `${made?.name} runs in the cloud: started for ready work and when called by a message, an @mention or a comment on its task. Pick how.`}
+            {step === "wake" && `${made?.name} runs in the cloud and is fire and forget: started for ready work (and its owner's direct messages), it opens a pull request and stops. Pick how.`}
           </DialogDescription>
         </FormSheetHead>
 
