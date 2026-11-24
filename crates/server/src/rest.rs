@@ -37,6 +37,7 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/{key}/what-now", get(what_now))
         .route("/projects/{key}/guide", put(set_guide))
         .route("/projects/{key}/repos", post(repos_add))
+        .route("/projects/{key}/repos/bulk", post(repos_add_many))
         .route("/projects/{key}/repos/{name}", delete(repos_remove))
         .route(
             "/projects/{key}/repo-links",
@@ -57,7 +58,10 @@ pub fn routes() -> Router<AppState> {
         .route("/tasks/{id}/split-by-repo", post(task_split))
         .route("/tasks/{id}/link-pr", post(task_link_pr))
         .route("/tasks/{id}/unlink-pr", post(task_unlink_pr))
+        .route("/tasks/{id}/refresh-pr", post(task_refresh_pr))
         .route("/forges", get(forges_list))
+        .route("/forges/repos", get(forges_repos))
+        .route("/forges/unfollowed/dismiss", post(forges_dismiss))
         .route("/forges/{id}", delete(forges_remove))
         .route("/tasks/{id}/heartbeat", post(task_heartbeat))
         .route("/tasks/{id}/check", post(task_check))
@@ -328,15 +332,27 @@ async fn repos_add(
     Path(k): Path<String>,
     Json(b): Json<Value>,
 ) -> J {
-    ok(crate::repos::add_repo(
+    let url = req_s(&b, "url")?;
+    let r = crate::repos::add_repo(
         &st.db,
         &p,
         &k,
-        &req_s(&b, "url")?,
+        &url,
         s(&b, "name").as_deref(),
         s(&b, "default_branch").as_deref(),
     )
-    .await?)
+    .await?;
+    crate::forge::sync::spawn_backfill(&st, &k, vec![url]);
+    ok(r)
+}
+/// `{"repos": "acme/api, acme/web"}`: add several repositories (GitHub full names or urls) at once.
+async fn repos_add_many(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::forge::pick::add_many(&st, &p, &k, &req_s(&b, "repos")?).await?)
 }
 async fn repos_remove(
     State(st): State<AppState>,
@@ -394,7 +410,7 @@ async fn task_link_pr(
     Json(b): Json<Value>,
 ) -> J {
     let url = b["url"].as_str().unwrap_or("");
-    ok(crate::forge::link::link_pr(&st.db, &p.worker()?, &id, url).await?)
+    ok(crate::forge::link::link_pr(&st, &p.worker()?, &id, url).await?)
 }
 
 /// `{"url": ...}` unlinks that pull request; no url unlinks all of the task's.
@@ -416,8 +432,39 @@ async fn forges_list(State(st): State<AppState>, Authn(p): Auth) -> J {
     }
     ok(json!({
         "public_url": st.config.public_url,
-        "connections": crate::forge::store::list(&st.db).await?
+        "connections": crate::forge::store::list(&st.db).await?,
+        "unfollowed": crate::forge::unfollowed::list(&st.db).await?
     }))
+}
+
+/// `?project=PAY&q=api&installation=1`: the repositories the connected GitHub Apps can see.
+async fn forges_repos(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    ok(crate::forge::pick::list(
+        &st,
+        &p,
+        q.get("project").map(String::as_str),
+        q.get("q").map(String::as_str),
+        q.get("installation").and_then(|v| v.parse().ok()),
+    )
+    .await?)
+}
+
+/// `{"repo": "acme/api"}`: stop listing a repository that sends events no pot follows (admins).
+async fn forges_dismiss(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Value>) -> J {
+    ok(crate::forge::pick::dismiss(&st, &p, &req_s(&b, "repo")?).await?)
+}
+
+async fn task_refresh_pr(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::forge::link::refresh_pr(&st, &p.worker()?, &id, b["url"].as_str()).await?)
 }
 
 async fn forges_remove(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<Uuid>) -> J {

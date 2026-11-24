@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { GitBranch, Link2, Loader2, Plus, Trash2, Unlink } from "lucide-react";
+import { GitBranch, CloudDownload, Link2, Loader2, Plus, Trash2, Unlink } from "lucide-react";
 import { toast } from "sonner";
 import type { ProjectSummary, RepoView } from "@corntchap/api";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -11,6 +11,7 @@ import { errorMessage } from "@/lib/api";
 import { useProcCall } from "@/lib/data";
 import { cn } from "@/lib/utils";
 import { Group, GroupRow, RepoChip } from "./bits";
+import { AddFromGithubDialog } from "./forge-repos";
 
 /** Toggle chips for choosing some of a pot's repositories (a task's, or a cook's scope). Renders nothing for a pot with none. */
 export function RepoPicker({
@@ -53,7 +54,7 @@ export function RepoPicker({
 /** The repositories of a pot, with what each depends on. Owners and admins add, remove and link. */
 export function PotRepos({ project, canManage }: { project: ProjectSummary; canManage: boolean }) {
   const call = useProcCall();
-  const [dlg, setDlg] = useState<{ kind: "add" } | { kind: "link"; repo: RepoView } | { kind: "remove"; repo: RepoView } | null>(null);
+  const [dlg, setDlg] = useState<{ kind: "add" } | { kind: "github" } | { kind: "link"; repo: RepoView } | { kind: "remove"; repo: RepoView } | null>(null);
   const repos = project.repos;
 
   async function unlink(repo: string, on: string) {
@@ -76,9 +77,14 @@ export function PotRepos({ project, canManage }: { project: ProjectSummary; canM
         }
         aside={
           canManage ? (
-            <Button size="sm" variant="outline" onClick={() => setDlg({ kind: "add" })} className="h-8 pointer-coarse:h-11">
-              <Plus /> Add
-            </Button>
+            <span className="flex gap-1.5">
+              <Button size="sm" variant="outline" onClick={() => setDlg({ kind: "github" })} className="h-8 pointer-coarse:h-11">
+                <CloudDownload /> Add from GitHub
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setDlg({ kind: "add" })} className="h-8 pointer-coarse:h-11">
+                <Plus /> Add by URL
+              </Button>
+            </span>
           ) : undefined
         }
       >
@@ -138,6 +144,7 @@ export function PotRepos({ project, canManage }: { project: ProjectSummary; canM
           </div>
         ))}
       </Group>
+      <AddFromGithubDialog project={project.key} open={dlg?.kind === "github"} onOpenChange={(o) => !o && setDlg(null)} />
       <AddRepoDialog project={project.key} open={dlg?.kind === "add"} onOpenChange={(o) => !o && setDlg(null)} />
       {dlg?.kind === "link" && <LinkDialog project={project} repo={dlg.repo} onOpenChange={(o) => !o && setDlg(null)} />}
       {dlg?.kind === "remove" && <RemoveDialog project={project.key} repo={dlg.repo} onOpenChange={(o) => !o && setDlg(null)} />}

@@ -11,6 +11,21 @@ mutation procedure repoAdd(project: String, url: String, name: String?, defaultB
   @allow(auth() != null)
   @mcp(tool: "add_repo", description: "Add a repository to a pot (owners of its team, admins, and cooks acting for them with `manage`). Tasks can then name it in `repos`, and a cook can be scoped to it (set_cook_repos). The name defaults to the url's last segment.")
 
+/// Add several repositories to a pot at once.
+/// @param project Pot key, e.g. PAY.
+/// @param repos GitHub full names (acme/api) or urls, separated by newlines or commas.
+mutation procedure repoAddMany(project: String, repos: String): ReposAdded
+  @allow(auth() != null)
+  @mcp(tool: "add_repos", description: "Add several repositories to a pot at once (same managers as add_repo). `repos` is a list of GitHub full names (acme/api) or urls, separated by newlines or commas; pick them with list_forge_repos. Names default to the repository's name in lower case (owner-name when two clash), the default branch comes from GitHub, and a repository already in the pot is skipped and reported.")
+
+/// List the repositories a connected GitHub App can see.
+/// @param project Pot key: marks the repositories already in it, and checks you may add to it. Admins may leave it out.
+/// @param query Keep only repositories whose full name contains this text.
+/// @param installation Only this GitHub App installation (its id, see the Forges page).
+procedure forgeRepos(project: String?, query: String?, installation: Int?): ForgeRepos
+  @allow(auth() != null)
+  @mcp(tool: "list_forge_repos", description: "List the repositories the connected GitHub Apps can see, most recently pushed first (archived last), with in_pot marking those already in the pot. Same people as add_repo (owners of the pot's team, admins, cooks with `manage`); without a project, admins only. Then add some with add_repos. Empty and connected=false: an admin connects a GitHub App on the Forges page.")
+
 /// Remove a repository from a pot.
 /// @param project Pot key, e.g. PAY.
 /// @param name The repository's name.
@@ -42,3 +57,9 @@ mutation procedure repoUnlink(project: String, repo: String, on: String): ReposV
 mutation procedure cookSetRepos(project: String, repos: String?, cook: String?): CookReposView
   @allow(auth() != null)
   @mcp(tool: "set_cook_repos", description: "Say which of a pot's repositories a cook handles: claim_next then gives it only tasks about those repositories or about none, and it is woken only for those. A cook may declare its own; its owner and admins set it for their cooks. Empty repos: all of them (the default).")
+
+/// Forget a repository that sends events no pot follows.
+/// @param repo Its full name, e.g. acme/api.
+mutation procedure forgeRepoDismiss(repo: String): OkResult
+  @allow(auth() != null)
+  @mcp(tool: "dismiss_forge_repo", description: "Admins only: take a repository off the list of those sending GitHub events that no pot follows (it comes back if it sends more). To follow it instead, add it to a pot with add_repos.")

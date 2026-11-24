@@ -165,7 +165,7 @@ pub fn refs_in(text: &str, key: &str) -> Vec<i64> {
 
 /// The task a PR belongs to by its words: branch first, then title, then body; the first task
 /// that exists in a pot that has the repository.
-async fn auto_link(
+pub(super) async fn auto_link(
     c: &mut PgConnection,
     norm: &str,
     branch: &str,
@@ -370,6 +370,9 @@ pub async fn apply(db: &PgPool, connection: Uuid, ev: &ForgeEvent) -> Result<App
         None if pr.number == 0 => return ignored("a check for a commit that is no followed PR"),
         None => {
             if pots_for(c, &repo.norm_url).await?.is_empty() {
+                super::unfollowed::note(c, ev.provider, repo, ev.installation_id, connection)
+                    .await?;
+                tx.commit().await?;
                 return ignored(format!("{} is in no pot", repo.full_name));
             }
             sqlx::query(

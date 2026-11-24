@@ -9,11 +9,20 @@ import { CopyLine } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useV1, useV1Call } from "@/lib/data";
+import { useProjects, useV1, useV1Call } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { FormDialog } from "@/pages/admin";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+interface Unfollowed {
+  repo: string;
+  url: string;
+  installation: number | null;
+  events: number;
+  last_seen: string;
+}
 
 interface Installation {
   id: number;
@@ -57,7 +66,7 @@ const STATUS: Record<Delivery["status"], string> = {
 
 /** Admin: the git hosts corntchap listens to (GitHub Apps), where they are installed and what they last sent. */
 export function ForgesPage() {
-  const forges = useV1<{ public_url: string; connections: Connection[] }>("/forges");
+  const forges = useV1<{ public_url: string; connections: Connection[]; unfollowed: Unfollowed[] }>("/forges");
   const call = useV1Call();
   const now = useNow();
   const [params, setParams] = useSearchParams();
@@ -65,6 +74,35 @@ export function ForgesPage() {
   const [org, setOrg] = useState("");
   const [host, setHost] = useState("");
   const [removing, setRemoving] = useState<Connection | null>(null);
+  const [adding, setAdding] = useState<Unfollowed | null>(null);
+  const pots = useProjects().data ?? [];
+  const [pot, setPot] = useState("");
+  const [busy, setBusy] = useState(false);
+  const unfollowed = forges.data?.unfollowed ?? [];
+
+  async function addToPot() {
+    if (!adding || !pot) return;
+    setBusy(true);
+    try {
+      const r = await call<{ added: unknown[]; skipped: { reason: string }[] }>("POST", `/projects/${pot}/repos/bulk`, { repos: adding.repo });
+      if (r.added.length > 0) toast.success(`${adding.repo} added to ${pot}`, { description: "Its open pull requests that name a task are being linked." });
+      else toast.error("Not added", { description: r.skipped[0]?.reason });
+      setAdding(null);
+    } catch (e) {
+      toast.error("Could not add it", { description: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function dismiss(u: Unfollowed) {
+    try {
+      await call("POST", "/forges/unfollowed/dismiss", { repo: u.repo });
+      toast.success(`${u.repo} dismissed`, { description: "It is listed again if it sends more events." });
+    } catch (e) {
+      toast.error("Could not dismiss it", { description: errorMessage(e) });
+    }
+  }
 
   // GitHub sends the person back here after creating the app
   useEffect(() => {
@@ -188,6 +226,67 @@ export function ForgesPage() {
         </ul>
       )}
 
+      {unfollowed.length > 0 && (
+        <section aria-label="Repositories sending events that no pot follows" className="mt-6">
+          <h2 className="label-caps mb-1.5 px-1">Repositories sending events that no pot follows</h2>
+          <ul className="divide-y divide-border overflow-hidden rounded-[14px] border border-border bg-card">
+            {unfollowed.map((u) => (
+              <li key={u.repo} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <a href={u.url} target="_blank" rel="noreferrer" className="font-mono text-[13px] font-semibold hover:underline">
+                    {u.repo}
+                  </a>
+                  <p className="text-[12px] text-muted-foreground">
+                    {u.events} {u.events === 1 ? "event" : "events"} ignored · last {fmtAgo(u.last_seen, now)}
+                  </p>
+                </div>
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="max-md:h-11"
+                    onClick={() => {
+                      setPot(pots[0]?.key ?? "");
+                      setAdding(u);
+                    }}
+                  >
+                    Add to a pot
+                  </Button>
+                  <Button size="sm" variant="ghost" className="max-md:h-11" onClick={() => void dismiss(u)}>
+                    Dismiss
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 px-1 text-[12px] text-muted-foreground">GitHub told corntchap about these, but no pot has them, so the events were dropped. Adding one to a pot starts following it and links its open pull requests.</p>
+        </section>
+      )}
+      <FormDialog
+        open={!!adding}
+        onOpenChange={(o) => !o && setAdding(null)}
+        title={`Add ${adding?.repo ?? ""} to a pot`}
+        description="Its open pull requests that name a task of the pot are linked right away."
+        onSubmit={() => void addToPot()}
+        busy={busy}
+        submitLabel="Add"
+      >
+        <div className="space-y-1.5">
+          <Label htmlFor="unf-pot">Pot</Label>
+          <Select value={pot} onValueChange={setPot}>
+            <SelectTrigger id="unf-pot" className="h-11 w-full">
+              <SelectValue placeholder="Choose a pot" />
+            </SelectTrigger>
+            <SelectContent>
+              {pots.map((p) => (
+                <SelectItem key={p.key} value={p.key}>
+                  <span className="font-mono">{p.key}</span> {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </FormDialog>
       <FormDialog
         open={connecting}
         onOpenChange={setConnecting}
