@@ -4,7 +4,7 @@ part of "../corntchap.cstack"
 // connect_cloud; the secret entered there goes to connect_cloud_save without the model.
 
 /// Start connecting a cook to a cloud wake, or check (and test) a setup.
-/// @param kind claude-routine (a Claude Code routine on the web), github-comment (a mention in a GitHub comment: Codex cloud, Copilot, …) webhook or coder (an agent run on a Coder deployment; admins).
+/// @param kind claude-routine (a Claude Code routine on the web), github-comment (a mention in a GitHub comment: Codex cloud, Copilot, …) webhook, coder (an agent run on a Coder deployment; admins) or devin (a Devin session).
 /// @param cook The cook to connect (default: you, when a cook connects itself).
 /// @param projects Comma-separated pot keys it wakes for (default all).
 /// @param code An existing setup: show its state instead of opening one.
@@ -15,8 +15,8 @@ mutation procedure cloudConnect(kind: String?, cook: String?, projects: String?,
 
 /// Finish a cloud setup with its values. The answer never repeats the secret.
 /// @param code The setup code from connect_cloud.
-/// @param url claude-routine: the API trigger URL; webhook: the endpoint; coder: the deployment URL.
-/// @param token claude-routine: the trigger's token; github-comment: a GitHub token allowed to comment; webhook: an optional bearer token; coder: a Coder session token.
+/// @param url claude-routine: the API trigger URL; webhook: the endpoint; coder: the deployment URL; devin: the API URL (optional, admins).
+/// @param token claude-routine: the trigger's token; github-comment: a GitHub token allowed to comment; webhook: an optional bearer token; coder: a Coder session token; devin: a Devin API key.
 /// @param secret webhook: the HMAC-SHA256 signing secret.
 /// @param repo github-comment: owner/name.
 /// @param issue github-comment: the issue or PR number.
@@ -24,9 +24,9 @@ mutation procedure cloudConnect(kind: String?, cook: String?, projects: String?,
 /// @param template coder (Coder Tasks, older Coder): the template's name or version id.
 /// @param preset coder (Coder Tasks): the template version preset id.
 /// @param owner coder (Coder Tasks): the Coder user the task belongs to (default me).
-/// @param organization coder (Coder Agents, current Coder): the organization id. Give this or template.
+/// @param organization coder (Coder Agents, current Coder): the organization id. Give this or template. devin: the Devin organization id (org-...).
 /// @param workspace coder (Coder Agents): a workspace id to run in (optional).
 /// @param takesWork Also wake it for new ready work (default false: it is on call, started only by a direct message, an @mention or an answer to its question).
 mutation procedure cloudConnectSave(code: String, url: String?, token: String?, secret: String?, repo: String?, issue: Int?, mention: String?, template: String?, preset: String?, owner: String?, organization: String?, workspace: String?, takesWork: Boolean?): CloudSetup
   @allow(auth() != null)
-  @mcp(tool: "connect_cloud_save", description: "Finish a cloud setup from connect_cloud with its values (trigger URL and token, GitHub repo, issue and token, webhook URL and secret, or Coder URL, token and organization) and make the wake target. The corntchap form calls it itself; call it only when the user chose to give you the values.")
+  @mcp(tool: "connect_cloud_save", description: "Finish a cloud setup from connect_cloud with its values (trigger URL and token, GitHub repo, issue and token, webhook URL and secret, Coder URL, token and organization, or Devin key and organization) and make the wake target. The corntchap form calls it itself; call it only when the user chose to give you the values.")

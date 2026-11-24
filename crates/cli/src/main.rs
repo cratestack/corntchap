@@ -560,17 +560,17 @@ enum WakeCmd {
     /// Add a wake target to an agent.
     Add {
         agent: String,
-        /// relay | claude-routine | webhook | github-comment | coder
-        #[arg(long = "type", value_parser = ["relay", "claude-routine", "webhook", "github-comment", "coder"])]
+        /// relay | claude-routine | webhook | github-comment | coder | devin
+        #[arg(long = "type", value_parser = ["relay", "claude-routine", "webhook", "github-comment", "coder", "devin"])]
         typ: String,
         #[arg(long = "project")]
         projects: Vec<String>,
         #[arg(long = "label")]
         labels: Vec<String>,
-        /// claude-routine: the routine's API trigger URL (…/routines/trig_…/fire); webhook: URL to POST; coder: the deployment URL
+        /// claude-routine: the routine's API trigger URL (…/routines/trig_…/fire); webhook: URL to POST; coder: the deployment URL; devin: the API URL (default https://api.devin.ai, admins only)
         #[arg(long)]
         url: Option<String>,
-        /// claude-routine: the routine's API token (sk-ant-oat01-…); webhook: bearer token; github-comment: GitHub token; coder: Coder session token
+        /// claude-routine: the routine's API token (sk-ant-oat01-…); webhook: bearer token; github-comment: GitHub token; coder: Coder session token; devin: Devin API key
         #[arg(long)]
         token: Option<String>,
         /// webhook: sign each body with HMAC-SHA256 (X-Corntchap-Signature: sha256=…)
@@ -584,7 +584,7 @@ enum WakeCmd {
         /// github-comment: who the comment mentions, e.g. @codex or @copilot (default: the server's GITHUB_MENTION, @cook)
         #[arg(long)]
         mention: Option<String>,
-        /// coder (Coder Agents, current Coder): the organization id; give this or --template
+        /// coder (Coder Agents, current Coder): the organization id; give this or --template; devin: the Devin organization id (org-...)
         #[arg(long)]
         organization: Option<String>,
         /// coder (Coder Agents): run in this workspace id
@@ -1439,6 +1439,12 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                 match typ.as_str() {
                     "webhook" => config = json!({"url": url, "token": token, "secret": secret}),
                     "claude-routine" => config = json!({"url": url, "token": token}),
+                    "devin" => {
+                        config = json!({"url": url, "token": token, "organization": organization});
+                        if let Some(o) = config.as_object_mut() {
+                            o.retain(|_, v| !v.is_null());
+                        }
+                    }
                     "coder" => {
                         config = json!({"url": url, "token": token, "organization": organization,
                             "workspace": workspace, "template": template, "preset": preset,

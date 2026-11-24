@@ -12,6 +12,8 @@
 //!   so they carry a pointer ("you have messages: read them with read_pass"), never the messages.
 //! - `coder`: a Coder agent run (see coder.rs): the first wake creates it, later ones for the same
 //!   pot are follow-up messages to it.
+//! - `devin`: a Devin session (see devin.rs): the first wake creates it, later ones for the same
+//!   pot are follow-up messages to it.
 //! - `webhook`: JSON `{text, agent, project, reasons, wakes}` to your endpoint, signed with
 //!   `X-Corntchap-Signature: sha256=<hmac>` when the target has a `secret`.
 
@@ -25,7 +27,13 @@ use uuid::Uuid;
 use crate::state::AppState;
 
 /// Cloud wake target types (the others, `relay`, are woken through the fire on a machine).
-pub const CLOUD_TYPES: &[&str] = &["webhook", "github-comment", "claude-routine", "coder"];
+pub const CLOUD_TYPES: &[&str] = &[
+    "webhook",
+    "github-comment",
+    "claude-routine",
+    "coder",
+    "devin",
+];
 
 /// Wakes that never start a cloud run. A cloud cook is fire and forget (each run a new session
 /// that cannot stay to chat), so it is on call: someone calls it by hand (a direct message, an
@@ -86,6 +94,9 @@ pub async fn deliver(
     let mut chars = 0usize;
     if typ == "coder" {
         return crate::coder::deliver(state, target, config, project, text).await;
+    }
+    if typ == "devin" {
+        return crate::devin::deliver(state, target, config, project, text).await;
     }
     let req = match typ {
         "webhook" => {

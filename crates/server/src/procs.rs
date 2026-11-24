@@ -1686,7 +1686,7 @@ impl ProcedureRegistry for Procedures {
             (None, _) => match a.kind.as_deref() {
                 Some(k) => connect::open(st, &p, a.cook.as_deref(), k, a.projects.as_deref()).await,
                 None => Err(Error::Invalid(
-                    "kind is required to open a setup: claude-routine, github-comment, webhook or coder"
+                    "kind is required to open a setup: claude-routine, github-comment, webhook, coder or devin"
                         .into(),
                 )),
             },

@@ -7,6 +7,7 @@ pub mod cloud;
 pub mod coder;
 pub mod connect;
 pub mod console;
+pub mod devin;
 pub mod error;
 pub mod files;
 pub mod forge;
