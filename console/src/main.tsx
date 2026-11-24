@@ -20,6 +20,7 @@ import { CookDetailsPage } from "@/pages/details/cook";
 import { PotDetailsPage } from "@/pages/details/pot";
 import { FireDetailsPage } from "@/pages/details/fire";
 import { TeamDetailsPage } from "@/pages/details/team";
+import { ForgesPage } from "@/pages/forges";
 import { AdminOnly, FiresPage, PotsAdminPage, TeamsAdminPage, UsersAdminPage } from "@/pages/admin";
 import { EmptyState } from "@/components/bits";
 import { Button } from "@/components/ui/button";
@@ -89,6 +90,7 @@ function Providers() {
               <Route element={<AdminOnly><Outlet /></AdminOnly>}>
                 <Route path="admin/pots" element={<PotsAdminPage />} />
                 <Route path="admin/users" element={<UsersAdminPage />} />
+                <Route path="admin/forges" element={<ForgesPage />} />
               </Route>
               <Route path="*" element={<NotFound />} />
             </Route>

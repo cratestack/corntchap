@@ -671,6 +671,29 @@ pub fn dim(v: &str) -> String {
 }
 
 /// `corntchap-cli task show` for humans.
+/// One pull request of a task: `acme/shop#12 open  checks failure (build, lint)  review changes_requested  conflict`.
+pub fn pr_line(p: &Value) -> String {
+    let mut parts = vec![
+        format!("{}#{}", s(p, "repo"), p["number"]),
+        s(p, "state"),
+        format!("checks {}", s(p, "checks")),
+    ];
+    if let Some(f) = p["failing"].as_array().filter(|f| !f.is_empty()) {
+        let names: Vec<&str> = f.iter().filter_map(Value::as_str).collect();
+        if let Some(last) = parts.last_mut() {
+            last.push_str(&format!(" ({})", names.join(", ")));
+        }
+    }
+    if p["review"] != "none" {
+        parts.push(format!("review {}", s(p, "review")));
+    }
+    if p["mergeable"] == "false" {
+        parts.push("conflict".into());
+    }
+    parts.push(s(p, "url"));
+    parts.join("  ")
+}
+
 pub fn task_detail(v: &Value) -> String {
     let mut o = String::new();
     let status = s(v, "status");
@@ -731,6 +754,12 @@ pub fn task_detail(v: &Value) -> String {
                 if done { "x" } else { " " },
                 if done { dim(&text) } else { text }
             ));
+        }
+    }
+    if let Some(prs) = v["prs"].as_array().filter(|p| !p.is_empty()) {
+        o.push_str(&format!("\n{}\n", bold("Pull requests")));
+        for p in prs {
+            o.push_str(&format!("  {}\n", pr_line(p)));
         }
     }
     if let Some(d) = v["dependencies"].as_array().filter(|d| !d.is_empty()) {

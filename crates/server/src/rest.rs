@@ -53,6 +53,10 @@ pub fn routes() -> Router<AppState> {
         .route("/tasks/{id}", get(task_get).patch(task_patch))
         .route("/tasks/{id}/claim", post(task_claim))
         .route("/tasks/{id}/split-by-repo", post(task_split))
+        .route("/tasks/{id}/link-pr", post(task_link_pr))
+        .route("/tasks/{id}/unlink-pr", post(task_unlink_pr))
+        .route("/forges", get(forges_list))
+        .route("/forges/{id}", delete(forges_remove))
         .route("/tasks/{id}/heartbeat", post(task_heartbeat))
         .route("/tasks/{id}/check", post(task_check))
         .route("/tasks/{id}/comment", post(task_comment))
@@ -369,6 +373,52 @@ async fn repos_unlink(
 }
 async fn task_split(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
     ok(crate::repos::split_by_repo(&st.db, &p.worker()?, &id).await?)
+}
+
+/// `{"url": "https://github.com/acme/shop/pull/12"}`: link a pull request to the task by hand.
+async fn task_link_pr(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    let url = b["url"].as_str().unwrap_or("");
+    ok(crate::forge::link::link_pr(&st.db, &p.worker()?, &id, url).await?)
+}
+
+/// `{"url": ...}` unlinks that pull request; no url unlinks all of the task's.
+async fn task_unlink_pr(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::forge::link::unlink_pr(&st.db, &p.worker()?, &id, b["url"].as_str()).await?)
+}
+
+/// Connected git hosts with their installations and last delivery (admins only). No secrets.
+async fn forges_list(State(st): State<AppState>, Authn(p): Auth) -> J {
+    if !p.is_user() || !p.is_admin {
+        return Err(Error::Forbidden(
+            "only admins see the connected git hosts".into(),
+        ));
+    }
+    ok(json!({
+        "public_url": st.config.public_url,
+        "connections": crate::forge::store::list(&st.db).await?
+    }))
+}
+
+async fn forges_remove(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<Uuid>) -> J {
+    if !p.is_user() || !p.is_admin {
+        return Err(Error::Forbidden(
+            "only admins remove a connected git host".into(),
+        ));
+    }
+    if !crate::forge::store::remove(&st.db, id).await? {
+        return Err(Error::NotFound("no such connection".into()));
+    }
+    ok(json!({"removed": id}))
 }
 
 /// `{"grants": ["plan", "manage"]}`: what a cook may do beyond working its tasks (people only).

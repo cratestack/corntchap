@@ -103,3 +103,17 @@ mutation procedure block(id: String, epoch: Int, reason: String): TaskView
 mutation procedure taskSplitByRepo(id: String): SplitResult
   @allow(auth() != null)
   @mcp(tool: "split_by_repo", description: "Split an open task that names several repositories (repos) into one subtask per repository, each with that single repository and the title prefixed [name], so each repository's cook takes its part. The task waits for its subtasks; running it again adds only the missing parts.")
+
+/// Link a pull request to a task.
+/// @param id Task id, e.g. PAY-42.
+/// @param url The pull request's address, e.g. https://github.com/acme/shop/pull/12.
+mutation procedure taskLinkPr(id: String, url: String): TaskDetail
+  @allow(auth() != null)
+  @mcp(tool: "link_pr", description: "Link a pull request (its web address, e.g. https://github.com/acme/shop/pull/12) to a task. A link made here wins over the automatic ones (the task's id in the branch, the title or the body). The task then shows the pull request's state, checks and reviews, and its holder is told about failed checks, requested changes and comments. A merge never changes the task's status.")
+
+/// Take a pull request off a task.
+/// @param id Task id, e.g. PAY-42.
+/// @param url The pull request's address; leave out to unlink all of the task's pull requests.
+mutation procedure taskUnlinkPr(id: String, url: String?): TaskDetail
+  @allow(auth() != null)
+  @mcp(tool: "unlink_pr", description: "Take a pull request off a task (all of its pull requests when url is left out). Automatic linking leaves it unlinked afterwards.")

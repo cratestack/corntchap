@@ -621,6 +621,51 @@ pub async fn propagate(
     if repos.is_empty() || from_upstream {
         return Ok(json!([]));
     }
+    let tref = format!("{key}-{number}");
+    let up = Upstream {
+        look: format!(" (get_task {tref} has the details)"),
+        label: tref,
+        title,
+        did: "was served",
+        detail_name: "Result",
+        detail: result.to_string(),
+        task: Some(task),
+        menu,
+        priority,
+    };
+    pass_on(c, Some(actor.id), project, &key, &repos, &up).await
+}
+
+/// What happened upstream, for [`pass_on`]: a served task, or a merged pull request (forge events).
+pub struct Upstream {
+    /// `PAY-3`, or `acme/api#12`.
+    pub label: String,
+    pub title: String,
+    /// "was served" or "was merged".
+    pub did: &'static str,
+    /// "Result" or "Pull request".
+    pub detail_name: &'static str,
+    pub detail: String,
+    /// What a cook can read for details, e.g. ` (get_task PAY-3 has the details)`; may be empty.
+    pub look: String,
+    /// The task it concerns (it gets the note and the events), if any.
+    pub task: Option<Uuid>,
+    pub menu: Option<Uuid>,
+    pub priority: i64,
+}
+
+/// Tell what depends on `repos` (aliases in `project`) about `up`: see [`propagate`]. `actor` is
+/// left out of the cooks told and is the creator of follow-up tasks (none for a forge event).
+pub async fn pass_on(
+    c: &mut PgConnection,
+    actor: Option<Uuid>,
+    project: Uuid,
+    key: &str,
+    repos: &[String],
+    up_: &Upstream,
+) -> Result<Value> {
+    let (title, menu, priority) = (&up_.title, up_.menu, up_.priority);
+    let task = up_.task;
     let rows: Vec<(String, String, String)> = sqlx::query_as(
         "select r.name, u.name, l.mode from repo_links l
            join project_repos r on r.id = l.repo_id join project_repos u on u.id = l.depends_on_id
@@ -628,7 +673,7 @@ pub async fn propagate(
          order by r.name, u.name",
     )
     .bind(project)
-    .bind(&repos)
+    .bind(repos)
     .fetch_all(&mut *c)
     .await?;
     // dependent -> (upstream names, mode: task wins over notify)
@@ -644,8 +689,8 @@ pub async fn propagate(
             None => by_dep.push((dep, vec![up], mode)),
         }
     }
-    let tref = format!("{key}-{number}");
-    let short: String = result.chars().take(1500).collect();
+    let (tref, did, look, detail_name) = (&up_.label, up_.did, &up_.look, up_.detail_name);
+    let short: String = up_.detail.chars().take(1500).collect();
     let mut told = vec![];
     for (dep, ups, mode) in by_dep {
         let up = ups.join(", ");
@@ -660,7 +705,7 @@ pub async fn propagate(
             let ftitle = format!("[{dep}] Follow up on {tref}: {title}");
             let quoted = short.replace('\n', "\n> ");
             let body = format!(
-                "{tref} (\"{title}\") was served in `{up}`, which `{dep}` depends on. Check whether `{dep}` needs a change; if it does not, say so and complete this task.\n\nWhat was done:\n\n> {quoted}"
+                "{tref} (\"{title}\") {did} in `{up}`, which `{dep}` depends on. Check whether `{dep}` needs a change; if it does not, say so and complete this task.\n\nWhat was done:\n\n> {quoted}"
             );
             sqlx::query(
                 "insert into tasks (id, project_id, number, title, body, priority, status, created_by, menu_id, repos, from_upstream)
@@ -672,7 +717,7 @@ pub async fn propagate(
             .bind(&ftitle)
             .bind(&body)
             .bind(priority)
-            .bind(actor.id)
+            .bind(actor)
             .bind(menu)
             .bind(&dep)
             .execute(&mut *c)
@@ -682,7 +727,7 @@ pub async fn propagate(
                 Some(project),
                 Some(sub),
                 "task.created",
-                Some(actor.id),
+                actor,
                 json!({"title": ftitle, "labels": [], "repos": [dep], "upstream": tref}),
             )
             .await?;
@@ -691,22 +736,21 @@ pub async fn propagate(
             let cooks: Vec<(Uuid, String)> = sqlx::query_as(
                 "select a.id, a.name from cook_repos cr join principals a on a.id = cr.agent_id and a.disabled_at is null
                  join projects pr on pr.id = cr.project_id
-                 where cr.project_id = $1 and $2 = any(cr.repos) and a.id <> $3
+                 where cr.project_id = $1 and $2 = any(cr.repos) and ($3::uuid is null or a.id <> $3)
                    and exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = a.id)
                  order by a.name",
             )
             .bind(project)
             .bind(&dep)
-            .bind(actor.id)
+            .bind(actor)
             .fetch_all(&mut *c)
             .await?;
             let text = format!(
-                "Upstream change: {tref} \"{title}\" was served in `{up}`, which `{dep}` depends on. Result: {short}\n\nCheck whether `{dep}` needs a change (get_task {tref} has the details); if it does, open a task with create_task (repos: [\"{dep}\"]). If nothing is affected, do nothing."
+                "Upstream change: {tref} \"{title}\" {did} in `{up}`, which `{dep}` depends on. {detail_name}: {short}\n\nCheck whether `{dep}` needs a change{look}; if it does, open a task with create_task (repos: [\"{dep}\"]). If nothing is affected, do nothing."
             );
             let mut names = vec![];
             for (id, name) in cooks {
-                crate::questions::wake(c, project, &key, id, None, Some(task), &text, "upstream")
-                    .await?;
+                crate::questions::wake(c, project, key, id, None, task, &text, "upstream").await?;
                 names.push(name);
             }
             told.push(json!({"repo": dep, "mode": "notify", "cooks": names}));
@@ -735,17 +779,19 @@ pub async fn propagate(
             }
         })
         .collect();
-    sqlx::query("insert into comments (task_id, author_id, body) values ($1, null, $2)")
-        .bind(task)
-        .bind(format!("Upstream change passed on ({}).", line.join("; ")))
-        .execute(&mut *c)
-        .await?;
+    if let Some(task) = task {
+        sqlx::query("insert into comments (task_id, author_id, body) values ($1, null, $2)")
+            .bind(task)
+            .bind(format!("Upstream change passed on ({}).", line.join("; ")))
+            .execute(&mut *c)
+            .await?;
+    }
     service::emit(
         c,
         Some(project),
-        Some(task),
+        task,
         "task.propagated",
-        Some(actor.id),
+        actor,
         json!({"upstream": repos.join(", "), "told": told}),
     )
     .await?;

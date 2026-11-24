@@ -196,6 +196,10 @@ enum TaskCmd {
     },
     /// Split a task that names several repositories into one subtask per repository.
     Split { id: String },
+    /// Link a pull request to a task (its web address). It wins over the branch and title rules.
+    LinkPr { id: String, url: String },
+    /// Take a pull request off a task (all of its pull requests without a url).
+    UnlinkPr { id: String, url: Option<String> },
     /// Show one task.
     Show {
         id: String,
@@ -1599,6 +1603,23 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
                     .map(|m| format!(" (menu {m})"))
                     .unwrap_or_default()
             ));
+        }
+        TaskCmd::LinkPr { id, url } => {
+            let v = api
+                .post(&format!("/tasks/{id}/link-pr"), json!({"url": url}))
+                .await?;
+            ok_line(format!(
+                "{id} linked to {url} ({} pull request(s))",
+                v["prs"].as_array().map_or(0, Vec::len)
+            ));
+        }
+        TaskCmd::UnlinkPr { id, url } => {
+            let body = match url {
+                Some(u) => json!({"url": u}),
+                None => json!({}),
+            };
+            api.post(&format!("/tasks/{id}/unlink-pr"), body).await?;
+            ok_line(format!("{id}: pull request unlinked"));
         }
         TaskCmd::Show { id, json } => {
             let v = api.get(&format!("/tasks/{id}")).await?;

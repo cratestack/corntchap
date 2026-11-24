@@ -247,6 +247,10 @@ pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
     .execute(&state.db)
     .await?;
     crate::usage::prune(state).await?;
+    // Forge deliveries (src/forge): kept a week, enough to dedupe a redelivery and show the last one.
+    sqlx::query("delete from forge_deliveries where at < now() - interval '7 days'")
+        .execute(&state.db)
+        .await?;
     Ok(())
 }
 
@@ -353,8 +357,13 @@ impl Dispatcher {
                 .as_str()
                 .and_then(|a| a.parse::<Uuid>().ok())
         {
-            // an upstream wake is work, not a call: it starts a cloud run only for targets that take work
-            let work = payload["reason"].as_str() == Some("upstream");
+            // an upstream wake (and a merge notice) is work or news, not a call: it starts a cloud run
+            // only for targets that take work. A CI failure, requested changes or a comment on the
+            // cook's task (reason "forge") is someone talking to it about its task, like a comment.
+            let work = matches!(
+                payload["reason"].as_str(),
+                Some("upstream") | Some(crate::forge::events::REASON_MERGED)
+            );
             let has_cloud: bool = sqlx::query_scalar(
                 "select exists (select 1 from wake_targets where agent_id = $1 and type = any($2)
                    and (not $3 or config->>'takes_work' = 'true'))",

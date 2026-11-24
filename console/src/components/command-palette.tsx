@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { BookMarked, ChefHat, MessageCircleQuestion, Soup, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
+import { BookMarked, ChefHat, GitBranch, MessageCircleQuestion, Soup, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -137,6 +137,9 @@ export function CommandPalette() {
               </CommandItem>
               <CommandItem value="admin users" onSelect={run(() => navigate("/admin/users"))}>
                 <UserRound /> Users (admin)
+              </CommandItem>
+              <CommandItem value="admin forges github" onSelect={run(() => navigate("/admin/forges"))}>
+                <GitBranch /> Forges (admin)
               </CommandItem>
             </>
           )}

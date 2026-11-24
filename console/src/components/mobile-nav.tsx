@@ -9,6 +9,7 @@ import {
   Files,
   Flame,
   FolderKanban,
+  GitBranch,
   Info,
   LayoutGrid,
   LogOut,
@@ -227,6 +228,7 @@ export function MoreSheet({ open, onOpenChange, pot }: { open: boolean; onOpenCh
                 <>
                   <SheetRow to="/admin/pots" icon={FolderKanban} onPick={close}>Pots</SheetRow>
                   <SheetRow to="/admin/users" icon={UserRound} onPick={close}>Users</SheetRow>
+                  <SheetRow to="/admin/forges" icon={GitBranch} onPick={close}>Forges</SheetRow>
                 </>
               )}
             </section>
@@ -427,6 +429,9 @@ export function TabletRail({ account }: { account: ReactNode }) {
             </RailLink>
             <RailLink to="/admin/users" label="Users (admin)">
               <UserRound className="size-5" aria-hidden="true" />
+            </RailLink>
+            <RailLink to="/admin/forges" label="Forges (admin)">
+              <GitBranch className="size-5" aria-hidden="true" />
             </RailLink>
           </>
         )}

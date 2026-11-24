@@ -8,6 +8,7 @@ pub mod connect;
 pub mod console;
 pub mod error;
 pub mod files;
+pub mod forge;
 pub mod jobs;
 pub mod mcp_compat;
 pub mod menus;

@@ -39,6 +39,22 @@ type ChangePayload {
   depends_on String?
   /// task.propagated: the repositories of the served task that others depend on, comma separated.
   upstream String?
+  /// forge.* events: the pull request's number (its repository is `repo`, `owner/name`).
+  number Int?
+  /// forge.pr: opened, reopened, closed or updated.
+  action String?
+  /// forge.checks: success, failure, timed_out or cancelled.
+  conclusion String?
+  /// forge.checks: the failing checks, comma separated.
+  failing String?
+  /// forge.review and forge.comment: who wrote it, and the start of what they wrote.
+  author String?
+  excerpt String?
+  /// forge.review: approved, changes_requested or commented.
+  review String?
+  /// forge.comment: the file and line of an inline comment.
+  path String?
+  line Int?
 }
 
 type ChangeView {

@@ -29,6 +29,10 @@ pub const CLOUD_TYPES: &[&str] = &["webhook", "github-comment", "claude-routine"
 /// that cannot stay to chat), so it is on call: someone calls it by hand (a direct message, an
 /// @mention, a comment on its task). A broadcast, a reminder or the answer to its question does
 /// not start a run: the answer is kept, and the next run reads it with my_questions.
+/// Forge events (src/forge): a CI failure, requested changes, a comment or a conflict on the cook's
+/// task (reason `forge`) is someone talking to it about its task and starts a run, like `comment`.
+/// A merge notice (`forge-merged`) and an upstream change (`upstream`) start one only for targets
+/// that take work (see jobs.rs).
 pub const NOT_ON_CALL: &[&str] = &["broadcast", "comment-nudge", "answer", "note"];
 
 /// What to put in a Claude routine's saved prompt so it acts on the payload corntchap sends.
