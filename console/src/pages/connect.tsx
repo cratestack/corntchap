@@ -20,6 +20,7 @@ const KIND_TITLE: Record<string, string> = {
   "github-comment": "GitHub comments",
   webhook: "a webhook",
   coder: "a Coder agent",
+  devin: "a Devin session",
 };
 
 const randomSecret = () => {

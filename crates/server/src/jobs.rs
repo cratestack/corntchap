@@ -596,7 +596,7 @@ impl Dispatcher {
                 )
                 .await;
             }
-            "webhook" | "github-comment" | "claude-routine" | "coder" => {
+            "webhook" | "github-comment" | "claude-routine" | "coder" | "devin" => {
                 let state = self.state.clone();
                 let (typ, config, agent, agent_id, target) = (
                     c.typ.clone(),

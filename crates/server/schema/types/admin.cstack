@@ -97,7 +97,7 @@ type EnabledView {
 /// How and when an idle cook is woken.
 type WakeTargetView {
   id String
-  /// relay, webhook, github-comment, claude-routine or coder.
+  /// relay, webhook, github-comment, claude-routine, coder or devin.
   type String
   /// Only wake for these pots (empty: all).
   projects String[]

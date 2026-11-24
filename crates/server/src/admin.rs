@@ -1120,7 +1120,11 @@ pub async fn list_wake_targets(db: &PgPool, p: &Principal, agent: &str) -> Resul
     let rows: Vec<Value> = sqlx::query_scalar(
         // secrets in config are never echoed back
         "select jsonb_build_object('id', id, 'type', type, 'projects', projects, 'labels', labels,
-            'config', config - 'token' - 'headers' - 'secret') from wake_targets where agent_id = $1 order by id",
+            'config', (config - 'token' - 'headers' - 'secret') || coalesce((
+                select jsonb_build_object('session_url', r.session_url) from coder_runs r
+                where r.target_id = wake_targets.id and r.session_url is not null
+                order by r.updated_at desc limit 1), '{}'::jsonb))
+            from wake_targets where agent_id = $1 order by id",
     )
     .bind(id)
     .fetch_all(&mut *c)

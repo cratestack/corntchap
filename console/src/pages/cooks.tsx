@@ -254,6 +254,7 @@ const CLOUD_WAKES = [
   { id: "github-comment", title: "GitHub comment", sub: "Codex cloud, Copilot and others", icon: MessageSquare },
   { id: "webhook", title: "Webhook", sub: "Your own endpoint (admins)", icon: Webhook },
   { id: "coder", title: "Coder", sub: "An agent run on your Coder deployment (admins)", icon: Server },
+  { id: "devin", title: "Devin", sub: "A Devin session on your Devin organization", icon: Server },
 ] as const;
 
 /**
@@ -498,7 +499,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
                 </label>
               ) : (
                 <p className="rounded-xl border border-border bg-muted/40 px-3.5 py-3 text-[12.5px] text-muted-foreground">
-                  A cloud cook has no fire. After the token you pick how it is woken: a Claude routine, GitHub comments, a webhook or Coder.
+                  A cloud cook has no fire. After the token you pick how it is woken: a Claude routine, GitHub comments, a webhook, Coder or Devin.
                 </p>
               )}
             </FormSheetBody>

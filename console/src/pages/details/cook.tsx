@@ -262,10 +262,12 @@ const WAKE_KIND: Record<string, { title: string; icon: typeof Flame }> = {
   "github-comment": { title: "GitHub comment", icon: MessageSquare },
   webhook: { title: "Webhook", icon: Webhook },
   coder: { title: "Coder agent", icon: Server },
+  devin: { title: "Devin session", icon: Server },
 };
 
 function wakeDetail(w: WakeTargetRow): string {
   if (w.type === "webhook" || w.type === "coder") return String(w.config.url ?? "");
+  if (w.type === "devin") return `org ${String(w.config.organization ?? "")}`;
   if (w.type === "claude-routine") return `routine ${String(w.config.url ?? "").match(/trig_[A-Za-z0-9]+/)?.[0] ?? ""}`;
   if (w.type === "github-comment") return `${String(w.config.mention ?? "the default mention")} on ${String(w.config.repo ?? "")}#${String(w.config.issue ?? "")}`;
   return "wakes the sessions on its machine";
@@ -313,6 +315,11 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
             hint={
               <>
                 <span className="block truncate font-mono text-[11px]">{wakeDetail(w)}</span>
+                {typeof w.config.session_url === "string" && /^https?:\/\//.test(w.config.session_url) && (
+                  <a href={w.config.session_url} target="_blank" rel="noreferrer" className="block truncate text-[11.5px] underline underline-offset-2">
+                    Latest session
+                  </a>
+                )}
                 {w.type !== "relay" && (
                   <span className="block text-[11.5px]">{takes ? "Also started by every ready task in its pots." : "Started by name only: a message, an @mention or a comment on its task."}</span>
                 )}
@@ -377,6 +384,7 @@ export function AddWake({
     { id: "relay", title: "Relay", sub: "A fire on your laptop wakes its sessions", icon: Flame },
     { id: "claude-routine", title: "Claude Code on the web", sub: "A routine is started on each wake", icon: Cloud },
     { id: "github-comment", title: "GitHub comment", sub: "Codex cloud, Copilot and others", icon: MessageSquare },
+    { id: "devin", title: "Devin", sub: "A Devin session on your Devin organization", icon: Server },
     ...(admin
       ? [
           { id: "webhook", title: "Webhook", sub: "Your own endpoint", icon: Webhook },

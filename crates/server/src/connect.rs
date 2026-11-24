@@ -18,7 +18,13 @@ use crate::{
     stations,
 };
 
-pub const KINDS: &[&str] = &["claude-routine", "github-comment", "webhook", "coder"];
+pub const KINDS: &[&str] = &[
+    "claude-routine",
+    "github-comment",
+    "webhook",
+    "coder",
+    "devin",
+];
 /// The MCP App that renders a setup (served by the MCP front door).
 pub const UI_URI: &str = "ui://corntchap/connect-cloud";
 pub const UI_HTML: &str = include_str!("connect.html");
@@ -184,6 +190,20 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 field("issue", "Issue or PR number", false, true, "42", "The thread corntchap comments on."),
                 field("mention", "Mention", false, false, default_mention, &format!("Who each comment mentions, e.g. @codex or @copilot (default {default_mention}).")),
                 field("token", "GitHub token", true, true, "github_pat_…", "Allowed to comment on that repository."),
+            ],
+        ),
+        "devin" => (
+            vec![
+                "Devin (devin.ai) runs the cook as a Devin session. The first wake starts a session; later wakes for the same pot are messages to it (a suspended session resumes by itself).".into(),
+                "In Devin, create a service user with permission to use and manage the organization's sessions, and an API key for it (it starts with cog_). corntchap sends it as a bearer token and keeps it: it is never shown again.".into(),
+                "Make the corntchap MCP server reachable from Devin: add it once in your Devin organization's MCP settings, signed in with the cook's token. corntchap sends no credential in the prompt.".into(),
+                "Enter the organization id (it starts with org-). Leave the URL empty for Devin's own API host.".into(),
+                "It is on call: a direct message, an @mention or a comment on its task wakes it; broadcasts and answers do not. Tick 'new work' only if it should also start for every ready task. Only an admin can change the URL.".into(),
+            ],
+            vec![
+                field("token", "Devin API key", true, true, "cog_…", "A service user's key with permission to use and manage sessions."),
+                field("organization", "Organization id", false, true, "org-…", "Your Devin organization."),
+                field("url", "API URL", false, false, "https://api.devin.ai", "Only for a self-hosted or test endpoint (admins); leave empty for Devin."),
             ],
         ),
         "coder" => (
@@ -397,6 +417,32 @@ fn kind_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
             }
             Ok(out)
         }
+        "devin" => {
+            // Devin's own API host needs no admin; any other URL (a test or self-hosted endpoint) is an admin's call
+            let default = crate::devin::DEFAULT_URL;
+            let url = get("url")
+                .map(|u| u.trim_end_matches('/'))
+                .unwrap_or(default);
+            if url != default {
+                if !is_admin {
+                    return Err(Error::Forbidden(
+                        "only an admin can point Devin at another URL".into(),
+                    ));
+                }
+                if !(url.starts_with("https://") || url.starts_with("http://")) {
+                    return invalid("url must be http(s)");
+                }
+            }
+            let token = get("token")
+                .ok_or_else(|| Error::Invalid("token is required: a Devin API key".into()))?;
+            let org = get("organization").ok_or_else(|| {
+                Error::Invalid("organization is required: the Devin organization id (org-…)".into())
+            })?;
+            if org.contains(['/', '?', '#', ' ']) {
+                return invalid("organization is a Devin organization id (org-…)");
+            }
+            Ok(json!({"url": url, "token": token, "organization": org}))
+        }
         "coder" => {
             // the URL is any host the admin names (a self-hosted deployment): not a cook owner's call
             if !is_admin {
@@ -464,7 +510,7 @@ fn kind_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
             }
             Ok(out)
         }
-        _ => invalid("type must be relay, webhook, claude-routine, github-comment or coder"),
+        _ => invalid("type must be relay, webhook, claude-routine, github-comment, coder or devin"),
     }
 }
 

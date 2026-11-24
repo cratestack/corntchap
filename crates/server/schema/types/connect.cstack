@@ -36,7 +36,7 @@ type CloudSetup {
   /// Setup code, e.g. cs_1a2b…: pass it to connect_cloud_save and connect_cloud.
   code String
   cook String
-  /// claude-routine, github-comment, webhook or coder.
+  /// claude-routine, github-comment, webhook, coder or devin.
   kind String
   /// Pots it wakes for (empty: all).
   projects String[]
