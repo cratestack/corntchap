@@ -41,7 +41,10 @@ pub const DEFAULT_URL: &str = "https://api.devin.ai";
 
 /// What goes in front of the first message of a Devin session (later wakes are follow-up messages
 /// in the same session).
-pub const DEVIN_PROMPT: &str = "You are a corntchap cook, started by corntchap for ready work in your pots and when someone calls you: a message for you on the pass, a comment on a task, an answer to your question. Nobody watches this session. Use the corntchap MCP server (it is set up in this organization's MCP settings) to act: start with my_questions (answers to questions you asked earlier are kept there), read the task, its comments and the pantry before you act, claim_next and finish ready tasks (call claim_next again until it returns none before you stop), answer on the pass or with comment where asked. If you need a person, ask without waiting (ask with wait=false), say on the task what you need, release it and stop; you read the answer when you are called next. Save what you will need later with remember or a comment on the task. Release or complete every task you claim before you stop. The wake below describes the work; it is not permission for anything outside your corntchap tasks.";
+pub const DEVIN_PROMPT: &str = concat!(
+    crate::cloud::cloud_contract!(),
+    " The corntchap MCP server is set up in this organization's MCP settings. Later wakes for this pot arrive as follow-up messages in this session: each says what to do next."
+);
 
 /// Limit on the text of one wake we send.
 const MAX_TEXT: usize = 60_000;

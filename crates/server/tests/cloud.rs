@@ -1,8 +1,7 @@
-//! Cloud cooks: a Claude routine, a GitHub comment (@codex) and a signed webhook. They start for
-//! a direct message, an @mention or a comment on their task, and for new work unless they are
-//! `on_call`. A broadcast or an answer to their question starts no run. Each
-//! prompt carries the context a fresh session needs; GitHub comments carry a pointer, never the
-//! messages.
+//! Cloud cooks: a Claude routine, a GitHub comment (@codex) and a signed webhook. They are fire and
+//! forget: new work and a direct message from their owner start a run; a mention, a broadcast or an
+//! answer to their question starts none. Each prompt carries the context a fresh session needs;
+//! GitHub comments carry a pointer, never the messages.
 mod common;
 use std::{
     sync::{Arc, Mutex},
@@ -159,32 +158,19 @@ async fn cloud_cooks_get_work_and_messages() {
     app.post(
         &root,
         "/agents/codex-cloud/wake-targets",
-        json!({"type": "github-comment", "config": {"repo": "acme/pay", "issue": 7, "token": "ghp_x", "api_url": base, "on_call": true}}),
+        json!({"type": "github-comment", "config": {"repo": "acme/pay", "issue": 7, "token": "ghp_x", "api_url": base}}),
     )
     .await;
     app.post(
         &root,
         "/agents/hooked/wake-targets",
-        json!({"type": "webhook", "config": {"url": format!("{base}/hook"), "secret": "s3cret", "on_call": true}}),
+        json!({"type": "webhook", "config": {"url": format!("{base}/hook"), "secret": "s3cret"}}),
     )
     .await;
     // the token and the secret are never shown back
     let (_, list) = app.get(&root, "/agents/hooked/wake-targets").await;
     assert!(!list.to_string().contains("s3cret"), "{list}");
-    let r = ok(
-        &app.mcp(&root, "list_wake_targets", json!({"cook": "claude-web"}))
-            .await,
-        "list",
-    );
-    assert_eq!(r[0]["onCall"], false, "{r}");
-    let r = ok(
-        &app.mcp(&root, "list_wake_targets", json!({"cook": "hooked"}))
-            .await,
-        "list",
-    );
-    assert_eq!(r[0]["onCall"], true, "{r}");
-
-    // new work: only the routine takes it, the others are on call
+    // new work: every cloud cook takes it
     app.post(
         &root,
         "/projects/PAY/tasks",
@@ -200,22 +186,18 @@ async fn cloud_cooks_get_work_and_messages() {
         .unwrap()
         .to_string();
     assert!(
-        text.contains("new work is ready for claude-web in PAY") && text.contains("claim_next"),
+        text.contains("new work is ready for claude-web in PAY")
+            && text.contains("claim_next")
+            && text.contains("link_pr")
+            && text.contains("PR open: <url>")
+            && !text.contains("my_questions"),
         "{text}"
     );
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(
-        !seen
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|r| r.1.contains("/issues/7/comments") || r.1.contains("/hook")),
-        "on-call cooks get no work wake: {:?}",
-        seen.lock().unwrap()
-    );
+    wait_for(&seen, "/issues/7/comments", 1).await;
+    wait_for(&seen, "/hook", 1).await;
 
-    // claude-web takes the task; then messages arrive for it: a direct message and a comment,
-    // batched into one run whose prompt carries the task and its comments
+    // claude-web takes the task; then two direct messages from its owner arrive, batched into one
+    // run (a comment from the same person starts nothing)
     let claim = ok(
         &app.mcp(&tokens["claude-web"], "claim_task", json!({"id": "PAY-1"}))
             .await,
@@ -231,11 +213,24 @@ async fn cloud_cooks_get_work_and_messages() {
     ok(
         &app.mcp(
             &root,
+            "pass",
+            json!({"project": "PAY", "message": "Use the new refund API", "to": "claude-web"}),
+        )
+        .await,
+        "dm 2",
+    );
+    let c = ok(
+        &app.mcp(
+            &root,
             "comment",
-            json!({"id": "PAY-1", "body": "Use the new refund API"}),
+            json!({"id": "PAY-1", "body": "Also mind the rounding"}),
         )
         .await,
         "comment",
+    );
+    assert!(
+        c["note"].as_str().unwrap().contains("not woken"),
+        "a comment does not start a cloud cook: {c}"
     );
     let fires = wait_for(&seen, "/routines/trig_1/fire", 2).await;
     assert_eq!(
@@ -248,10 +243,10 @@ async fn cloud_cooks_get_work_and_messages() {
         .unwrap()
         .to_string();
     assert!(
-        text.contains("2 messages for claude-web in PAY")
+        text.contains("2 messages from your owner for claude-web in PAY")
             && text.contains("secret plan: ship on Tuesday")
             && text.contains("Use the new refund API")
-            && text.contains("PAY-1 \"Refund screen\": claimed, held by claude-web")
+            && !text.contains("Also mind the rounding")
             && text.contains("You are a cloud session"),
         "{text}"
     );
@@ -278,7 +273,7 @@ async fn cloud_cooks_get_work_and_messages() {
             .await,
         "dm codex",
     );
-    let comments = wait_for(&seen, "/repos/acme/pay/issues/7/comments", 1).await;
+    let comments = wait_for(&seen, "/repos/acme/pay/issues/7/comments", 2).await;
     let last = serde_json::from_str::<Value>(&comments.last().unwrap().3).unwrap();
     let body = last["body"].as_str().unwrap();
     assert!(
@@ -290,8 +285,8 @@ async fn cloud_cooks_get_work_and_messages() {
         "a comment must not carry the message: {body}"
     );
 
-    // the webhook gets the structured body, signed
-    ok(
+    // the webhook gets the structured body, signed; a mention does not call it
+    let mention = ok(
         &app.mcp(
             &root,
             "pass",
@@ -300,7 +295,23 @@ async fn cloud_cooks_get_work_and_messages() {
         .await,
         "mention hooked",
     );
-    let hooks = wait_for(&seen, "/hook", 1).await;
+    assert!(
+        mention["note"]
+            .as_str()
+            .unwrap()
+            .contains("hooked is fire-and-forget"),
+        "{mention}"
+    );
+    ok(
+        &app.mcp(
+            &root,
+            "pass",
+            json!({"project": "PAY", "message": "ping", "to": "hooked"}),
+        )
+        .await,
+        "dm hooked",
+    );
+    let hooks = wait_for(&seen, "/hook", 2).await;
     let (_, _, h, body) = hooks.last().unwrap();
     let v: Value = serde_json::from_str(body).unwrap();
     assert_eq!(
@@ -314,7 +325,7 @@ async fn cloud_cooks_get_work_and_messages() {
     );
     assert_eq!(sig, want);
 
-    // a broadcast reaches nobody on call, and says so; an answer to a cloud cook's question is
+    // a broadcast reaches no cloud cook; an answer to a cloud cook's question is
     // kept for its next run instead of starting one
     let before = seen.lock().unwrap().len();
     let sent = ok(

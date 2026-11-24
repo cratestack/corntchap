@@ -481,6 +481,15 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
             .ok_or_else(|| Error::NotFound(format!("nobody named {name} in {}'s team", pr.key)))?,
         ),
     };
+    if let Some(cook) = to
+        && crate::cloud::is_fire_and_forget(&mut tx, cook).await?
+    {
+        let name: String = sqlx::query_scalar("select name from principals where id = $1")
+            .bind(cook)
+            .fetch_one(&mut *tx)
+            .await?;
+        return Err(crate::cloud::refusal(&name));
+    }
     let mut station = stations::for_claim(&mut tx, p, a.station.as_deref(), pr.id).await?;
     if station.is_none()
         && let Some(t) = &task
@@ -502,6 +511,11 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
         };
         if !p.is_agent() {
             wait = false;
+        } else if crate::cloud::is_fire_and_forget(&mut tx, p.id).await? {
+            return invalid(format!(
+                "{} is fire-and-forget: nobody can wake it when the answer comes. Block the task instead (block, with what a person must decide), or ask without wait",
+                p.name
+            ));
         } else if t.status != "claimed" || t.claimed_by != Some(p.id) {
             return invalid(format!(
                 "wait parks a task you hold: {} is {} {}",
@@ -579,8 +593,8 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
         json!({"question": qref, "title": short(&title), "kind": sh.kind, "to": a.to}),
     )
     .await?;
-    // Asked of a cook: it is woken (its main station, or the session holding the task), cloud
-    // cooks included: someone is talking to it.
+    // Asked of a cook: it is woken (its main station, or the session holding the task). A
+    // fire-and-forget cook was refused above.
     if let Some(cook) = to
         && cook != p.id
         && sqlx::query_scalar::<_, bool>(
@@ -1257,7 +1271,8 @@ pub async fn note(db: &PgPool, p: &Principal, r: &str, body: &str) -> Result<Val
     Ok(out)
 }
 
-/// A direct wake for one cook (and station), carrying its own prompt text.
+/// A direct wake for one cook (and station), carrying its own prompt text. A fire-and-forget cook
+/// (see [`crate::cloud::fire_and_forget_sql`]) is never woken this way: see [`wake_from`].
 pub async fn wake(
     c: &mut PgConnection,
     project: Uuid,
@@ -1268,10 +1283,33 @@ pub async fn wake(
     text: &str,
     reason: &str,
 ) -> Result<Value> {
-    let name: String = sqlx::query_scalar("select name from principals where id = $1")
-        .bind(agent)
-        .fetch_one(&mut *c)
-        .await?;
+    wake_from(c, project, key, agent, station, task, text, reason, None).await
+}
+
+/// [`wake`] for a message sent by `from` (a principal id). The choke point of every wake: a
+/// fire-and-forget cook is woken only by a direct message on the pass (reason `pass`) whose sender
+/// is its own owner, and for anything else nothing is emitted (no wake, no usage record) and the
+/// reply says `woken: false`.
+pub async fn wake_from(
+    c: &mut PgConnection,
+    project: Uuid,
+    key: &str,
+    agent: Uuid,
+    station: Option<Uuid>,
+    task: Option<Uuid>,
+    text: &str,
+    reason: &str,
+    from: Option<Uuid>,
+) -> Result<Value> {
+    let (name, owner): (String, Option<Uuid>) =
+        sqlx::query_as("select name, owner_id from principals where id = $1")
+            .bind(agent)
+            .fetch_one(&mut *c)
+            .await?;
+    let cloud = crate::cloud::is_fire_and_forget(&mut *c, agent).await?;
+    if cloud && !(reason == "pass" && owner.is_some() && from == owner) {
+        return Ok(json!({"cook": name, "woken": false, "cloud": true}));
+    }
     let task_ref: Option<String> = match task {
         Some(t) => sqlx::query_scalar(
             "select pr.key || '-' || t.number from tasks t join projects pr on pr.id = t.project_id where t.id = $1",
@@ -1343,15 +1381,6 @@ pub async fn wake(
         json!({"agent": name, "agent_id": agent, "project": key, "station": st, "text": text, "reason": reason,
                "task": task_ref}),
     )
-    .await?;
-    // a cook with a cloud wake target is woken in the cloud (the dispatcher prefers it): each
-    // wake is a fresh run that answers once and stops
-    let cloud: bool = sqlx::query_scalar(
-        "select exists (select 1 from wake_targets where agent_id = $1 and type = any($2))",
-    )
-    .bind(agent)
-    .bind(crate::cloud::CLOUD_TYPES)
-    .fetch_one(&mut *c)
     .await?;
     // who was woken, for the record: the cook, and the session when there is one
     let mut out = json!({

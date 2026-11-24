@@ -1,6 +1,6 @@
 //! Forge events (src/forge): signed deliveries, deduplication, which repositories are followed,
 //! how a PR finds its task, what each event does to `forge_prs`, who is woken (and who is not), that
-//! a merge never changes a status, the cloud rules, and the GitHub App manifest flow against a fake
+//! a merge completes only a task nobody holds, the cloud rules, and the GitHub App manifest flow against a fake
 //! GitHub.
 mod common;
 use std::{
@@ -924,7 +924,7 @@ async fn reviews_and_comments_wake_the_holder_but_not_for_its_own_words() {
 }
 
 #[tokio::test]
-async fn a_merge_notifies_and_never_changes_the_status() {
+async fn a_merge_notifies_the_holder_and_leaves_a_held_task_alone() {
     let w = world(false).await;
     w.task("Cart").await;
     w.task("Served").await;
@@ -963,7 +963,7 @@ async fn a_merge_notifies_and_never_changes_the_status() {
     assert_eq!(
         w.status("SHOP-1").await,
         "claimed",
-        "a merge never serves the task"
+        "a merge does not serve a held task"
     );
     assert_eq!(w.status("SHOP-2").await, "done");
     assert_eq!(w.events("forge.merged").await, 2);
@@ -1169,25 +1169,27 @@ async fn until(seen: &Seen, path: &str, n: usize) {
 }
 
 #[tokio::test]
-async fn cloud_cooks_start_on_ci_and_comments_but_on_merges_only_when_they_take_work() {
+async fn forge_events_never_start_a_cloud_cook() {
     let (base, seen) = fake_hooks().await;
     let w = world(true).await;
-    let a = w.cook("oncall", "cloud").await;
-    let b = w.cook("worker", "cloud").await;
-    for (name, work) in [("oncall", false), ("worker", true)] {
+    let a = w.cook("alpha", "cloud").await;
+    let b = w.cook("beta", "cloud").await;
+    for name in ["alpha", "beta"] {
         let (code, r) = w
             .app
             .post(
                 &w.root,
                 &format!("/agents/{name}/wake-targets"),
-                json!({"type": "webhook", "config": {"url": format!("{base}/hook/{name}"), "on_call": !work}}),
+                json!({"type": "webhook", "config": {"url": format!("{base}/hook/{name}")}}),
             )
             .await;
         assert_eq!(code, 200, "{r}");
     }
-    // let the dispatcher settle: the targets are new and no task is open
+    // ready work starts them (the only thing that does); then they take a task each
     w.task("One").await;
     w.task("Two").await;
+    until(&seen, "/hook/alpha", 1).await;
+    until(&seen, "/hook/beta", 1).await;
     w.hold(&a, "SHOP-1").await;
     w.hold(&b, "SHOP-2").await;
     seen.lock().unwrap().clear();
@@ -1200,33 +1202,113 @@ async fn cloud_cooks_start_on_ci_and_comments_but_on_merges_only_when_they_take_
         w.send("check_suite", suite("shop", n, "aaa", "failure"))
             .await;
     }
-    // a CI failure is someone talking to the cook about its task: both are started
-    until(&seen, "/hook/oncall", 1).await;
-    until(&seen, "/hook/worker", 1).await;
-    // changes requested and a comment too
     let p = pr("shop", 1, "shop-1-x", "aaa", "t");
     w.send(
         "pull_request_review",
         review("shop", p, "changes_requested", "bob", "no"),
     )
     .await;
-    until(&seen, "/hook/oncall", 2).await;
-    // a merge: only the one that takes work
+    w.send("issue_comment", comment("shop", 1, "carol", "hello"))
+        .await;
     for n in [1, 2] {
         let mut p = pr("shop", n, "x", "aaa", "t");
         p["state"] = json!("closed");
         p["merged"] = json!(true);
         w.send("pull_request", pr_event("closed", "shop", p)).await;
     }
-    until(&seen, "/hook/worker", 2).await;
     tokio::time::sleep(Duration::from_secs(7)).await;
-    assert_eq!(
-        hits(&seen, "/hook/oncall"),
-        2,
-        "a merge notice does not start an on-call cook: {:?}",
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "forge events start no cloud run: {:?}",
         seen.lock().unwrap()
     );
-    assert!(hits(&seen, "/hook/worker") >= 2);
+    let n: i64 = sqlx::query_scalar(
+        "select count(*) from events where kind = 'wake' and payload->>'agent' in ('alpha', 'beta')",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(n, 0, "nothing was even emitted for them");
+    assert_eq!(w.status("SHOP-1").await, "claimed", "held: unchanged");
+}
+
+#[tokio::test]
+async fn a_merge_completes_a_task_nobody_holds() {
+    let w = world(false).await;
+    w.task("Cart").await;
+    tool(
+        &w.app,
+        &w.alice,
+        "create_task",
+        json!({"project": "SHOP", "title": "After cart", "dependsOn": "SHOP-1"}),
+    )
+    .await;
+    w.send(
+        "pull_request",
+        pr_event("opened", "shop", pr("shop", 1, "shop-1-cart", "aaa", "t")),
+    )
+    .await;
+    // a second open PR for the same task keeps it open when the first merges
+    w.send(
+        "pull_request",
+        pr_event("opened", "shop", pr("shop", 2, "shop-1-more", "bbb", "t")),
+    )
+    .await;
+    let merge = |n: i64, branch: &'static str| {
+        let mut p = pr("shop", n, branch, "x", "t");
+        p["state"] = json!("closed");
+        p["merged"] = json!(true);
+        pr_event("closed", "shop", p)
+    };
+    w.send("pull_request", merge(1, "shop-1-cart")).await;
+    assert_eq!(w.status("SHOP-1").await, "open", "another PR is still open");
+    assert_eq!(w.events("task.completed").await, 0);
+    w.send("pull_request", merge(2, "shop-1-more")).await;
+    assert_eq!(w.status("SHOP-1").await, "done");
+    let t = tool(&w.app, &w.alice, "get_task", json!({"id": "SHOP-1"})).await;
+    assert!(
+        t["result"]
+            .as_str()
+            .unwrap()
+            .starts_with("Merged https://github.com/Acme/shop/pull/2"),
+        "{t}"
+    );
+    let (n, actors): (i64, i64) = sqlx::query_as(
+        "select count(*), count(actor_id) from events where kind = 'task.completed'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!((n, actors), (1, 0), "one completion, no actor");
+    // what depends on it is ready now
+    let next = tool(&w.app, &w.alice, "get_task", json!({"id": "SHOP-2"})).await;
+    assert_eq!(next["ready"], true, "{next}");
+    // a redelivery completes nothing twice
+    w.send("pull_request", merge(2, "shop-1-more")).await;
+    assert_eq!(w.events("task.completed").await, 1);
+}
+
+#[tokio::test]
+async fn a_merge_does_not_complete_a_task_with_open_subtasks() {
+    let w = world(false).await;
+    w.task("Parent").await;
+    tool(
+        &w.app,
+        &w.alice,
+        "create_task",
+        json!({"project": "SHOP", "title": "Child", "parent": "SHOP-1"}),
+    )
+    .await;
+    w.send(
+        "pull_request",
+        pr_event("opened", "shop", pr("shop", 1, "shop-1-p", "aaa", "t")),
+    )
+    .await;
+    let mut p = pr("shop", 1, "shop-1-p", "aaa", "t");
+    p["state"] = json!("closed");
+    p["merged"] = json!(true);
+    w.send("pull_request", pr_event("closed", "shop", p)).await;
+    assert_eq!(w.status("SHOP-1").await, "open");
 }
 
 // ---------- the manifest flow against a fake GitHub ----------

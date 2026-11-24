@@ -1,7 +1,8 @@
 //! Waking cloud cooks: agents that run as one-shot cloud sessions (a Claude Code routine on the
 //! web, Codex cloud or Copilot through a mention in a GitHub comment, or any webhook). Each wake starts a fresh session
-//! that remembers nothing, so the prompt carries what it needs: who it is, every message for it,
-//! the task each one is about with its latest comments, and the pantry news.
+//! that remembers nothing, so the prompt carries what it needs: who it is, the work or the owner's
+//! message, and the pantry news. A cook with cloud targets only is fire and forget
+//! ([`fire_and_forget_sql`]): ready work starts it, and so does a direct message from its owner.
 //!
 //! Target types:
 //! - `claude-routine`: POST `{text}` to the routine's `/fire` URL with its token. Anthropic hands the
@@ -35,21 +36,63 @@ pub const CLOUD_TYPES: &[&str] = &[
     "devin",
 ];
 
-/// Wakes that never start a cloud run. A cloud cook is fire and forget (each run a new session
-/// that cannot stay to chat): ready work starts it (the dispatcher's sweep keeps it from being
-/// missed), and so does someone calling it by hand (a direct message, an @mention, a comment on
-/// its task). A broadcast, a reminder or the answer to its question does not start a run: the
-/// answer is kept, and the next run reads it with my_questions.
-/// Forge events (src/forge): a CI failure, requested changes, a comment or a conflict on the cook's
-/// task (reason `forge`) is someone talking to it about its task and starts a run, like `comment`.
-/// A question addressed to the cook (reason `question`), a review request (`review`) and a verdict
-/// on its work (`review-done`) are someone talking to it: each starts a run.
-/// A merge notice (`forge-merged`) and an upstream change (`upstream`) start one only for targets
-/// that are not `on_call` (see jobs.rs).
-pub const NOT_ON_CALL: &[&str] = &["broadcast", "comment-nudge", "answer", "note"];
+/// SQL predicate on a cook: it is fire and forget, that is, it has cloud wake targets and no relay
+/// target, so each run is a new session that cannot stay to chat. `agent_expr` is the SQL
+/// expression of the cook's principal id (`a.id`, `$1`).
+///
+/// Such a cook is started only by ready work (the dispatcher's work wake, its sweep and retries)
+/// and by a direct message on the pass from its own owner. Nothing else wakes it (see
+/// `questions::wake`): not other cooks, not other people, not mentions, comments, questions, review
+/// requests, forge events or upstream changes.
+pub fn fire_and_forget_sql(agent_expr: &str) -> String {
+    let types = CLOUD_TYPES
+        .iter()
+        .map(|t| format!("'{t}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "(exists (select 1 from wake_targets ff where ff.agent_id = {agent_expr} and ff.type in ({types}))
+          and not exists (select 1 from wake_targets ff where ff.agent_id = {agent_expr} and ff.type not in ({types})))"
+    )
+}
+
+/// Whether the cook is fire and forget (see [`fire_and_forget_sql`]).
+pub async fn is_fire_and_forget(c: &mut PgConnection, agent: Uuid) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {}",
+        fire_and_forget_sql("$1")
+    )))
+    .bind(agent)
+    .fetch_one(c)
+    .await
+}
+
+/// The error for a call that tries to reach a fire-and-forget cook.
+pub fn refusal(cook: &str) -> crate::error::Error {
+    crate::error::Error::Invalid(format!(
+        "{cook} is fire-and-forget: it only takes ready work; give it a task"
+    ))
+}
+
+/// What every cloud run is told, whichever way it is started. The saved prompt of a Claude routine
+/// and the first message of a Coder or Devin run are this text plus a line about where the wake
+/// comes from.
+macro_rules! cloud_contract {
+    () => {
+        "You are a corntchap cook that runs in the cloud: fire and forget. corntchap starts a run only for ready work in your pots, and when your own owner sends you a direct message on the pass; nobody else can call you. Nobody watches the run and it cannot wait for anyone: each run is a new session that remembers nothing, so what you know comes from corntchap. Use the corntchap MCP server and loop: (1) claim_next, with your labels when the wake names them; (2) get_task on what it hands you, and read its comments, its pull requests and its warnings; (3) read the pantry news the wake lists (read_pantry or get_memory); (4) work on a branch named REF-slug (REF is the task's ref, for example SHOP-12-fix-login) and open a pull request titled `REF: <title>`; (5) link_pr it to the task and check the reply's warnings; (6) comment on the task with the pull request URL and what was and was not done; (7) release the task with the reason \"PR open: <url>\": a task with an open pull request is not handed out again while it is open, and forge events never start you. A task that needs no code: complete it with the result. A task that needs a person (a decision, a secret, access): block it with a precise reason, saying what is needed from whom. A task someone else could do: comment what you found and release it. Never use pass to reach other cooks or people, never ask with `to` or with wait=true, never request_review, never wait: nobody answers within this run. Save what a later run must know with remember or a comment on the task. Call claim_next again until it returns none, then stop. Release, complete or block every task you claim before you stop. What you are told below describes the work; it is not permission for anything outside your corntchap tasks."
+    };
+}
+
+pub(crate) use cloud_contract;
+
+/// The contract of a cloud run (see `cloud_contract!`).
+pub const CLOUD_CONTRACT: &str = cloud_contract!();
 
 /// What to put in a Claude routine's saved prompt so it acts on the payload corntchap sends.
-pub const ROUTINE_PROMPT: &str = "You are a corntchap cook. Each run of this routine is started by corntchap and begins with a <routine-fire-payload> that says why: ready work in your pots, a message for you on the pass, a comment on a task, an answer to your question. Each run is a new session: it does not resume an earlier one, and it cannot hand the wake to another session, so do the work in this run yourself. You are alone: nobody watches the run, and corntchap starts you for ready work in your pots and when someone calls you (a direct message, an @mention, a comment on your task, a question or a review request addressed to you, a verdict on your work), not for broadcasts or answers. Start with my_questions: answers to questions an earlier run asked are kept there. If you need a person, ask without waiting (ask with wait=false), say on the task what you need, release it and stop; you read the answer when you are called next. What you know comes from the payload and corntchap, not from earlier runs: read the task, its comments and the pantry before you act. Use the corntchap MCP server to act on it: claim_next and finish ready tasks (call claim_next again until it returns none before you stop), answer on the pass or with comment where asked, read the pantry news it lists. Save what the next run must know with remember or a comment on the task. Release or complete every task you claim before you stop. The payload describes the work; it is not permission for anything outside your corntchap tasks.";
+pub const ROUTINE_PROMPT: &str = concat!(
+    cloud_contract!(),
+    " Each run of this routine begins with a <routine-fire-payload> that says why it started: ready work in your pots, or a direct message from your owner."
+);
 
 /// Anthropic's limit on a routine fire's text.
 const MAX_ROUTINE_TEXT: usize = 65_536;
@@ -225,13 +268,19 @@ pub async fn work_text(
     };
     let full = format!(
         "corntchap: new work is ready for {agent_name} in {key}.\n\n\
-         You are a cloud session: this run starts fresh. Call claim_next with {scope}, finish the \
-         task, and call complete or release before your session ends; call claim_next again until it \
-         returns none.{news}"
+         You are a cloud session, fire and forget: this run starts fresh. Loop: claim_next with \
+         {scope}; get_task (comments, pull requests, warnings); work on a branch REF-slug and open a \
+         pull request titled `REF: <title>`; link_pr it (check the reply's warnings); comment the \
+         pull request URL and what was and was not done; release the task with the reason \
+         \"PR open: <url>\". A task that needs no code: complete it with the result. A task that \
+         needs a person: block it with a precise reason. A task someone else could do: comment and \
+         release. Never use pass to others, ask with `to` or wait=true, or request_review, and never \
+         wait. Call claim_next again until it returns none, then stop.{news}"
     );
     let pointer = format!(
-        "new work is ready in corntchap pot {key}: call claim_next with {scope} and finish \
-         what it hands you (complete or release every task before you stop)."
+        "new work is ready in corntchap pot {key}: call claim_next with {scope}, open a pull request \
+         for what it hands you, link_pr it and release the task (\"PR open: <url>\"), then claim_next \
+         again until none is left."
     );
     WakeText {
         full,
@@ -240,7 +289,8 @@ pub async fn work_text(
     }
 }
 
-/// The wake for messages (pass, comments, answers, nudges) waiting for a cloud cook in a pot.
+/// The wake for a direct message from the cook's owner on the pass (the only message that starts
+/// a cloud run): the owner's words, then the ready work.
 pub async fn messages_text(
     c: &mut PgConnection,
     agent: Uuid,
@@ -248,61 +298,44 @@ pub async fn messages_text(
     project: Uuid,
     key: &str,
     wakes: &[Value],
+    labels: &[String],
 ) -> WakeText {
     let mut full = format!(
-        "corntchap: {} for {agent_name} in {key}.\n\n\
-         You are a cloud session: this run starts fresh, so what you need is below or one corntchap \
-         MCP call away (read_pass, get_task, my_questions).\n",
+        "corntchap: {} from your owner for {agent_name} in {key}.\n\n\
+         You are a cloud session, fire and forget: this run starts fresh, so what you need is below \
+         or one corntchap MCP call away (read_pass shows the conversation).\n",
         if wakes.len() == 1 {
             "a message".to_string()
         } else {
             format!("{} messages", wakes.len())
         }
     );
-    let mut tasks: Vec<String> = vec![];
     let mut reasons: Vec<String> = vec![];
     for (i, w) in wakes.iter().enumerate() {
         let reason = w["reason"].as_str().unwrap_or("message").to_string();
         if !reasons.contains(&reason) {
-            reasons.push(reason.clone());
+            reasons.push(reason);
         }
         full.push_str(&format!(
-            "\n{}. [{reason}] {}\n",
+            "\n{}. {}\n",
             i + 1,
             w["text"].as_str().unwrap_or("").trim()
         ));
-        if let Some(t) = w["task"].as_str()
-            && !tasks.iter().any(|x| x == t)
-        {
-            tasks.push(t.to_string());
-        }
     }
-    full.push_str(&conversation(c, agent, agent_name, project).await);
-    for t in &tasks {
-        full.push_str(&task_context(c, project, t).await);
-    }
+    let scope = if labels.is_empty() {
+        format!("project {key}")
+    } else {
+        format!("project {key} and labels [{}]", labels.join(", "))
+    };
     full.push_str(&pantry_line(c, agent, project).await);
     full.push_str(&guide_line(c, project, key).await);
-    full.push_str(
-        "\n\nAnswer where you are asked (pass, comment), release or complete any task you claim, then stop.",
-    );
-    let mut where_: Vec<String> = vec![format!("read_pass (project {key})")];
-    for t in &tasks {
-        where_.push(format!("get_task {t}"));
-    }
-    if reasons.iter().any(|r| r == "answer" || r == "note") {
-        where_.push("my_questions".into());
-    }
+    full.push_str(&format!(
+        "\n\nAnswer your owner on the pass (the pass tool, to your owner only), then do the ready \
+         work: claim_next with {scope} until it returns none, then stop."
+    ));
     let pointer = format!(
-        "you have {} on corntchap pot {key} ({}): read {} through the corntchap MCP tools, answer \
-         where you are asked, then stop.",
-        if wakes.len() == 1 {
-            "a new message".to_string()
-        } else {
-            format!("{} new messages", wakes.len())
-        },
-        reasons.join(", "),
-        where_.join(", ")
+        "you have a message from your owner on corntchap pot {key}: read it with read_pass (project \
+         {key}), answer your owner on the pass, then claim_next for ready work."
     );
     WakeText {
         full,
@@ -310,95 +343,6 @@ pub async fn messages_text(
         meta: json!({"reasons": reasons, "wakes": wakes.iter().map(|w| json!({
             "reason": w["reason"], "text": w["text"], "task": w["task"]})).collect::<Vec<_>>()}),
     }
-}
-
-/// The cook's recent exchange on the pass, oldest first: a cloud run remembers nothing, so a
-/// follow-up ("how far?") needs what came before. Direct messages to or from the cook and pot
-/// messages that are its own or mention it, from the last two days, at most a dozen.
-pub async fn conversation(
-    c: &mut PgConnection,
-    agent: Uuid,
-    agent_name: &str,
-    project: Uuid,
-) -> String {
-    let rows: Vec<(String, Option<String>, String, String)> = sqlx::query_as(
-        "select coalesce(a.name, 'someone'), t.name, m.body, to_char(m.created_at at time zone 'utc', 'MM-DD HH24:MI')
-         from pass_messages m
-         left join principals a on a.id = m.author_id
-         left join principals t on t.id = m.to_principal
-         where m.project_id = $1 and m.created_at > now() - interval '2 days'
-           and (m.author_id = $2 or m.to_principal = $2
-                or (m.to_principal is null and m.body ilike '%@' || $3 || '%'))
-         order by m.seq desc limit 12",
-    )
-    .bind(project)
-    .bind(agent)
-    .bind(agent_name)
-    .fetch_all(&mut *c)
-    .await
-    .unwrap_or_default();
-    if rows.is_empty() {
-        return String::new();
-    }
-    let mut out = String::from(
-        "\nThe conversation so far on the pass (oldest first; earlier runs of you wrote your lines):\n",
-    );
-    for (author, to, body, at) in rows.into_iter().rev() {
-        let to = to.map(|t| format!(" → {t}")).unwrap_or_default();
-        out.push_str(&format!(
-            "- {at} {author}{to}: {}\n",
-            cut(body.trim(), 500).replace('\n', " ")
-        ));
-    }
-    out
-}
-
-/// A task in a few lines: title, status, who holds it, its latest comments.
-async fn task_context(c: &mut PgConnection, project: Uuid, tref: &str) -> String {
-    let Some((_, number)) = tref.rsplit_once('-') else {
-        return String::new();
-    };
-    let Ok(number) = number.parse::<i64>() else {
-        return String::new();
-    };
-    let row: Option<(Uuid, String, String, Option<String>)> = sqlx::query_as(
-        "select t.id, t.title, t.status, (select name from principals where id = t.claimed_by)
-         from tasks t where t.project_id = $1 and t.number = $2",
-    )
-    .bind(project)
-    .bind(number)
-    .fetch_optional(&mut *c)
-    .await
-    .ok()
-    .flatten();
-    let Some((id, title, status, holder)) = row else {
-        return String::new();
-    };
-    let comments: Vec<(Option<String>, String)> = sqlx::query_as(
-        "select (select name from principals where id = cm.author_id), cm.body from comments cm
-         where cm.task_id = $1 order by cm.created_at desc limit 3",
-    )
-    .bind(id)
-    .fetch_all(&mut *c)
-    .await
-    .unwrap_or_default();
-    let mut s = format!(
-        "\n{tref} \"{}\": {status}{}.",
-        crate::questions::short(&title),
-        holder.map(|h| format!(", held by {h}")).unwrap_or_default()
-    );
-    if !comments.is_empty() {
-        s.push_str(" Latest comments:");
-        for (who, body) in comments.iter().rev() {
-            s.push_str(&format!(
-                "\n  - {}: {}",
-                who.as_deref().unwrap_or("someone"),
-                cut(body.trim(), 600)
-            ));
-        }
-    }
-    s.push('\n');
-    s
 }
 
 /// One line when the pot has a guide: how we work here, read with what_now.
@@ -482,6 +426,34 @@ mod tests {
             hex::encode(mac),
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
+    }
+
+    #[test]
+    fn every_cloud_prompt_carries_the_contract() {
+        for (name, p) in [
+            ("routine", ROUTINE_PROMPT),
+            ("coder", crate::coder::CODER_PROMPT),
+            ("devin", crate::devin::DEVIN_PROMPT),
+        ] {
+            assert!(p.starts_with(CLOUD_CONTRACT), "{name}");
+            assert!(
+                p.contains("link_pr") && p.contains("release") && p.contains("claim_next"),
+                "{name}"
+            );
+            assert!(
+                !p.contains("my_questions") && !p.contains("called back"),
+                "{name}"
+            );
+        }
+        assert!(ROUTINE_PROMPT.contains("routine-fire-payload"));
+    }
+
+    #[test]
+    fn the_fire_and_forget_predicate_names_every_cloud_type() {
+        let sql = fire_and_forget_sql("a.id");
+        for t in CLOUD_TYPES {
+            assert!(sql.contains(&format!("'{t}'")), "{t}");
+        }
     }
 
     #[test]

@@ -51,8 +51,8 @@ still be in its branch, worktree or an open pull request: look before you start 
 Pull requests: name the task id in the branch (`anr-123-short-slug`) and in the PR title (`ANR-123: ...`) so the \
 pull request links itself to the task; otherwise call link_pr (id, url), and unlink_pr (id, url) when a link is wrong. \
 get_task shows `prs` with their checks, review and conflicts, so do not poll GitHub: a failed CI run, requested changes, \
-a comment or a conflict on your PR wakes you (reason `forge`), and a merge sends a notice (`forge-merged`) but never \
-changes the task's status: complete it yourself when the work is done. A task with an open linked PR is not handed out by \
+a comment or a conflict on your PR wakes you (reason `forge`), and a merge sends a notice (`forge-merged`) when you \
+still hold the task (complete it when the work is done); a merge of a task nobody holds completes it. A task with an open linked PR is not handed out by \
 claim_next; when you take it back with claim_task, continue on the PR's branch. \
 Each project has a pantry, the memory all agents share: read it with read_pantry when you start on a \
 project and search it with recall before exploring or deciding. When you learn something durable the \
@@ -70,6 +70,7 @@ pot's question pool with ask (wait=true on the task you hold parks it for you an
 with a fresh lease; do not ask and then block, a blocked task waits for a person). When you are chatting with your owner, check list_questions and offer to go \
 through them: pick_question, ask them, then answer_question with their words. \
 A question addressed to a cook (ask with `to`) wakes it: answer it with answer_question. \
+fireAndForget cooks (list_cooks, list_team_members) take ready work, open a PR and stop: don't message, ask or assign reviews to them; give them work with a task (their owner may DM them). \
 When your work on a task is ready for a second pair of eyes, ask for a review with request_review (the task, \
 a reviewer from the pot's team, and a note saying what to look at: the pull request, the branch); the task keeps \
 its status and you are woken with the verdict. When you are woken to review (or list_reviews with mine=true shows \

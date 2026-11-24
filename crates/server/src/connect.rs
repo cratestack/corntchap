@@ -329,7 +329,6 @@ pub struct Save {
     pub repo: Option<String>,
     pub issue: Option<i64>,
     pub mention: Option<String>,
-    pub on_call: Option<bool>,
     pub template: Option<String>,
     pub preset: Option<String>,
     pub owner: Option<String>,
@@ -346,23 +345,6 @@ fn opt(s: &Option<String>) -> Option<&str> {
 /// (Anthropic's trigger host) or GitHub comments; anything that can point elsewhere (a webhook,
 /// another trigger host, a GitHub API URL) is an admin's call.
 pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
-    let mut out = kind_config(kind, c, is_admin)?;
-    // a cloud cook takes new work by itself unless it is on call: woken by name only
-    if let Some(o) = out.as_object_mut() {
-        o.remove("on_call");
-        if c["on_call"].as_bool() == Some(true) || c["on_call"].as_str() == Some("true") {
-            o.insert("on_call".into(), json!(true));
-        }
-    }
-    Ok(out)
-}
-
-/// Started only when called (a message, an @mention, a comment), never for new work: cloud targets that opted out.
-pub fn on_call(config: &Value) -> bool {
-    config["on_call"].as_bool() == Some(true)
-}
-
-fn kind_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
     let get = |k: &str| c[k].as_str().map(str::trim).filter(|s| !s.is_empty());
     match kind {
         "claude-routine" => {
@@ -546,9 +528,6 @@ pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Resul
     }
     if let Some(i) = a.issue {
         raw["issue"] = json!(i);
-    }
-    if a.on_call == Some(true) {
-        raw["on_call"] = json!(true);
     }
     let config = cloud_config(&s.kind, &raw, is_admin)?;
     let mut tx = db.begin().await?;

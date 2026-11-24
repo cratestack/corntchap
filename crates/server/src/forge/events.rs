@@ -5,10 +5,12 @@
 //! * A PR is linked to a task by a person (explicit, wins), else by the task's ref in the head
 //!   branch, the title or the body (`SHOP-12`, any case), never by creating anything.
 //! * Every event updates the row and, when the PR is linked, emits a `forge.*` task event. It never
-//!   changes the task's status, not on merge and not on close.
+//!   changes the task's status, except for a merge: the first merge of a task that is `open` (nobody
+//!   holds it), with no other open pull request and no open subtask, completes it.
 //! * The task's holder (its claimer, else the cook that held it last; never a person) is woken for
 //!   a CI failure (once per head sha), a conflict (once per head sha), changes requested and
-//!   comments by others, and told about a merge.
+//!   comments by others, and told about a merge of a task that is still held. A fire-and-forget
+//!   cook is never woken by these (see `questions::wake`).
 
 use serde_json::{Value, json};
 use sqlx::{PgConnection, PgPool};
@@ -21,10 +23,10 @@ use crate::{
     service,
 };
 
-/// Wake reason for something a cook should act on: starts a cloud run, like a comment on its task.
+/// Wake reason for something a cook should act on (a CI failure, requested changes, a comment, a
+/// conflict). It never starts a fire-and-forget cook.
 pub const REASON: &str = "forge";
-/// Wake reason for a merge notification: information, not a call. Starts a cloud run only for
-/// targets that take work, like `upstream`.
+/// Wake reason for a merge notification of a task that is still held: information, not a call.
 pub const REASON_MERGED: &str = "forge-merged";
 
 const MAX_FAILING: usize = 10;
@@ -628,11 +630,15 @@ async fn react(
         }
         ForgeKind::PrMerged if first_merge => {
             note(c, ctx, row, "forge.merged", json!({})).await?;
-            let text = format!(
-                "{word} merged ({}); {tref}'s status is unchanged, serve it if the work is done.",
-                row.url
-            );
-            told.extend(tell(c, ctx, None, REASON_MERGED, &text).await?);
+            if complete_on_merge(c, ctx, row).await? {
+                told.push(format!("{tref} done"));
+            } else {
+                let text = format!(
+                    "{word} merged ({}); {tref}'s status is unchanged, serve it if the work is done.",
+                    row.url
+                );
+                told.extend(tell(c, ctx, None, REASON_MERGED, &text).await?);
+            }
         }
         ForgeKind::ChecksCompleted {
             source,
@@ -744,6 +750,41 @@ async fn react(
         _ => {}
     }
     Ok(told)
+}
+
+/// The first merge of a pull request completes its task when nothing else is going on: the task is
+/// `open` (not held, not parked), no other pull request linked to it is open and no subtask is
+/// open. It is a completion like any other (`task.completed`, no actor), so dependents become
+/// ready; the repositories that depend on it hear about the merge once, through [`pass_on_merge`]
+/// (not through `repos::propagate` as well). Returns whether the task was completed.
+async fn complete_on_merge(c: &mut PgConnection, ctx: &Ctx, row: &Pr) -> Result<bool> {
+    let result = format!("Merged {}", row.url);
+    let done: Option<Uuid> = sqlx::query_scalar(
+        "update tasks set status = 'done', claimed_by = null, lease_expires_at = null, result = $2, updated_at = now()
+         where id = $1 and status = 'open' and claimed_by is null and reserved_for is null
+           and not exists (select 1 from forge_prs o where o.task_id = tasks.id and o.id <> $3
+                             and o.state = 'open' and not o.unlinked)
+           and not exists (select 1 from tasks c where c.parent_id = tasks.id and c.status not in ('done','cancelled'))
+         returning id",
+    )
+    .bind(ctx.task)
+    .bind(&result)
+    .bind(row.id)
+    .fetch_optional(&mut *c)
+    .await?;
+    if done.is_none() {
+        return Ok(false);
+    }
+    service::emit(
+        c,
+        Some(ctx.project),
+        Some(ctx.task),
+        "task.completed",
+        None,
+        json!({"result": result, "merged": row.url}),
+    )
+    .await?;
+    Ok(true)
 }
 
 /// A merge reaches the repositories that depend on this one (what a served task does, see

@@ -71,9 +71,9 @@ mutation procedure checkItem(id: String, epoch: Int?, position: Int, done: Boole
 /// @param body The note, in markdown: progress, findings, a handoff for whoever picks it up next.
 /// @param epoch Your lease epoch, if you hold the task: also extends the lease.
 /// @param station Your own station (st_..., named in your wake prompt), so people see which of your sessions wrote it.
-mutation procedure comment(id: String, body: String, epoch: Int?, station: String?): OkResult
+mutation procedure comment(id: String, body: String, epoch: Int?, station: String?): CommentPosted
   @allow(auth() != null)
-  @mcp(tool: "comment", description: "Add a note or handoff to a task. No lease needed; pass epoch to also extend yours. The cook responsible for the task (holding it, parked on it, or the one that last held it) is woken with the comment, and so are cooks you @mention; you never wake yourself.")
+  @mcp(tool: "comment", description: "Add a note or handoff to a task. No lease needed; pass epoch to also extend yours. The cook responsible for the task (holding it, parked on it, or the one that last held it) is woken with the comment, and so are cooks you @mention; you never wake yourself. A fireAndForget cook is never woken by a comment (the reply says so in `note`): it only takes ready work.")
 
 /// Finish a task.
 /// @param id Task id, e.g. PAY-42.

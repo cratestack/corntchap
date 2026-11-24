@@ -1,6 +1,6 @@
 //! Coder as a cloud wake target: a wake starts a Coder run (a chat, or a task on older Coder), a
 //! later wake for the same pot is a follow-up message to it, the session token is never shown
-//! back, and `on_call = true` keeps new work from starting it while a message still does.
+//! back, and a direct message from the cook's owner follows up.
 //! Runs against a fake Coder (axum).
 mod common;
 use std::{
@@ -283,7 +283,6 @@ async fn a_wake_starts_a_chat_and_the_next_one_follows_up() {
         "list",
     );
     assert_eq!(mcp[0]["type"], "coder");
-    assert_eq!(mcp[0]["onCall"], false);
     let (_, cook_page) = app.get(&root, "/agents/coder-cook").await;
     let (_, cooks) = app.get(&root, "/agents").await;
     let events: Vec<Value> = sqlx::query_scalar("select payload from events")
@@ -344,25 +343,16 @@ async fn a_task_on_older_coder_resolves_the_template_and_follows_up() {
 }
 
 #[tokio::test]
-async fn on_call_targets_get_no_work_and_failures_are_recorded() {
+async fn a_broadcast_starts_nothing_and_failures_are_recorded() {
     let (base, fake) = fake_coder().await;
     let (app, root) = world("onduty").await;
-    // on_call: new work starts nothing, a direct message does
+    // no ready work: a broadcast starts nothing, a direct message from the owner does
     app.post(
         &root,
         "/agents/onduty/wake-targets",
-        json!({"type": "coder", "config": {"url": base, "token": TOKEN, "organization": ORG, "on_call": true}}),
+        json!({"type": "coder", "config": {"url": base, "token": TOKEN, "organization": ORG}}),
     )
     .await;
-    app.post(
-        &root,
-        "/projects/PAY/tasks",
-        json!({"title": "Refund screen"}),
-    )
-    .await;
-    tokio::time::sleep(Duration::from_secs(4)).await;
-    assert_eq!(fake.count(), 0, "new work does not start an on-call run");
-    // a broadcast does not either
     ok(
         &app.mcp(
             &root,

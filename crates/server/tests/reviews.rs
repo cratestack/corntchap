@@ -1,5 +1,5 @@
 //! Asking a cook wakes it, and reviews: request, verdict (approve, changes, comment), rounds,
-//! permissions, the task's `review`, cancel, and cloud cooks being started for both.
+//! permissions, the task's `review`, cancel, and fire-and-forget cooks not being called for either.
 mod common;
 use std::{
     sync::{Arc, Mutex},
@@ -794,22 +794,12 @@ async fn fake_endpoint() -> (String, Arc<Mutex<Vec<(String, String)>>>) {
     (base, seen)
 }
 
-async fn wait_body(seen: &Arc<Mutex<Vec<(String, String)>>>, needle: &str) -> bool {
-    for _ in 0..60 {
-        if seen.lock().unwrap().iter().any(|(_, b)| b.contains(needle)) {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    false
-}
-
 #[tokio::test]
-async fn a_cloud_cook_is_started_for_a_question_and_a_review() {
+async fn a_fire_and_forget_cook_is_not_called_for_a_question_a_review_or_a_verdict() {
     let (base, seen) = fake_endpoint().await;
     let w = world(true).await;
     let app = &w.app;
-    // c2 is a cloud cook, on call through a webhook
+    // c2 is a cloud cook (fire and forget) through a webhook
     app.post(
         &w.root,
         "/agents/c2/wake-targets",
@@ -820,35 +810,26 @@ async fn a_cloud_cook_is_started_for_a_question_and_a_review() {
         &app.mcp(&w.c1, "claim_task", json!({"id": "PAY-1"})).await,
         "claim",
     );
-    ok(
-        &app.mcp(
+    // a question to it and a review request for it are refused
+    let r = app
+        .mcp(
             &w.alice,
             "ask",
             json!({"project": "PAY", "to": "c2", "title": "Which currency?"}),
         )
-        .await,
-        "ask",
-    );
-    assert!(
-        wait_body(&seen, "Which currency?").await,
-        "{:?}",
-        seen.lock().unwrap()
-    );
-    ok(
-        &app.mcp(
+        .await;
+    assert_eq!(r["isError"], true, "{r}");
+    assert!(r.to_string().contains("c2 is fire-and-forget"), "{r}");
+    let r = app
+        .mcp(
             &w.c1,
             "request_review",
             json!({"task": "PAY-1", "reviewer": "c2", "note": "see the branch"}),
         )
-        .await,
-        "request",
-    );
-    assert!(
-        wait_body(&seen, "see the branch").await,
-        "{:?}",
-        seen.lock().unwrap()
-    );
-    // the verdict starts a run for the cloud cook that asked, too
+        .await;
+    assert_eq!(r["isError"], true, "{r}");
+    assert!(r.to_string().contains("c2 is fire-and-forget"), "{r}");
+    // the verdict on its own work does not start it either
     ok(
         &app.mcp(&w.c3, "claim_task", json!({"id": "PAY-3"})).await,
         "claim 3",
@@ -877,9 +858,12 @@ async fn a_cloud_cook_is_started_for_a_question_and_a_review() {
         .await,
         "changes",
     );
-    assert!(
-        wait_body(&seen, "rename it").await,
-        "{:?}",
-        seen.lock().unwrap()
-    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    for needle in ["Which currency?", "see the branch", "rename it"] {
+        assert!(
+            !seen.lock().unwrap().iter().any(|(_, b)| b.contains(needle)),
+            "{needle} started a run: {:?}",
+            seen.lock().unwrap()
+        );
+    }
 }

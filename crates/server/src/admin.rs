@@ -866,10 +866,12 @@ pub async fn list_members(db: &PgPool, p: &Principal, team: &str) -> Result<Valu
     .fetch_optional(&mut *c)
     .await?;
     let tid = row.ok_or_else(|| Error::NotFound(format!("team {team} not found")))?;
-    let rows: Vec<Value> = sqlx::query_scalar(
-        "select jsonb_build_object('name', pr.name, 'display_name', pr.display_name, 'kind', pr.kind, 'role', m.role) from team_members m
+    let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select jsonb_build_object('name', pr.name, 'display_name', pr.display_name, 'kind', pr.kind, 'role', m.role,
+                'fireAndForget', {}) from team_members m
          join principals pr on pr.id = m.principal_id where m.team_id = $1 order by pr.name",
-    )
+        crate::cloud::fire_and_forget_sql("pr.id")
+    )))
     .bind(tid)
     .fetch_all(&mut *c)
     .await?;
@@ -1011,8 +1013,9 @@ pub async fn create_principal(
 
 pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<Value> {
     let p = &acting_or_self(db, p).await?;
-    let rows: Vec<Value> = sqlx::query_scalar(
+    let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select jsonb_build_object('id', a.id, 'name', a.name, 'kind', a.kind, 'agent_kind', a.agent_kind, 'runtime', a.runtime,
+            'fireAndForget', {},
             'max_leases', a.max_leases, 'owner', (select name from principals where id = a.owner_id),
             'grants', to_jsonb(a.grants),
             'repo_scopes', coalesce((select jsonb_agg(jsonb_build_object('project', rp.key, 'repos', to_jsonb(cr.repos)) order by rp.key)
@@ -1022,7 +1025,8 @@ pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<V
             'teams', coalesce((select jsonb_agg(t.name order by t.name) from team_members m join teams t on t.id = m.team_id
                                where m.principal_id = a.id), '[]'::jsonb))
          from principals a where a.kind = $1 and ($2 or a.owner_id = $3) order by a.name",
-    )
+        crate::cloud::fire_and_forget_sql("a.id")
+    )))
     .bind(kind)
     .bind(p.is_admin)
     .bind(p.id)

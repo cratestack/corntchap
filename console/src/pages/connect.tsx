@@ -10,7 +10,6 @@ import { CodeBlock, CopyButton } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import { useProcCall } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
@@ -82,7 +81,6 @@ export function ConnectPage() {
   const [setup, setSetup] = useState<CloudSetup | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
-  const [onCall, setOnCall] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   // phones show one step at a time; wider screens show the steps together
@@ -133,7 +131,6 @@ export function ConnectPage() {
         owner: v("owner"),
         organization: v("organization"),
         workspace: v("workspace"),
-        onCall,
       });
       setValues({});
       setSetup(next);
@@ -271,15 +268,9 @@ export function ConnectPage() {
                 </div>
               );
             })}
-            <label htmlFor="connect-on-call" className="flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/40 p-3.5">
-              <Checkbox id="connect-on-call" checked={onCall} onCheckedChange={(c) => setOnCall(c === true)} className="mt-0.5 size-5" />
-              <span className="space-y-0.5">
-                <span className="block text-[14px] font-medium">Only when called (no new work)</span>
-                <span className="block text-[12.5px] leading-snug text-muted-foreground">
-                  Off: {s.cook} starts for every ready task in its pots, and when called. On: only a direct message, an @mention or a comment on its task starts a run; broadcasts and answers to its questions do not (it reads answers on its next run).
-                </span>
-              </span>
-            </label>
+            <p className="rounded-xl border border-border bg-muted/40 p-3.5 text-[12.5px] leading-snug text-muted-foreground">
+              {s.cook} is fire and forget: ready tasks in its pots (and its owner's direct messages) start a run; it opens a pull request and stops.
+            </p>
             <Button type="submit" disabled={saving || !canSave} className="h-11 max-md:hidden">
               {saving && <Loader2 className="size-4 animate-spin" />} Connect
             </Button>

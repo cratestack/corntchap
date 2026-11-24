@@ -286,7 +286,7 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
       title="Wake targets"
       hint={
         cloud
-          ? "A cloud cook starts for ready work in its pots and when called (a direct message, an @mention or a comment on its task), unless it is set to be on call only."
+          ? "A cook with cloud targets only is fire and forget: ready work in its pots (and its owner's direct messages) start a run; it opens a pull request and stops."
           : "How an idle cook hears there is work: a fire on its machine wakes its sessions."
       }
     >
@@ -297,7 +297,6 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
       {rows.map((w) => {
         const kind = WAKE_KIND[w.type] ?? { title: w.type, icon: Cloud };
         const Icon = kind.icon;
-        const takes = w.config.on_call !== true;
         return (
           <GroupRow
             key={w.id}
@@ -305,11 +304,6 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
             label={
               <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 {kind.title}
-                {w.type !== "relay" && (
-                  <span className={cn("rounded-full px-2 py-px text-[10.5px] font-medium", takes ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>
-                    {takes ? "takes new work" : "on call"}
-                  </span>
-                )}
               </span>
             }
             hint={
@@ -319,9 +313,6 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
                   <a href={w.config.session_url} target="_blank" rel="noreferrer" className="block truncate text-[11.5px] underline underline-offset-2">
                     Latest session
                   </a>
-                )}
-                {w.type !== "relay" && (
-                  <span className="block text-[11.5px]">{takes ? "Also started by every ready task in its pots." : "Started by name only: a message, an @mention or a comment on its task."}</span>
                 )}
                 {(w.projects.length > 0 || w.labels.length > 0) && (
                   <span className="block text-[11.5px]">
