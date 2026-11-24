@@ -546,6 +546,7 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "set_lease_ttl",
             "set_main_station",
             "set_pot_guide",
+            "set_role",
             "split_by_repo",
             "start_station",
             "toss_task",

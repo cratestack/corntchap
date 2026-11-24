@@ -71,6 +71,8 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
             public_issuer: env("OIDC_PUBLIC_ISSUER"),
             admin_role: env("OIDC_ADMIN_ROLE")
                 .unwrap_or_else(|| corntchap::state::DEFAULT_ADMIN_ROLE.to_string()),
+            orchestrator_role: env("OIDC_ORCHESTRATOR_ROLE")
+                .unwrap_or_else(|| corntchap::state::DEFAULT_ORCHESTRATOR_ROLE.to_string()),
         });
     }
     if let Some(m) = env("RELEASE_COOLDOWN_MINUTES").and_then(|v| v.parse::<u64>().ok()) {

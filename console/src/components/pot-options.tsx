@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { DeleteDialog, RenameDialog } from "@/components/rename-delete";
 import { useProcCall, useV1, type TeamRow } from "@/lib/data";
-import { useSession } from "@/lib/session";
+import { canManageTeam, useSession } from "@/lib/session";
 
 type PotRef = Pick<ProjectSummary, "key" | "name">;
 
@@ -69,14 +69,13 @@ export function PotDeleteDialog({
   );
 }
 
-/** The pot's options menu (rename, delete) for the people who may use it: its team's owners and admins. */
+/** The pot's options menu (rename, delete) for the people who may use it: its team's owners (orchestrators) and super-admins. */
 export function PotOptions({ project }: { project: ProjectSummary }) {
   const me = useSession();
   const teams = useV1<TeamRow[]>("/teams");
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
-  const owner = teams.data?.find((t) => t.name === project.team)?.role === "owner";
-  if (!me.is_admin && !owner) return null;
+  if (!canManageTeam(me, teams.data?.find((t) => t.name === project.team)?.role)) return null;
   return (
     <>
       <DropdownMenu>

@@ -14,10 +14,10 @@ model Project {
 
   @@map("projects")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || team.members.some.principalRef == auth().id)
   @@mcp(resource: "projects")
-  @@allow("create", auth().isAdmin == true)
-  @@allow("update", auth().isAdmin == true)
+  @@allow("create", auth().role == "super_admin")
+  @@allow("update", auth().role == "super_admin")
 }
 
 model Task {
@@ -44,9 +44,9 @@ model Task {
 
   @@map("tasks")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "tasks")
-  @@allow("update", auth().isAdmin == true || (auth().kind == "user" && project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && claimedRef == auth().id && status == "claimed"))
+  @@allow("update", auth().role == "super_admin" || (auth().kind == "user" && project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && claimedRef == auth().id && status == "claimed"))
 }
 
 model Item {
@@ -60,9 +60,9 @@ model Item {
 
   @@map("items")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || task.project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "items")
-  @@allow("update", auth().isAdmin == true || (auth().kind == "user" && task.project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && task.claimedRef == auth().id && task.status == "claimed"))
+  @@allow("update", auth().role == "super_admin" || (auth().kind == "user" && task.project.team.members.some.principalRef == auth().id) || (auth().kind == "agent" && task.claimedRef == auth().id && task.status == "claimed"))
 }
 
 model Comment {
@@ -75,7 +75,7 @@ model Comment {
 
   @@map("comments")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || task.project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "comments")
 }
 
@@ -87,7 +87,7 @@ model TaskDep {
 
   @@map("task_deps")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || task.project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || task.project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "task-deps")
 }
 
@@ -108,6 +108,6 @@ model Menu {
 
   @@map("menus")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "menus")
 }

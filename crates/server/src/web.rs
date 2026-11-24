@@ -128,25 +128,25 @@ pub async fn session_from_headers(
         String,
         String,
         Option<Uuid>,
-        bool,
+        crate::state::Role,
         i64,
         Option<String>,
     )> = sqlx::query_as(
-        "select id, kind, name, owner_id, is_admin, max_leases, display_name from principals
+        "select id, kind, name, owner_id, role, max_leases, display_name from principals
          where id = $1 and kind = 'user' and disabled_at is null",
     )
     .bind(uid)
     .fetch_optional(&state.db)
     .await?;
     Ok(row.map(
-        |(id, kind, name, owner_id, is_admin, max_leases, display_name)| Session {
+        |(id, kind, name, owner_id, role, max_leases, display_name)| Session {
             display_name,
             user: Principal {
                 id,
                 kind,
                 name,
                 owner_id,
-                is_admin,
+                role,
                 max_leases,
                 runtime: None,
                 agent_kind: None,
@@ -275,7 +275,7 @@ async fn oidc_flow(state: &AppState) -> Result<OAuth2Flow<OidcProvider>> {
 }
 
 /// A claim (any JSON type) from the (already signature-checked) ID token's payload.
-fn id_token_claim(id_token: &str, key: &str) -> Option<Value> {
+pub(crate) fn id_token_claim(id_token: &str, key: &str) -> Option<Value> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     let payload = id_token.split('.').nth(1)?;
     let raw = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).ok()?;
@@ -285,24 +285,6 @@ fn id_token_claim(id_token: &str, key: &str) -> Option<Value> {
 
 fn id_token_str(id_token: &str, key: &str) -> Option<String> {
     id_token_claim(id_token, key)?.as_str().map(String::from)
-}
-
-/// True if the ID token carries `role` in Keycloak's `realm_access.roles` or a top-level
-/// `roles` / `groups` array (group paths like `/corntchap-admin` match too).
-fn has_admin_role(id_token: &str, role: &str) -> bool {
-    let matches = |v: &Value| {
-        v.as_array().is_some_and(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str())
-                .any(|x| x == role || x.trim_start_matches('/') == role)
-        })
-    };
-    id_token_claim(id_token, "realm_access")
-        .and_then(|ra| ra.get("roles").cloned())
-        .is_some_and(|r| matches(&r))
-        || ["roles", "groups"]
-            .iter()
-            .any(|k| id_token_claim(id_token, k).is_some_and(|v| matches(&v)))
 }
 
 pub(crate) fn csrf_ok(a: &str, b: &str) -> bool {
@@ -399,7 +381,7 @@ async fn oidc_callback(
         return Ok(error_page(
             StatusCode::FORBIDDEN,
             "Cannot sign you in",
-            "The identity provider sent no subject (<code>sub</code>) for you; ask an admin.",
+            "The identity provider sent no subject (<code>sub</code>) for you; ask a super-admin.",
         ));
     }
     // How the person is shown to people (never used for lookup or mentions): name, else a *verified* e-mail.
@@ -415,7 +397,7 @@ async fn oidc_callback(
                 .and_then(|v| admin::clean_display_name(&v))
         });
     let issuer = cfg.identity_issuer();
-    let want_admin = has_admin_role(&id_token, &cfg.admin_role);
+    let want_role = crate::roles::oidc_role(&id_token, cfg);
 
     let found: Option<(Uuid, bool)> = sqlx::query_as(
         "select id, disabled_at is not null from principals
@@ -430,7 +412,7 @@ async fn oidc_callback(
             return Ok(error_page(
                 StatusCode::FORBIDDEN,
                 "Account disabled",
-                "This account is disabled; ask an admin.",
+                "This account is disabled; ask a super-admin.",
             ));
         }
         Some((id, false)) => id,
@@ -454,13 +436,13 @@ async fn oidc_callback(
         .bind(user)
         .fetch_one(&state.db)
         .await?;
-    // The IdP role decides the admin flag only for admins it made itself (`admin_source = 'oidc'`): `init` and
-    // manual settings (`user admin --on|--off`) are never changed by a sign-in.
+    // The IdP roles decide the role only for people it made itself (`role_source = 'oidc'`): `init` and manual
+    // settings (`user role <handle> ...`) are never changed by a sign-in.
     sqlx::query(
-        "update principals set is_admin = $2 where id = $1 and admin_source = 'oidc' and is_admin <> $2",
+        "update principals set role = $2 where id = $1 and role_source = 'oidc' and role <> $2",
     )
     .bind(user)
-    .bind(want_admin)
+    .bind(want_role)
     .execute(&state.db)
     .await?;
     purge_expired(&state.db).await;
@@ -972,7 +954,7 @@ async fn device_decision(
                 .fetch_optional(&mut *tx)
                 .await?;
         match existing {
-            Some((owner,)) if owner == Some(session.user.id) || session.user.is_admin => {
+            Some((owner,)) if owner == Some(session.user.id) || session.user.is_super_admin() => {
                 sqlx::query("update tokens set revoked_at = now() where principal_id = (select id from principals where name = $1) and revoked_at is null")
                     .bind(&name)
                     .execute(&mut *tx)
@@ -1059,7 +1041,7 @@ async fn session_info(State(state): State<AppState>, headers: HeaderMap) -> Resu
         "name": s.user.name,
         "display_name": s.display_name,
         "kind": s.user.kind,
-        "is_admin": s.user.is_admin,
+        "role": s.user.role,
         "csrf": s.csrf,
     }))
     .into_response();

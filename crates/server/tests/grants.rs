@@ -28,6 +28,8 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
 
     // --- the admin drives everything over MCP (every console action has a tool) ---
     app.add_user("alice").await;
+    // owning a team needs the orchestrator role
+    app.set_role("alice", "orchestrator").await;
     let users = ok(&call(&root, "list_users", json!({})).await, "list_users");
     assert!(
         users
@@ -318,13 +320,21 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
         &call(&c1, "rotate_token", json!({"name": "c1-helper"})).await,
         "rotate",
     );
-    // never more than its owner: alice is no admin, so `admin` adds nothing
-    let e = refused(
+    // never more than its owner: alice is an orchestrator, so `admin` makes the cook one, not a super-admin
+    ok(
         &call(&c1, "create_team", json!({"name": "rogue"})).await,
-        "owner not admin",
+        "an orchestrator's cook with admin acts as an orchestrator",
     );
-    assert!(e.contains("admin"), "{e}");
-    refused(&call(&c1, "list_users", json!({})).await, "owner not admin");
+    let dir = ok(&call(&c1, "list_users", json!({})).await, "directory");
+    assert!(
+        dir[0]["linked"].is_null(),
+        "only the directory, no sign-in state: {dir}"
+    );
+    assert_eq!(
+        app.get(&c1, "/forges/repos").await.0,
+        403,
+        "no super-admin powers"
+    );
     // and still cannot raise its own grants while acting for its owner
     refused(
         &call(&c1, "set_grants", json!({"name": "c1", "grants": ""})).await,

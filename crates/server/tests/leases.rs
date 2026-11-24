@@ -27,6 +27,8 @@ async fn leases_fit_long_work() {
         .unwrap();
     let root = tok.unwrap();
     app.add_user("alice").await;
+    // owning a team needs the orchestrator role
+    app.set_role("alice", "orchestrator").await;
     app.add_user("eve").await;
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(

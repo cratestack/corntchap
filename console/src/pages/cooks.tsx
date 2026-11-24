@@ -32,7 +32,7 @@ import { useAgents, useClaimedTasks, useProc, useProcCall, useProjects, useV1, u
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { KIND_LABEL } from "@/lib/snippets";
-import { useSession } from "@/lib/session";
+import { isSuperAdmin, useSession } from "@/lib/session";
 
 type Filter = "all" | "awake" | "cloud" | "local" | "disabled";
 
@@ -252,8 +252,8 @@ type Step = "who" | "where" | "token" | "wake";
 const CLOUD_WAKES = [
   { id: "claude-routine", title: "Claude Code on the web", sub: "A routine is started on each wake", icon: Cloud },
   { id: "github-comment", title: "GitHub comment", sub: "Codex cloud, Copilot and others", icon: MessageSquare },
-  { id: "webhook", title: "Webhook", sub: "Your own endpoint (admins)", icon: Webhook },
-  { id: "coder", title: "Coder", sub: "An agent run on your Coder deployment (admins)", icon: Server },
+  { id: "webhook", title: "Webhook", sub: "Your own endpoint (super-admins)", icon: Webhook },
+  { id: "coder", title: "Coder", sub: "An agent run on your Coder deployment (super-admins)", icon: Server },
   { id: "devin", title: "Devin", sub: "A Devin session on your Devin organization", icon: Server },
 ] as const;
 
@@ -289,7 +289,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
   }
   useEffect(() => {
     if (open) setTeam((t) => t || (teams.data?.find((x) => x.role === "owner")?.name ?? teams.data?.[0]?.name) || "");
-  }, [open, teams.data, me.is_admin]);
+  }, [open, teams.data, me.role]);
 
   const cloud = runtime === "cloud";
   const total = cloud ? 4 : 3;
@@ -543,7 +543,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
           <>
             <FormSheetBody className="pb-4">
               <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
-                {CLOUD_WAKES.filter((w) => (w.id !== "webhook" && w.id !== "coder") || me.is_admin).map((w) => (
+                {CLOUD_WAKES.filter((w) => (w.id !== "webhook" && w.id !== "coder") || isSuperAdmin(me)).map((w) => (
                   <li key={w.id}>
                     <button
                       type="button"

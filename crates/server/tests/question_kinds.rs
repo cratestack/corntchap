@@ -27,6 +27,8 @@ async fn world() -> World {
         .unwrap();
     let root = tok.unwrap();
     app.add_user("alice").await;
+    // owning a team needs the orchestrator role
+    app.set_role("alice", "orchestrator").await;
     app.post(&root, "/teams", json!({"name": "acme"})).await;
     app.post(
         &root,

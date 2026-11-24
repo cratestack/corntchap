@@ -881,10 +881,10 @@ pub async fn doctor(full: bool) -> Result<()> {
                         "ok   signed in as {} ({}{})",
                         crate::ui::person(&me),
                         me["kind"].as_str().unwrap_or("?"),
-                        if me["is_admin"] == true {
-                            ", admin"
-                        } else {
-                            ""
+                        match me["role"].as_str() {
+                            Some("super_admin") => ", super-admin",
+                            Some("orchestrator") => ", orchestrator",
+                            _ => "",
                         }
                     ),
                     Err(e) => println!("FAIL {e:#}"),

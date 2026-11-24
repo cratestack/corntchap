@@ -8,7 +8,7 @@ import { errorMessage } from "@/lib/api";
 import { useProjects, useTeamChefs, useV1, useV1Call, type TeamRow } from "@/lib/data";
 import { useNow } from "@/lib/format";
 import { useIsDesktop, useIsPhone } from "@/lib/media";
-import { useSession } from "@/lib/session";
+import { isSuperAdmin, useSession } from "@/lib/session";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { ConvAvatar, KindChip } from "./pass-bits";
@@ -161,7 +161,7 @@ export function PassView({ potKey }: { potKey: string }) {
   // your own cooks that are not chefs of this pot's team
   const teams = useV1<TeamRow[]>("/teams");
   // your own cooks may be added by you, whatever your role in the team
-  const canManage = me.is_admin || !!teams.data?.find((t) => t.name === team)?.role;
+  const canManage = isSuperAdmin(me) || !!teams.data?.find((t) => t.name === team)?.role;
   const outside = useMemo(
     () =>
       (cooks.agents ?? [])

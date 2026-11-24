@@ -118,12 +118,12 @@ async fn admin_session(
     next: &str,
 ) -> std::result::Result<crate::web::Session, Response> {
     match session_from_headers(st, headers).await {
-        Ok(Some(s)) if s.user.is_admin => Ok(s),
+        Ok(Some(s)) if s.user.is_super_admin() => Ok(s),
         Ok(Some(_)) => Err((
             StatusCode::FORBIDDEN,
             pages::simple(
-                "Admins only",
-                "<h1>Admins only</h1><p>Only an admin can connect a git host.</p><div class=actions><a class=\"btn primary\" href=\"/\">Back to the kitchen</a></div>",
+                "Super-admins only",
+                "<h1>Super-admins only</h1><p>Only a super-admin can connect a git host.</p><div class=actions><a class=\"btn primary\" href=\"/\">Back to the kitchen</a></div>",
             ),
         )
             .into_response()),

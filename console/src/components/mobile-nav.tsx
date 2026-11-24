@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import type { ProjectSummary } from "@corntchap/api";
 import { cn } from "@/lib/utils";
-import { logout, useSession } from "@/lib/session";
+import { canOrchestrate, isSuperAdmin, logout, roleLabel, useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { useLive } from "@/lib/live";
 import { useMyWork, useProjects, useV1, type AgentRow } from "@/lib/data";
@@ -233,9 +233,9 @@ export function MoreSheet({ open, onOpenChange, pot }: { open: boolean; onOpenCh
               <h2 className="label-caps px-3 pb-1">Kitchen</h2>
               <SheetRow to="/fires" icon={Flame} onPick={close}>Fires</SheetRow>
               <SheetRow to="/teams" icon={Users} onPick={close}>Teams</SheetRow>
-              {me.is_admin && (
+              {canOrchestrate(me) && <SheetRow to="/admin/pots" icon={FolderKanban} onPick={close}>Pots</SheetRow>}
+              {isSuperAdmin(me) && (
                 <>
-                  <SheetRow to="/admin/pots" icon={FolderKanban} onPick={close}>Pots</SheetRow>
                   <SheetRow to="/admin/users" icon={UserRound} onPick={close}>Users</SheetRow>
                   <SheetRow to="/admin/forges" icon={GitBranch} onPick={close}>Forges</SheetRow>
                 </>
@@ -251,7 +251,7 @@ export function MoreSheet({ open, onOpenChange, pot }: { open: boolean; onOpenCh
                 <span className="block truncate font-semibold">{me.display_name ?? me.name}</span>
                 <span className="block truncate text-[12px] text-muted-foreground">
                   @{me.name}
-                  {me.is_admin ? " · admin" : ""}
+                  {me.role !== "member" ? ` · ${roleLabel(me.role)}` : ""}
                 </span>
               </span>
               <button type="button" onClick={() => setRenaming(true)} className="flex size-10 items-center justify-center rounded-lg text-muted-foreground active:bg-accent" aria-label="Change handle">
@@ -317,7 +317,7 @@ export function PotSheet({ open, onOpenChange }: { open: boolean; onOpenChange: 
             );
           })}
           {projects.data?.length === 0 && (
-            <li className="px-3 py-4 text-[14px] text-muted-foreground">No pots yet.{me.is_admin ? " Start one under More, Pots." : " Ask an admin to add you to a team."}</li>
+            <li className="px-3 py-4 text-[14px] text-muted-foreground">No pots yet.{canOrchestrate(me) ? " Start one under More, Pots." : " Ask an orchestrator to add you to a team."}</li>
           )}
         </ul>
       </SheetContent>
@@ -435,11 +435,13 @@ export function TabletRail({ account }: { account: ReactNode }) {
         <RailLink to="/teams" label="Teams">
           <Users className="size-5" aria-hidden="true" />
         </RailLink>
-        {me.is_admin && (
+        {canOrchestrate(me) && (
+          <RailLink to="/admin/pots" label="Pots">
+            <FolderKanban className="size-5" aria-hidden="true" />
+          </RailLink>
+        )}
+        {isSuperAdmin(me) && (
           <>
-            <RailLink to="/admin/pots" label="Pots (admin)">
-              <FolderKanban className="size-5" aria-hidden="true" />
-            </RailLink>
             <RailLink to="/admin/users" label="Users (admin)">
               <UserRound className="size-5" aria-hidden="true" />
             </RailLink>

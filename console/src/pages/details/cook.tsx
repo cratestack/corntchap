@@ -47,7 +47,7 @@ import { fmtAgo, plural, useNow } from "@/lib/format";
 import { useLive } from "@/lib/live";
 import { useOpenTask } from "@/lib/nav";
 import { KIND_LABEL } from "@/lib/snippets";
-import { useSession } from "@/lib/session";
+import { canManageTeam, isSuperAdmin, useSession } from "@/lib/session";
 import { Crumb, Quiet, linkClass } from "./common";
 
 const activityLine = (a: ActivityView) => {
@@ -57,7 +57,7 @@ const activityLine = (a: ActivityView) => {
 
 // ------------------------------------------------------------------ leases
 
-/** Tasks held right now out of the cook's limit, which its owner (or an admin) can step up or down. */
+/** Tasks held right now out of the cook's limit, which its owner (or a super-admin) can step up or down. */
 function LeaseRow({ a }: { a: AgentRow }) {
   const invalidate = useInvalidateAll();
   const [busy, setBusy] = useState(false);
@@ -104,7 +104,7 @@ function LeaseRow({ a }: { a: AgentRow }) {
 const GRANTS: { id: string; label: string; hint: string }[] = [
   { id: "plan", label: "Plan", hint: "Edit, toss, restore and unblock any task in its teams; tick items without a lease" },
   { id: "manage", label: "Manage", hint: "Act as its owner on teams, pots, cooks, fires and wake targets" },
-  { id: "admin", label: "Admin", hint: "Its owner's admin powers (only if the owner is an admin)" },
+  { id: "admin", label: "Admin", hint: "Its owner's role powers: an orchestrator's cook acts as an orchestrator, never as a super-admin" },
 ];
 
 /** What a cook may do beyond working its tasks. A cook never exceeds its owner and cannot change this itself. */
@@ -200,7 +200,7 @@ function TeamPicker({ open, onOpenChange, a, addable }: { open: boolean; onOpenC
   );
 }
 
-/** The teams a cook is in: they decide which pots it sees. Its owner, a team's owners and admins can move the cook in and out. */
+/** The teams a cook is in: they decide which pots it sees. Its owner, a team's owners and super-admins can move the cook in and out. */
 function TeamGroup({ a, pots }: { a: AgentRow; pots: { key: string; team?: string | null }[] }) {
   const me = useSession();
   const call = useV1Call();
@@ -208,10 +208,10 @@ function TeamGroup({ a, pots }: { a: AgentRow; pots: { key: string; team?: strin
   const [picking, setPicking] = useState(false);
   const [leaving, setLeaving] = useState<string | null>(null);
   const mine = a.teams ?? [];
-  // a team's owners and admins manage any cook in it; any chef may add or remove a cook they own
+  // a team's owners and super-admins may move any cook in or out of it, but only its owner (or a super-admin) manages the cook itself; any chef may add or remove a cook they own
   const mineOwn = a.owner === me.name;
-  const manageable = (t: string) => me.is_admin || mineOwn || (teams.data ?? []).some((x) => x.name === t && x.role === "owner");
-  const addable = (teams.data ?? []).filter((t) => !mine.includes(t.name) && (me.is_admin || mineOwn));
+  const manageable = (t: string) => isSuperAdmin(me) || mineOwn || canManageTeam(me, (teams.data ?? []).find((x) => x.name === t)?.role);
+  const addable = (teams.data ?? []).filter((t) => !mine.includes(t.name) && (isSuperAdmin(me) || mineOwn));
   return (
     <Group title="Teams" hint="The teams decide which pots this cook sees. With no team it sees none.">
       {mine.length === 0 && <GroupRow label="In no team" hint="It sees no pot yet." />}
@@ -331,7 +331,7 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
         );
       })}
       <GroupRow icon={<Plus />} label="Add a wake target" hint={cloud ? "Goes to the cloud setup steps" : undefined} onClick={() => setAdding(true)} />
-      <AddWake open={adding} onOpenChange={setAdding} agent={agent} runtime={runtime} admin={me.is_admin} />
+      <AddWake open={adding} onOpenChange={setAdding} agent={agent} runtime={runtime} admin={isSuperAdmin(me)} />
       <ConfirmDialog
         open={!!removing}
         onOpenChange={(o) => !o && setRemoving(null)}

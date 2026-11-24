@@ -63,9 +63,9 @@ async fn check(
             let (id, _) = admin::owned_project(&mut c, p, k).await?;
             Ok(Some((id, k.to_uppercase())))
         }
-        None if p.is_admin => Ok(None),
+        None if p.is_super_admin() => Ok(None),
         None => Err(Error::Forbidden(
-            "name a pot (project): only admins list GitHub repositories without one".into(),
+            "name a pot (project): only a super-admin lists GitHub repositories without one".into(),
         )),
     }
 }
@@ -241,12 +241,12 @@ pub async fn add_many(st: &AppState, p: &Principal, project: &str, repos: &str) 
     )
 }
 
-/// Admins only: forget a repository that sends events no pot follows.
+/// Super-admins only: forget a repository that sends events no pot follows.
 pub async fn dismiss(st: &AppState, p: &Principal, repo: &str) -> Result<Value> {
     let p = &admin::acting(&st.db, p).await?;
-    if !p.is_admin {
+    if !p.is_super_admin() {
         return Err(Error::Forbidden(
-            "only admins manage the connected git hosts".into(),
+            "only a super-admin manages the connected git hosts".into(),
         ));
     }
     if !super::unfollowed::dismiss(&st.db, repo).await? {

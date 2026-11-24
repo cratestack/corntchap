@@ -22,7 +22,7 @@ import { PotDetailsPage } from "@/pages/details/pot";
 import { FireDetailsPage } from "@/pages/details/fire";
 import { TeamDetailsPage } from "@/pages/details/team";
 import { ForgesPage } from "@/pages/forges";
-import { AdminOnly, FiresPage, PotsAdminPage, TeamsAdminPage, UsersAdminPage } from "@/pages/admin";
+import { AdminOnly, FiresPage, OrchestratorOnly, PotsAdminPage, TeamsAdminPage, UsersAdminPage } from "@/pages/admin";
 import { EmptyState } from "@/components/bits";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router";
@@ -89,8 +89,10 @@ function Providers() {
               <Route path="fires" element={<FiresPage />} />
               <Route path="teams" element={<TeamsAdminPage />} />
               <Route path="admin/teams" element={<Navigate to="/teams" replace />} />
-              <Route element={<AdminOnly><Outlet /></AdminOnly>}>
+              <Route element={<OrchestratorOnly><Outlet /></OrchestratorOnly>}>
                 <Route path="admin/pots" element={<PotsAdminPage />} />
+              </Route>
+              <Route element={<AdminOnly><Outlet /></AdminOnly>}>
                 <Route path="admin/users" element={<UsersAdminPage />} />
                 <Route path="admin/forges" element={<ForgesPage />} />
               </Route>

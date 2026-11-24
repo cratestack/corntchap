@@ -3,6 +3,7 @@ import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
 import type { CorntchapApiClient, FileView, ProjectSummary, QuestionView, ReviewView, TaskView, ViewOut } from "@corntchap/api";
 import { client, v1 } from "./api";
+import type { Role } from "./session";
 
 type Procs = CorntchapApiClient["procedures"];
 export type ProcName = keyof Procs;
@@ -210,13 +211,14 @@ export interface AgentRow {
 }
 
 export interface UserRow {
-  /** The handle: what others @mention and admins type. */
+  /** The handle: what others @mention and super-admins type. */
   name: string;
   /** How the person is shown (from the identity provider); never used for lookup. */
   display_name: string | null;
-  is_admin: boolean;
-  linked: boolean;
-  disabled: boolean;
+  role: Role;
+  /** Super-admins only: orchestrators get the directory (handle, name, role) without these. */
+  linked?: boolean;
+  disabled?: boolean;
 }
 
 export interface TeamRow {

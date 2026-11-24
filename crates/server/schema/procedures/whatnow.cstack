@@ -14,4 +14,4 @@ procedure whatNow(project: String, station: String?): WhatNowView
 /// @param guide The guide, markdown, at most 20000 characters; empty clears it.
 mutation procedure setPotGuide(project: String, guide: String): PotGuide
   @allow(auth() != null)
-  @mcp(tool: "set_pot_guide", description: "Set a pot's guide, the text agents read to learn how we work here (markdown, at most 20000 characters; empty clears it). Owners of the pot's team and admins. what_now returns it, and register_station and whoami carry its start.")
+  @mcp(tool: "set_pot_guide", description: "Set a pot's guide, the text agents read to learn how we work here (markdown, at most 20000 characters; empty clears it). Owners of the pot's team (orchestrators) and super-admins. what_now returns it, and register_station and whoami carry its start.")

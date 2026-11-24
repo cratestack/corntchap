@@ -63,6 +63,24 @@
       ]
     },
     {
+      "id": "0b8e6f0a-1c2d-4e3f-9a5b-7c6d5e4f3a03", "username": "orch",
+      "enabled": true,
+      "email": "orch@corntchap.test",
+      "emailVerified": true,
+      "firstName": "Orch",
+      "lastName": "Dev",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "orch",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "corntchap-orchestrator"
+      ]
+    },
+    {
       "id": "0b8e6f0a-1c2d-4e3f-9a5b-7c6d5e4f3a02", "username": "dev",
       "enabled": true,
       "email": "dev@corntchap.test",
@@ -82,7 +100,11 @@
     "realm": [
       {
         "name": "corntchap-admin",
-        "description": "corntchap administrators (OIDC_ADMIN_ROLE)"
+        "description": "corntchap super-admins (OIDC_ADMIN_ROLE)"
+      },
+      {
+        "name": "corntchap-orchestrator",
+        "description": "corntchap orchestrators (OIDC_ORCHESTRATOR_ROLE)"
       }
     ]
   }

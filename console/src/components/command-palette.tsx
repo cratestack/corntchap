@@ -13,7 +13,7 @@ import {
 import { useUi } from "@/lib/ui";
 import { useProc, useProjects, useQuestions } from "@/lib/data";
 import { useTheme } from "@/lib/theme";
-import { logout, useSession } from "@/lib/session";
+import { canOrchestrate, isSuperAdmin, logout, useSession } from "@/lib/session";
 import { lastView } from "@/lib/views";
 import { useOpenTask } from "@/lib/nav";
 import { useMenus } from "./menus";
@@ -130,11 +130,18 @@ export function CommandPalette() {
           <CommandItem value="teams chefs" onSelect={run(() => navigate("/teams"))}>
             <Users /> Teams
           </CommandItem>
-          {me.is_admin && (
+          {canOrchestrate(me) && (
             <>
               <CommandItem value="admin pots projects" onSelect={run(() => navigate("/admin/pots"))}>
-                <FolderKanban /> Pots (admin)
+                <FolderKanban /> Pots
               </CommandItem>
+              <CommandItem value="new team create team" onSelect={run(() => navigate("/teams"))}>
+                <Users /> New team
+              </CommandItem>
+            </>
+          )}
+          {isSuperAdmin(me) && (
+            <>
               <CommandItem value="admin users" onSelect={run(() => navigate("/admin/users"))}>
                 <UserRound /> Users (admin)
               </CommandItem>

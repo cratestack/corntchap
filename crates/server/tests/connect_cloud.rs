@@ -384,7 +384,7 @@ async fn a_cook_connects_itself_through_the_form_the_link_or_the_tool() {
             json!({"cook": "rita", "type": "webhook", "url": "https://example.com/h"}),
         )
         .await,
-        "only an admin",
+        "only a super-admin",
     );
     let (status, _) = app
         .post(&alice, "/agents/rita/wake-targets", json!({"type": "github-comment", "config": {"repo": "acme/pay", "issue": 2, "token": "t", "api_url": "http://169.254.169.254"}}))
@@ -413,7 +413,7 @@ async fn a_cook_connects_itself_through_the_form_the_link_or_the_tool() {
             json!({"code": code3, "url": "https://example.com/hook", "secret": "s"}),
         )
         .await,
-        "only an admin",
+        "only a super-admin",
     );
     // setups expire
     sqlx::query("update cloud_setups set expires_at = now() - interval '1 minute' where code = $1")

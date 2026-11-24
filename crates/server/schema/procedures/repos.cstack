@@ -9,7 +9,7 @@ part of "../corntchap.cstack"
 /// @param defaultBranch Its default branch, e.g. main.
 mutation procedure repoAdd(project: String, url: String, name: String?, defaultBranch: String?): RepoAdded
   @allow(auth() != null)
-  @mcp(tool: "add_repo", description: "Add a repository to a pot (owners of its team, admins, and cooks acting for them with `manage`). Tasks can then name it in `repos`, and a cook can be scoped to it (set_cook_repos). The name defaults to the url's last segment.")
+  @mcp(tool: "add_repo", description: "Add a repository to a pot (owners of its team, super-admins, and cooks acting for them with `manage`). Tasks can then name it in `repos`, and a cook can be scoped to it (set_cook_repos). The name defaults to the url's last segment.")
 
 /// Add several repositories to a pot at once.
 /// @param project Pot key, e.g. PAY.
@@ -24,14 +24,14 @@ mutation procedure repoAddMany(project: String, repos: String): ReposAdded
 /// @param installation Only this GitHub App installation (its id, see the Forges page).
 procedure forgeRepos(project: String?, query: String?, installation: Int?): ForgeRepos
   @allow(auth() != null)
-  @mcp(tool: "list_forge_repos", description: "List the repositories the connected GitHub Apps can see, most recently pushed first (archived last), with in_pot marking those already in the pot. Same people as add_repo (owners of the pot's team, admins, cooks with `manage`); without a project, admins only. Then add some with add_repos. Empty and connected=false: an admin connects a GitHub App on the Forges page.")
+  @mcp(tool: "list_forge_repos", description: "List the repositories the connected GitHub Apps can see, most recently pushed first (archived last), with in_pot marking those already in the pot. Same people as add_repo (owners of the pot's team, super-admins, cooks with `manage`); without a project, super-admins only. Then add some with add_repos. Empty and connected=false: a super-admin connects a GitHub App on the Forges page.")
 
 /// Remove a repository from a pot.
 /// @param project Pot key, e.g. PAY.
 /// @param name The repository's name.
 mutation procedure repoRemove(project: String, name: String): RepoRemoved
   @allow(auth() != null)
-  @mcp(tool: "remove_repo", description: "Remove a repository from a pot (owners of its team, admins, and cooks acting for them with `manage`). Open tasks and cook scopes stop naming it.")
+  @mcp(tool: "remove_repo", description: "Remove a repository from a pot (owners of its team, super-admins, and cooks acting for them with `manage`). Open tasks and cook scopes stop naming it.")
 
 /// Say that one repository of a pot depends on another.
 /// @param project Pot key, e.g. PAY.
@@ -56,7 +56,7 @@ mutation procedure repoUnlink(project: String, repo: String, on: String): ReposV
 /// @param cook The cook (default: you).
 mutation procedure cookSetRepos(project: String, repos: String?, cook: String?): CookReposView
   @allow(auth() != null)
-  @mcp(tool: "set_cook_repos", description: "Say which of a pot's repositories a cook handles: claim_next then gives it only tasks about those repositories or about none, and it is woken only for those. A cook may declare its own; its owner and admins set it for their cooks. Empty repos: all of them (the default).")
+  @mcp(tool: "set_cook_repos", description: "Say which of a pot's repositories a cook handles: claim_next then gives it only tasks about those repositories or about none, and it is woken only for those. A cook may declare its own; its owner and super-admins set it for their cooks. Empty repos: all of them (the default).")
 
 /// Forget a repository that sends events no pot follows.
 /// @param repo Its full name, e.g. acme/api.

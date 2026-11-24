@@ -186,7 +186,7 @@ fn cut_sql(col: &str) -> String {
     )
 }
 
-/// Project visibility predicate; $N = is_admin, $M = principal id.
+/// Project visibility predicate; $N = super-admin, $M = principal id.
 pub(crate) fn access_sql(admin: &str, pid: &str) -> String {
     format!(
         "({admin} or exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = {pid}))"
@@ -211,7 +211,7 @@ pub async fn project_by_key(c: &mut PgConnection, p: &Principal, key: &str) -> R
     );
     sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(key)
-        .bind(p.is_admin)
+        .bind(p.is_super_admin())
         .bind(p.id)
         .fetch_optional(c)
         .await?
@@ -253,7 +253,7 @@ pub async fn task_by_ref(c: &mut PgConnection, p: &Principal, r: &str) -> Result
     sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(&key)
         .bind(number)
-        .bind(p.is_admin)
+        .bind(p.is_super_admin())
         .bind(p.id)
         .fetch_optional(c)
         .await?
@@ -434,7 +434,7 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
         repos = crate::repos::repos_json_sql("pr.id"),
     );
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .bind(p.is_admin)
+        .bind(p.is_super_admin())
         .bind(p.id)
         .fetch_all(db)
         .await?;
@@ -2016,7 +2016,7 @@ pub async fn whoami(db: &PgPool, p: &Principal, project: Option<&str>) -> Result
     Ok(json!({
         "guide": guide,
         "name": p.name, "display_name": display_name, "kind": p.kind, "agent_kind": p.agent_kind, "runtime": p.runtime,
-        "is_admin": p.is_admin, "max_leases": p.max_leases, "grants": p.grants,
+        "role": p.role, "is_super_admin": p.is_super_admin(), "max_leases": p.max_leases, "grants": p.grants,
         "teams": teams,
         "projects": projects.as_array().map(|a| a.iter().map(|x| x["key"].clone()).collect::<Vec<_>>()).unwrap_or_default(),
         "current_leases": leases,
@@ -2068,7 +2068,7 @@ pub async fn changes_feed(
         .bind(cursor)
         .bind(pid)
         .bind(limit.clamp(1, 500))
-        .bind(p.is_admin)
+        .bind(p.is_super_admin())
         .bind(p.id)
         .fetch_all(&mut *c)
         .await?;
@@ -2100,7 +2100,7 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
     );
     Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(pid)
-        .bind(p.is_admin)
+        .bind(p.is_super_admin())
         .bind(p.id)
         .fetch_all(&mut *c)
         .await?)

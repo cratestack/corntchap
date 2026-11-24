@@ -15,7 +15,7 @@ auth Caller {
   id String
   name String
   kind String
-  isAdmin Boolean
+  role String
   maxLeases Int
   ownerId String?
   runtime String?

@@ -24,21 +24,21 @@ model Principal {
   runtime String? @readonly
   /// Tasks a cook may hold at once (its stations share them). Admins and the cook's owner may change it.
   maxLeases Int @range(min: 1, max: 50) @map("max_leases")
-  isAdmin Boolean @readonly @map("is_admin")
+  role String @readonly
   disabledAt DateTime? @readonly @map("disabled_at")
   lastSeenAt DateTime? @readonly @map("last_seen_at")
   createdAt DateTime @readonly @map("created_at")
   oidcSub String? @server_only @map("oidc_sub")
-  adminSource String @server_only @map("admin_source")
+  roleSource String @server_only @map("role_source")
   idRef String @server_only @map("id_ref")
   ownerRef String? @server_only @map("owner_ref")
   memberships TeamMember[] @relation(fields:[id],references:[principalId])
 
   @@map("principals")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || idRef == auth().id || ownerRef == auth().id || memberships.some.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || idRef == auth().id || ownerRef == auth().id || memberships.some.team.members.some.principalRef == auth().id)
   // Every other field is @readonly, so an update can only change a cook's maxLeases.
-  @@allow("update", auth().kind == "user" && kind == "agent" && (auth().isAdmin == true || ownerRef == auth().id))
+  @@allow("update", auth().kind == "user" && kind == "agent" && (auth().role == "super_admin" || ownerRef == auth().id))
   @@mcp(resource: "principals")
 }
 
@@ -50,11 +50,11 @@ model Team {
 
   @@map("teams")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || members.some.principalRef == auth().id)
   @@mcp(resource: "teams")
-  @@allow("create", auth().isAdmin == true)
-  @@allow("update", auth().isAdmin == true)
-  @@allow("delete", auth().isAdmin == true)
+  @@allow("create", auth().role == "super_admin")
+  @@allow("update", auth().role == "super_admin")
+  @@allow("delete", auth().role == "super_admin")
 }
 
 model TeamMember {
@@ -68,9 +68,9 @@ model TeamMember {
 
   @@map("team_members")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || principalRef == auth().id)
   @@mcp(resource: "team-members")
-  @@allow("create", auth().isAdmin == true)
-  @@allow("update", auth().isAdmin == true)
-  @@allow("delete", auth().isAdmin == true)
+  @@allow("create", auth().role == "super_admin")
+  @@allow("update", auth().role == "super_admin")
+  @@allow("delete", auth().role == "super_admin")
 }

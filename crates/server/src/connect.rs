@@ -28,7 +28,7 @@ pub const KINDS: &[&str] = &[
 /// The MCP App that renders a setup (served by the MCP front door).
 pub const UI_URI: &str = "ui://corntchap/connect-cloud";
 pub const UI_HTML: &str = include_str!("connect.html");
-/// The only host a non-admin's routine trigger may point at.
+/// The only host a non-super-admin's routine trigger may point at.
 const ROUTINE_PREFIX: &str = "https://api.anthropic.com/v1/claude_code/routines/";
 const TTL_MINUTES: i64 = 60;
 
@@ -139,11 +139,12 @@ async fn load(db: &PgPool, code: &str) -> Result<Setup> {
 }
 
 /// The cook itself, whoever opened the setup, the cook's owner (or a cook acting for them) and
-/// admins may see and finish a setup. Returns whether the caller acts as an admin.
+/// super-admins may see and finish a setup. Returns whether the caller acts as a super-admin.
 async fn allowed(db: &PgPool, p: &Principal, s: &Setup) -> Result<bool> {
     let who = admin::acting_or_self(db, p).await?;
-    if p.id == s.agent_id || p.id == s.created_by || who.is_admin || s.owner == Some(who.id) {
-        return Ok(who.is_admin);
+    if p.id == s.agent_id || p.id == s.created_by || who.is_super_admin() || s.owner == Some(who.id)
+    {
+        return Ok(who.is_super_admin());
     }
     Err(Error::NotFound(format!("no cloud setup {}", s.code)))
 }
@@ -198,12 +199,12 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 "In Devin, create a service user with permission to use and manage the organization's sessions, and an API key for it (it starts with cog_). corntchap sends it as a bearer token and keeps it: it is never shown again.".into(),
                 "Make the corntchap MCP server reachable from Devin: add it once in your Devin organization's MCP settings, signed in with the cook's token. corntchap sends no credential in the prompt.".into(),
                 "Enter the organization id (it starts with org-). Leave the URL empty for Devin's own API host.".into(),
-                "It is fire and forget: it starts only for ready tasks in its pots and for a direct message from its owner on the pass; nothing else (mentions, comments, forge events, broadcasts, answers) starts a run. Only an admin can change the URL.".into(),
+                "It is fire and forget: it starts only for ready tasks in its pots and for a direct message from its owner on the pass; nothing else (mentions, comments, forge events, broadcasts, answers) starts a run. Only a super-admin can change the URL.".into(),
             ],
             vec![
                 field("token", "Devin API key", true, true, "cog_…", "A service user's key with permission to use and manage sessions."),
                 field("organization", "Organization id", false, true, "org-…", "Your Devin organization."),
-                field("url", "API URL", false, false, "https://api.devin.ai", "Only for a self-hosted or test endpoint (admins); leave empty for Devin."),
+                field("url", "API URL", false, false, "https://api.devin.ai", "Only for a self-hosted or test endpoint (super-admins); leave empty for Devin."),
             ],
         ),
         "coder" => (
@@ -213,7 +214,7 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 "Make the corntchap MCP server reachable from the agent, signed in with the cook's token: add it as an MCP server in Coder Agents (or, for Tasks, in the template's agent module). corntchap sends no credential in the prompt.".into(),
                 "Enter the deployment URL and the organization id (coder organizations list). To run in a known environment, give a workspace id too: the agent then works in that workspace instead of picking a template itself.".into(),
                 "Older Coder with Tasks: leave the organization empty and give the template (its name or version id), and optionally its preset id and the owner (default me).".into(),
-                "The first wake starts a run; later wakes for the same pot are follow-up messages to it. It is fire and forget: it starts only for ready tasks in its pots and for a direct message from its owner on the pass; nothing else (mentions, comments, forge events, broadcasts, answers) starts a run. An admin connects Coder.".into(),
+                "The first wake starts a run; later wakes for the same pot are follow-up messages to it. It is fire and forget: it starts only for ready tasks in its pots and for a direct message from its owner on the pass; nothing else (mentions, comments, forge events, broadcasts, answers) starts a run. A super-admin connects Coder.".into(),
             ],
             vec![
                 field("url", "Coder URL", false, true, "https://coder.example.com", "The deployment."),
@@ -229,7 +230,7 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
             vec![
                 format!("Your endpoint receives one POST per wake for {cook}, with the wake's text and context as JSON."),
                 "Choose a signing secret: corntchap signs each body with HMAC-SHA256 in X-Corntchap-Signature, check it on your side.".into(),
-                "Enter the URL and the secret here (an admin connects webhooks).".into(),
+                "Enter the URL and the secret here (a super-admin connects webhooks).".into(),
             ],
             vec![
                 field("url", "Endpoint URL", false, true, "https://…", "Where corntchap POSTs each wake."),
@@ -343,8 +344,8 @@ fn opt(s: &Option<String>) -> Option<&str> {
 /// The one check for a cloud wake target's config, whoever adds it (a setup, `add_wake_target`,
 /// the CLI, REST): returns the config to store. A cook's owner may connect a Claude routine
 /// (Anthropic's trigger host) or GitHub comments; anything that can point elsewhere (a webhook,
-/// another trigger host, a GitHub API URL) is an admin's call.
-pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
+/// another trigger host, a GitHub API URL) is a super-admin's call.
+pub fn cloud_config(kind: &str, c: &Value, super_admin: bool) -> Result<Value> {
     let get = |k: &str| c[k].as_str().map(str::trim).filter(|s| !s.is_empty());
     match kind {
         "claude-routine" => {
@@ -353,7 +354,7 @@ pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
             })?;
             let local = url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost");
             let ok = (url.starts_with(ROUTINE_PREFIX)
-                || (is_admin && (local || url.starts_with("https://"))))
+                || (super_admin && (local || url.starts_with("https://"))))
                 && url.contains("/fire");
             if !ok {
                 return invalid(format!(
@@ -390,9 +391,10 @@ pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
                 out["mention"] = json!(crate::state::mention(m));
             }
             if let Some(api) = get("api_url") {
-                if !is_admin {
+                if !super_admin {
                     return Err(Error::Forbidden(
-                        "only an admin can point GitHub comments at another API (api_url)".into(),
+                        "only a super-admin can point GitHub comments at another API (api_url)"
+                            .into(),
                     ));
                 }
                 out["api_url"] = json!(api);
@@ -400,15 +402,15 @@ pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
             Ok(out)
         }
         "devin" => {
-            // Devin's own API host needs no admin; any other URL (a test or self-hosted endpoint) is an admin's call
+            // Devin's own API host needs no super-admin; any other URL (a test or self-hosted endpoint) is a super-admin's call
             let default = crate::devin::DEFAULT_URL;
             let url = get("url")
                 .map(|u| u.trim_end_matches('/'))
                 .unwrap_or(default);
             if url != default {
-                if !is_admin {
+                if !super_admin {
                     return Err(Error::Forbidden(
-                        "only an admin can point Devin at another URL".into(),
+                        "only a super-admin can point Devin at another URL".into(),
                     ));
                 }
                 if !(url.starts_with("https://") || url.starts_with("http://")) {
@@ -427,9 +429,9 @@ pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
         }
         "coder" => {
             // the URL is any host the admin names (a self-hosted deployment): not a cook owner's call
-            if !is_admin {
+            if !super_admin {
                 return Err(Error::Forbidden(
-                    "only an admin can connect Coder: its URL can point anywhere".into(),
+                    "only a super-admin can connect Coder: its URL can point anywhere".into(),
                 ));
             }
             let url = get("url")
@@ -475,16 +477,16 @@ pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
             Ok(out)
         }
         "webhook" => {
-            if !is_admin {
+            if !super_admin {
                 return Err(Error::Forbidden(
-                    "only an admin can connect a webhook: Claude routines and GitHub comments are open to a cook's owner".into(),
+                    "only a super-admin can connect a webhook: Claude routines and GitHub comments are open to a cook's owner".into(),
                 ));
             }
             let url = get("url").ok_or_else(|| Error::Invalid("url is required".into()))?;
             if !(url.starts_with("https://") || url.starts_with("http://")) {
                 return invalid("url must be http(s)");
             }
-            // an admin's webhook may also carry headers or a fixed body
+            // a super-admin's webhook may also carry headers or a fixed body
             let mut out = c.clone();
             out["url"] = json!(url);
             if let Some(o) = out.as_object_mut() {
@@ -500,7 +502,7 @@ pub fn cloud_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
 pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Result<Value> {
     let db = &state.db;
     let s = load(db, code).await?;
-    let is_admin = allowed(db, p, &s).await?;
+    let super_admin = allowed(db, p, &s).await?;
     if s.done {
         return invalid(
             "this setup is already connected: open a new one (connect_cloud) to change it",
@@ -529,7 +531,7 @@ pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Resul
     if let Some(i) = a.issue {
         raw["issue"] = json!(i);
     }
-    let config = cloud_config(&s.kind, &raw, is_admin)?;
+    let config = cloud_config(&s.kind, &raw, super_admin)?;
     let mut tx = db.begin().await?;
     // the setup is finished once: lock it
     let done: Option<Option<Uuid>> =

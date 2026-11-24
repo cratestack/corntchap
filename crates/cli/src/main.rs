@@ -85,7 +85,7 @@ enum Cmd {
     /// Tasks: the board for humans, plus JSON commands for agents that only have a shell.
     #[command(subcommand)]
     Task(TaskCmd),
-    /// Users (admin).
+    /// Users (super-admins manage them; orchestrators see the directory).
     #[command(subcommand)]
     User(UserCmd),
     /// Teams and their members.
@@ -378,19 +378,17 @@ enum MeCmd {
 
 #[derive(Subcommand)]
 enum UserCmd {
-    /// Make a user an admin, or not (admin). The last admin cannot be demoted.
-    Admin {
+    /// Set a person's role (super-admin): super-admin runs the instance, orchestrator creates and manages their own teams, pots, cooks and fires, member works in the teams they are put in. The last super-admin cannot be demoted.
+    Role {
         handle: String,
-        #[arg(long, conflicts_with = "off", required_unless_present = "off")]
-        on: bool,
-        #[arg(long)]
-        off: bool,
+        #[arg(value_parser = ["super-admin", "orchestrator", "member"])]
+        role: String,
     },
-    /// Disable a person (admin): their tokens and sessions stop working. The last admin who can sign in cannot be disabled.
+    /// Disable a person (super-admin): their tokens and sessions stop working. The last super-admin who can sign in cannot be disabled.
     Disable { handle: String },
-    /// Enable a disabled person again (admin). Their old tokens stay revoked: they sign in again.
+    /// Enable a disabled person again (super-admin). Their old tokens stay revoked: they sign in again.
     Enable { handle: String },
-    /// List users.
+    /// List users (orchestrators: the directory of handle, name and role).
     Ls {
         #[arg(long)]
         json: bool,
@@ -423,9 +421,9 @@ enum TeamCmd {
     },
     /// Remove a user or agent from a team.
     Leave { team: String, principal: String },
-    /// Rename a team (its owners and admins). Pots and chefs stay.
+    /// Rename a team (its owners and super-admins). Pots and chefs stay.
     Rename { name: String, new_name: String },
-    /// Delete a team that has no pots (its owners and admins). Asks first; `--yes` skips the question.
+    /// Delete a team that has no pots (its owners and super-admins). Asks first; `--yes` skips the question.
     Rm {
         name: String,
         /// Do not ask first (required without a terminal).
@@ -453,7 +451,7 @@ enum ProjectCmd {
     },
     /// Rename a pot's display name (the key stays: it is part of every task id).
     Rename { key: String, name: String },
-    /// The pot's guide, "how we work here" for agents (markdown): print it, or set it (team owner or admin) from a file (`-` is stdin).
+    /// The pot's guide, "how we work here" for agents (markdown): print it, or set it (team owner or super-admin) from a file (`-` is stdin).
     Guide {
         key: String,
         /// Set the guide from this markdown file.
@@ -473,7 +471,7 @@ enum ProjectCmd {
     /// A pot's repositories (a pot has none, one or several): add, remove, list, link.
     #[command(subcommand, alias = "repos")]
     Repo(RepoCmd),
-    /// Set a pot's default lease length, e.g. `pot lease PAY 30m` (team owner or admin).
+    /// Set a pot's default lease length, e.g. `pot lease PAY 30m` (team owner or super-admin).
     Lease {
         key: String,
         #[arg(value_parser = relay::parse_duration)]
@@ -483,7 +481,7 @@ enum ProjectCmd {
 
 #[derive(Subcommand)]
 enum RepoCmd {
-    /// Add a repository to a pot (team owner or admin).
+    /// Add a repository to a pot (team owner or super-admin).
     Add {
         pot: String,
         /// The git url (https or ssh): `station scan` matches a checkout's origin to it.
@@ -588,7 +586,7 @@ enum AgentCmd {
     },
     /// Revoke every token and print a fresh one.
     Rotate { name: String },
-    /// Rename a cook (its owner or an admin). Its tokens, stations and leases keep working; `@old` text and a fire's config.toml target do not follow.
+    /// Rename a cook (its owner or a super-admin). Its tokens, stations and leases keep working; `@old` text and a fire's config.toml target do not follow.
     Rename { name: String, new_name: String },
     /// Delete a cook: its leases are released, its tokens and stations go; what it wrote stays. Asks first; `--yes` skips the question.
     Rm {
@@ -598,7 +596,7 @@ enum AgentCmd {
         yes: bool,
     },
     /// What a cook may do beyond working its tasks: plan (edit, toss, restore, unblock any task in
-    /// its teams), manage (act as you on teams, pots, cooks, fires), admin (your admin powers).
+    /// its teams), manage (act as you on teams, pots, cooks, fires), admin (your role's powers: an orchestrator's cook acts as an orchestrator, never as a super-admin).
     /// Replaces the set; `--none` removes them all. A cook never exceeds your own rights.
     Grant {
         name: String,
@@ -616,7 +614,7 @@ enum AgentCmd {
         pot: String,
         repos: Vec<String>,
     },
-    /// How many tasks a cook may hold at once (its stations share them). Its owner or an admin.
+    /// How many tasks a cook may hold at once (its stations share them). Its owner or a super-admin.
     #[command(name = "limit", alias = "max-leases")]
     Limit {
         name: String,
@@ -647,7 +645,7 @@ enum WakeCmd {
         projects: Vec<String>,
         #[arg(long = "label")]
         labels: Vec<String>,
-        /// claude-routine: the routine's API trigger URL (…/routines/trig_…/fire); webhook: URL to POST; coder: the deployment URL; devin: the API URL (default https://api.devin.ai, admins only)
+        /// claude-routine: the routine's API trigger URL (…/routines/trig_…/fire); webhook: URL to POST; coder: the deployment URL; devin: the API URL (default https://api.devin.ai, super-admins only)
         #[arg(long)]
         url: Option<String>,
         /// claude-routine: the routine's API token (sk-ant-oat01-…); webhook: bearer token; github-comment: GitHub token; coder: Coder session token; devin: Devin API key
@@ -713,7 +711,7 @@ enum RelayCmd {
     Doctor,
     /// Register this machine as a relay (device flow) and store its credential.
     Enroll { name: String },
-    /// Rename a fire on the server (its owner or an admin). Its token keeps working.
+    /// Rename a fire on the server (its owner or a super-admin). Its token keeps working.
     Rename { name: String, new_name: String },
     /// Delete a fire on the server: its tokens stop working. Asks first; `--yes` skips the question.
     Rm {
@@ -991,8 +989,10 @@ fn whoami_text(v: &Value, server: &str) -> String {
     if kind == "agent" {
         role.push(format!("{} / {}", s(v, "agent_kind"), s(v, "runtime")));
     }
-    if v["is_admin"] == true {
-        role.push("admin".into());
+    match v["role"].as_str() {
+        Some("super_admin") => role.push("super-admin".into()),
+        Some("orchestrator") => role.push("orchestrator".into()),
+        _ => {}
     }
     let who = ui::person(v);
     let mut o = format!(
@@ -1049,12 +1049,14 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         }
         Cmd::Tui => tui::run(api).await?,
         Cmd::Task(t) => task(t, &api).await?,
-        Cmd::User(UserCmd::Admin { handle, on, off: _ }) => {
-            api.patch(&format!("/users/{handle}"), json!({"is_admin": on}))
-                .await?;
+        Cmd::User(UserCmd::Role { handle, role }) => {
+            api.patch(
+                &format!("/users/{handle}"),
+                json!({"role": role.replace('-', "_")}),
+            )
+            .await?;
             ok_line(format!(
-                "{handle} is {} an admin (manual admin setting: the IdP role no longer changes it)",
-                if on { "now" } else { "no longer" }
+                "{handle} is now {role} (manual role: the IdP roles no longer change it)"
             ));
         }
         Cmd::User(UserCmd::Disable { handle }) => {
@@ -1445,7 +1447,7 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                 .find(|a| a["name"].as_str() == Some(name.to_lowercase().as_str()))
                 .and_then(|a| a["id"].as_str().map(String::from))
                 .ok_or_else(|| anyhow!("no cook named {name} among yours"))?;
-            // the principals model: only maxLeases is writable, by the cook's owner or an admin
+            // the principals model: only maxLeases is writable, by the cook's owner or a super-admin
             let mut r = api
                 .http
                 .patch(format!("{}/api/v2/principals/{id}", api.server))
@@ -1638,7 +1640,9 @@ async fn repo_cmd(c: RepoCmd, api: &Api) -> Result<()> {
             if json {
                 out(&v);
             } else if v["connected"] != true {
-                println!("no GitHub App is connected: an admin connects one on the Forges page");
+                println!(
+                    "no GitHub App is connected: a super-admin connects one on the Forges page"
+                );
             } else {
                 for e in v["errors"].as_array().into_iter().flatten() {
                     eprintln!("warning: {}", e.as_str().unwrap_or(""));

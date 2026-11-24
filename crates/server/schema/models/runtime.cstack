@@ -13,7 +13,7 @@ model WakeTarget {
 
   @@map("wake_targets")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || agent.ownerRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || agent.ownerRef == auth().id)
   @@mcp(resource: "wake-targets")
 }
 
@@ -30,6 +30,6 @@ model Event {
 
   @@map("events")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "events")
 }

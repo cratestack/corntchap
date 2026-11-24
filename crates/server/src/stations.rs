@@ -50,20 +50,22 @@ pub(crate) async fn cook_for(db: &PgPool, p: &Principal, cook: Option<&str>) -> 
         return invalid("cook is required: the cook (agent) this session works as");
     };
     let who = admin::acting(db, p).await?;
-    let row: Option<(Uuid, String, Option<Uuid>, bool, i64)> = sqlx::query_as(
-        "select id, name, owner_id, is_admin, max_leases from principals where name = $1 and kind = 'agent' and disabled_at is null",
+    let row: Option<(Uuid, String, Option<Uuid>, crate::state::Role, i64)> = sqlx::query_as(
+        "select id, name, owner_id, role, max_leases from principals where name = $1 and kind = 'agent' and disabled_at is null",
     )
     .bind(&name)
     .fetch_optional(db)
     .await?;
     match row {
-        Some((id, name, owner, is_admin, max_leases)) if who.is_admin || owner == Some(who.id) => {
+        Some((id, name, owner, role, max_leases))
+            if who.is_super_admin() || owner == Some(who.id) =>
+        {
             Ok(Principal {
                 id,
                 kind: "agent".into(),
                 name,
                 owner_id: owner,
-                is_admin,
+                role,
                 max_leases,
                 runtime: None,
                 agent_kind: None,
@@ -345,16 +347,19 @@ pub async fn list(
     let sql = format!(
         "select {STATION_JSON} from stations st join principals a on a.id = st.agent_id
          join projects pr on pr.id = st.project_id
-         where ($1 or a.id = $2 or a.owner_id = $2)
+         where ($1 or a.id = $2 or a.owner_id = $2
+                or ($5 and exists (select 1 from team_members m
+                                   where m.team_id = pr.team_id and m.principal_id = $2 and m.role = 'owner')))
            and ($3::text is null or pr.key = $3)
            and ($4::text is null or a.name = $4)
          order by pr.key, a.name, st.created_at"
     );
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .bind(who.is_admin)
+        .bind(who.is_super_admin())
         .bind(who.id)
         .bind(project.map(|k| k.trim().to_uppercase()))
         .bind(cook.map(|c| c.trim().to_lowercase()))
+        .bind(who.can_orchestrate())
         .fetch_all(db)
         .await?;
     Ok(Value::Array(rows))
@@ -372,7 +377,7 @@ pub async fn set_main(db: &PgPool, p: &Principal, station: &str, main: bool) -> 
          for update of st",
     )
     .bind(station.trim())
-    .bind(who.is_admin)
+    .bind(who.is_super_admin())
     .bind(who.id)
     .fetch_optional(&mut *tx)
     .await?;
@@ -406,7 +411,7 @@ pub async fn remove(db: &PgPool, p: &Principal, station: &str) -> Result<Value> 
          where st.ref = $1 and a.id = st.agent_id and ($2 or a.id = $3 or a.owner_id = $3)",
     )
     .bind(station.trim())
-    .bind(who.is_admin)
+    .bind(who.is_super_admin())
     .bind(who.id)
     .execute(db)
     .await?

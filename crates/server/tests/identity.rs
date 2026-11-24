@@ -384,13 +384,16 @@ async fn init_makes_a_local_admin_without_an_oidc_link() {
     let db = &app.state.db;
     let (name, tok) = admin::init_admin(db, None).await.unwrap();
     assert!(admin::norm_handle(&name).is_ok());
-    let (sub, admin_flag, src): (Option<String>, bool, String) =
-        sqlx::query_as("select oidc_sub, is_admin, admin_source from principals where name = $1")
+    let (sub, role, src): (Option<String>, String, String) =
+        sqlx::query_as("select oidc_sub, role, role_source from principals where name = $1")
             .bind(&name)
             .fetch_one(db)
             .await
             .unwrap();
-    assert_eq!((sub, admin_flag, src.as_str()), (None, true, "init"));
+    assert_eq!(
+        (sub, role.as_str(), src.as_str()),
+        (None, "super_admin", "init")
+    );
     assert_eq!(app.get(&tok.unwrap(), "/me").await.1["name"], json!(name));
     // re-running without a name reuses the same admin (a fresh token), a named one creates another
     let (again, t2) = admin::init_admin(db, None).await.unwrap();
@@ -405,7 +408,7 @@ async fn init_makes_a_local_admin_without_an_oidc_link() {
 }
 
 #[tokio::test]
-async fn admins_are_made_and_unmade_but_never_the_last_one() {
+async fn super_admins_are_made_and_unmade_but_never_the_last_one() {
     let app = common::start(false).await;
     let (root_name, root) = admin::init_admin(&app.state.db, None)
         .await
@@ -413,13 +416,14 @@ async fn admins_are_made_and_unmade_but_never_the_last_one() {
         .unwrap();
     let (h, t) = person(&app, "sub-a").await;
     let set = |tok: String, who: String, on: bool| {
+        let role = if on { "super_admin" } else { "member" };
         let app = &app;
         async move {
             app.rest(
                 &tok,
                 reqwest::Method::PATCH,
                 &format!("/users/{who}"),
-                Some(json!({"is_admin": on})),
+                Some(json!({"role": role})),
             )
             .await
         }
@@ -433,8 +437,11 @@ async fn admins_are_made_and_unmade_but_never_the_last_one() {
     // now `h` is the last admin: demoting yourself, or the last admin by anyone, is refused
     let (st, v) = set(t.clone(), h.clone(), false).await;
     assert_eq!(st, 409, "{v}");
-    assert!(v["message"].as_str().unwrap().contains("last admin"), "{v}");
-    assert_eq!(app.get(&t, "/me").await.1["is_admin"], true);
+    assert!(
+        v["message"].as_str().unwrap().contains("last super-admin"),
+        "{v}"
+    );
+    assert_eq!(app.get(&t, "/me").await.1["role"], "super_admin");
     assert_eq!(set(t.clone(), "nobody-here".into(), true).await.0, 404);
     assert_eq!(
         app.rest(
@@ -628,7 +635,7 @@ async fn the_last_admin_guard_counts_only_admins_who_can_sign_in() {
     let a = app.handle_of("sub-a").await;
     let ta = admin::operator_token(db, &a, None).await.unwrap();
     // a legacy admin that is not linked to any sign-in, and a linked admin that is disabled
-    sqlx::query("insert into principals (kind, name, is_admin, admin_source) values ('user', 'legacy', true, 'manual')")
+    sqlx::query("insert into principals (kind, name, role, role_source) values ('user', 'legacy', 'super_admin', 'manual')")
         .execute(db)
         .await
         .unwrap();
@@ -652,13 +659,13 @@ async fn the_last_admin_guard_counts_only_admins_who_can_sign_in() {
             .await
         }
     };
-    let (st, v) = patch(&a, json!({"is_admin": false})).await;
+    let (st, v) = patch(&a, json!({"role": "member"})).await;
     assert_eq!(st, 409, "legacy and disabled admins do not count: {v}");
     let (st, v) = patch(&a, json!({"disabled": true})).await;
     assert_eq!(st, 409, "{v}");
     // an `init` admin (no sign-in by design) does count
     admin::init_admin(db, Some("boot")).await.unwrap();
-    assert_eq!(patch(&a, json!({"is_admin": false})).await.0, 200);
+    assert_eq!(patch(&a, json!({"role": "member"})).await.0, 200);
 }
 
 /// Two demotions in flight cannot both pass: the admin rows are locked. (A transaction stands in for the first one.)
@@ -673,19 +680,21 @@ async fn demotions_are_serialised() {
     let (a, b) = (app.handle_of("sub-a").await, app.handle_of("sub-b").await);
     let pa = app.principal(&a).await;
     let mut hold = db.begin().await.unwrap();
-    sqlx::query("select id from principals where is_admin for update")
+    sqlx::query("select id from principals where role = 'super_admin' for update")
         .fetch_all(&mut *hold)
         .await
         .unwrap();
     let (db2, pa2, b2) = (db.clone(), pa.clone(), b.clone());
-    let mut demote = tokio::spawn(async move { admin::set_admin(&db2, &pa2, &b2, false).await });
+    let mut demote = tokio::spawn(async move {
+        corntchap::roles::set_role(&db2, &pa2, &b2, corntchap::state::Role::Member).await
+    });
     let early = tokio::time::timeout(std::time::Duration::from_millis(500), &mut demote).await;
     assert!(
         early.is_err(),
         "the demotion must wait for the lock on the admin rows"
     );
     // the other demotion lands first, then the waiting one sees one admin left and is refused
-    sqlx::query("update principals set is_admin = false, admin_source = 'manual' where name = $1")
+    sqlx::query("update principals set role = 'member', role_source = 'manual' where name = $1")
         .bind(&a)
         .execute(&mut *hold)
         .await
@@ -694,7 +703,7 @@ async fn demotions_are_serialised() {
     let r = demote.await.unwrap();
     assert!(r.is_err(), "{r:?}");
     let left: i64 = sqlx::query_scalar(
-        "select count(*) from principals where is_admin and disabled_at is null",
+        "select count(*) from principals where role = 'super_admin' and disabled_at is null",
     )
     .fetch_one(&db)
     .await
@@ -940,10 +949,11 @@ async fn init_refuses_a_person_who_signs_in_through_the_idp() {
         .await
         .unwrap_err();
     assert!(matches!(err, corntchap::error::Error::Conflict(_)), "{err}");
-    let flag: bool = sqlx::query_scalar("select is_admin from principals where name = $1")
-        .bind(&h)
-        .fetch_one(&app.state.db)
-        .await
-        .unwrap();
+    let flag: bool =
+        sqlx::query_scalar("select role = 'super_admin' from principals where name = $1")
+            .bind(&h)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
     assert!(!flag, "nothing changed");
 }

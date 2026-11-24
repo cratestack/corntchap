@@ -9,7 +9,7 @@ import { AddMember } from "@/pages/admin";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api";
 import { useAgents, useProcCall, useProjects, useTeamChefs, useV1, useV1Call, type MemberRow, type TeamRow } from "@/lib/data";
-import { useSession } from "@/lib/session";
+import { canManageTeam, useSession } from "@/lib/session";
 import { Crumb, linkClass } from "./common";
 
 export function TeamDetailsPage() {
@@ -29,7 +29,7 @@ export function TeamDetailsPage() {
   const agents = useAgents();
   // a chef may remove the cooks they own
   const ownCooks = new Set((agents.data ?? []).filter((a) => a.owner === me.name).map((a) => a.name));
-  const canManage = !!team && (me.is_admin || team.role === "owner");
+  const canManage = !!team && canManageTeam(me, team.role);
   const pots = (projects.data ?? []).filter((p) => p.team?.toLowerCase() === name.toLowerCase());
 
   const crumb = <Crumb to="/teams" parent="Teams" here={name} />;
@@ -126,7 +126,7 @@ export function TeamDetailsPage() {
                   <RowSkeleton rows={1} />
                 </div>
               ) : pots.length === 0 ? (
-                <GroupRow label="No pot yet" hint="An admin starts pots for a team." />
+                <GroupRow label="No pot yet" hint="An owner or a super-admin starts pots for a team." />
               ) : (
                 pots.map((p) => (
                   <GroupRow

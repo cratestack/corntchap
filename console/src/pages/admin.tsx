@@ -28,11 +28,19 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { useAgents, useProcCall, useProjects, useTeamChefs, useV1, useV1Call, type AgentRow, type TeamRow, type UserRow } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
-import { useSession } from "@/lib/session";
+import { canManageTeam, canOrchestrate, isSuperAdmin, roleLabel, useSession, type Role } from "@/lib/session";
 
+/** The pages only a super-admin sees (people, forges). */
 export function AdminOnly({ children }: { children: ReactNode }) {
   const me = useSession();
-  if (!me.is_admin) return <Navigate to="/" replace />;
+  if (!isSuperAdmin(me)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+/** The pages an orchestrator (or a super-admin) sees: pots of their own teams. */
+export function OrchestratorOnly({ children }: { children: ReactNode }) {
+  const me = useSession();
+  if (!canOrchestrate(me)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -346,7 +354,10 @@ const leaseText = (s: number) => (s >= 120 ? `${Math.round(s / 60)} min` : `${s}
 
 export function PotsAdminPage() {
   const projects = useProjects();
-  const teams = useV1<TeamRow[]>("/teams");
+  const me = useSession();
+  const allTeams = useV1<TeamRow[]>("/teams");
+  // pots go into teams you own (a super-admin: any team)
+  const teams = { ...allTeams, data: allTeams.data?.filter((t) => canManageTeam(me, t.role)) };
   const call = useV1Call();
   const [params, setParams] = useSearchParams();
   const [creating, setCreating] = useState(params.get("new") === "1");
@@ -392,7 +403,7 @@ export function PotsAdminPage() {
 
   return (
     <PageShell
-      eyebrow="Admin"
+      eyebrow={isSuperAdmin(me) ? "Admin" : "Kitchen"}
       title="Pots"
       sub="Pots are projects: a key like PAY, a team that may see them and a default lease length for scooped tasks."
       actions={
@@ -550,11 +561,11 @@ export function TeamsAdminPage() {
 
   return (
     <PageShell
-      eyebrow={me.is_admin ? "Admin" : "Kitchen"}
+      eyebrow={isSuperAdmin(me) ? "Admin" : "Kitchen"}
       title="Teams"
       sub="Teams decide who sees which pots. Their chefs can be people or cooks."
       actions={
-        me.is_admin ? (
+        canOrchestrate(me) ? (
           <Button onClick={() => setCreating(true)}>
             <Plus /> New team
           </Button>
@@ -564,17 +575,17 @@ export function TeamsAdminPage() {
       {teams.isLoading ? (
         <RowSkeleton rows={3} />
       ) : (teams.data ?? []).length === 0 ? (
-        me.is_admin ? (
+        canOrchestrate(me) ? (
           <EmptyState title="No teams yet" action={<Button onClick={() => setCreating(true)}>Make the first team</Button>}>
             A team owns pots and has chefs. Start with the people who cook together.
           </EmptyState>
         ) : (
-          <EmptyState title="No teams">You are in no team yet. An admin creates teams and adds you.</EmptyState>
+          <EmptyState title="No teams">You are in no team yet. An orchestrator creates teams and adds you.</EmptyState>
         )
       ) : (
         <ul className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
           {teams.data!.map((t) => (
-            <TeamCard key={t.name} team={t} canManage={me.is_admin || t.role === "owner"} onAdd={() => setAdding(t.name)} />
+            <TeamCard key={t.name} team={t} canManage={canManageTeam(me, t.role)} onAdd={() => setAdding(t.name)} />
           ))}
         </ul>
       )}
@@ -584,7 +595,7 @@ export function TeamsAdminPage() {
           <Input id="team-name" required autoFocus autoCapitalize="none" value={name} onChange={(e) => setName(e.target.value)} placeholder="acme" className="h-11" />
         </div>
       </FormDialog>
-      <AddMember team={adding} onClose={() => setAdding(null)} ownCooksOnly={!!adding && !me.is_admin && teams.data?.find((t) => t.name === adding)?.role !== "owner"} />
+      <AddMember team={adding} onClose={() => setAdding(null)} ownCooksOnly={!!adding && !canManageTeam(me, teams.data?.find((t) => t.name === adding)?.role)} />
     </PageShell>
   );
 }
@@ -629,6 +640,8 @@ interface Candidate {
   label: string;
   display?: string | null;
   kind: "user" | "cook";
+  /** People: their role (an owner of a team must be an orchestrator or a super-admin). */
+  role?: Role;
 }
 
 /** `ownCooksOnly`: a plain chef of the team, who may add only their own cooks (as chefs). */
@@ -636,9 +649,8 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
   const call = useV1Call();
   const me = useSession();
   const open = !!team;
-  // /users is admin-only: an owner who is no admin picks from their cooks or types a handle
-  const users = useV1<UserRow[]>("/users", { enabled: open && me.is_admin });
-  const [handle, setHandle] = useState("");
+  // /users: everything for a super-admin, the directory (handle, name, role) for an orchestrator; a plain chef adds only their own cooks
+  const users = useV1<UserRow[]>("/users", { enabled: open && canOrchestrate(me) && !ownCooksOnly });
   const cooks = useAgents();
   const members = useTeamChefs(team, { enabled: open });
   const [who, setWho] = useState<Candidate | null>(null);
@@ -650,7 +662,7 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
     const taken = new Set((members.data ?? []).map((m) => m.name));
     const people: Candidate[] = (users.data ?? [])
       .filter((u) => !u.disabled && !taken.has(u.name))
-      .map((u) => ({ principal: u.name, label: u.name, display: u.display_name, kind: "user" as const }));
+      .map((u) => ({ principal: u.name, label: u.name, display: u.display_name, kind: "user" as const, role: u.role }));
     const cookList: Candidate[] = (cooks.data ?? [])
       .filter((c) => !c.disabled && !taken.has(c.name) && (!ownCooksOnly || c.owner === me.name))
       .map((c) => ({ principal: c.name, label: c.name, kind: "cook" as const }));
@@ -658,27 +670,27 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
   }, [users.data, cooks.data, members.data, ownCooksOnly, me.name]);
   const q = query.trim().toLowerCase();
   const shown = candidates.filter((c) => !q || `${c.label} ${c.display ?? ""} ${c.kind}`.toLowerCase().includes(q));
-  const loading = (me.is_admin && users.isLoading) || cooks.isLoading || members.isLoading;
+  const loading = (canOrchestrate(me) && !ownCooksOnly && users.isLoading) || cooks.isLoading || members.isLoading;
 
   useEffect(() => {
     if (!open) {
       setWho(null);
       setRole("member");
       setQuery("");
-      setHandle("");
     }
   }, [open]);
-  const principal = who?.principal ?? (me.is_admin || ownCooksOnly ? "" : handle.trim().replace(/^@/, ""));
+  const principal = who?.principal ?? "";
+  const ownerOk = who?.kind === "user" && who.role !== "member";
 
   return (
     <FormDialog
       open={open}
       onOpenChange={(o) => !o && onClose()}
       title={ownCooksOnly ? `Add my cook to ${team}` : `Add to ${team}`}
-      description={ownCooksOnly ? "Pick one of your cooks that is not on this team yet. It joins as a chef." : me.is_admin ? "Pick a person or a cook that is not on this team yet." : "Pick one of your cooks, or type a person's handle."}
+      description={ownCooksOnly ? "Pick one of your cooks that is not on this team yet. It joins as a chef." : "Pick a person or a cook that is not on this team yet. Only orchestrators and super-admins can be owners."}
       busy={busy}
       submitLabel="Add"
-      disabled={!principal}
+      disabled={!principal || (role === "owner" && !!who && !ownerOk)}
       onSubmit={async () => {
         if (!principal) return;
         setBusy(true);
@@ -703,7 +715,7 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
             autoComplete="off"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={me.is_admin && !ownCooksOnly ? "Search people and cooks" : "Search your cooks"}
+            placeholder={!ownCooksOnly ? "Search people and cooks" : "Search your cooks"}
             className="h-11 pl-9"
           />
         </div>
@@ -730,12 +742,6 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
           })}
         </div>
       </div>
-      {!me.is_admin && !ownCooksOnly && (
-        <div className="space-y-1.5">
-          <Label htmlFor="mem-handle">Or a person's handle</Label>
-          <Input id="mem-handle" value={handle} disabled={!!who} onChange={(e) => setHandle(e.target.value)} placeholder="ada" autoComplete="off" autoCapitalize="none" className="h-11 font-mono" />
-        </div>
-      )}
       {!ownCooksOnly && (
       <div className="space-y-1.5">
         <Label>Role</Label>
@@ -749,8 +755,9 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
               type="button"
               role="radio"
               aria-checked={role === r.id}
+              disabled={r.id === "owner" && !!who && !ownerOk}
               onClick={() => setRole(r.id)}
-              className={cn("h-11 rounded-xl border text-[13.5px] font-medium transition-colors", role === r.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50")}
+              className={cn("h-11 rounded-xl border text-[13.5px] font-medium transition-colors disabled:opacity-50", role === r.id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50")}
             >
               {r.label}
             </button>
@@ -764,13 +771,40 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
 
 // ------------------------------------------------------------------ Users (admin)
 
-function RoleBadge({ u }: { u: UserRow }) {
-  return u.is_admin ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11.5px] font-medium text-primary">
-      <ShieldCheck className="size-3" aria-hidden="true" /> admin
-    </span>
-  ) : (
-    <span className="text-[12.5px] text-muted-foreground">chef</span>
+const ROLES: { id: Role; label: string }[] = [
+  { id: "super_admin", label: "Super-admin" },
+  { id: "orchestrator", label: "Orchestrator" },
+  { id: "member", label: "Member" },
+];
+
+/** A person's role as a select: changing it is a manual setting the identity provider no longer overrides. */
+function RoleSelect({ u }: { u: UserRow }) {
+  const call = useV1Call();
+  const [busy, setBusy] = useState(false);
+  async function change(role: string) {
+    setBusy(true);
+    try {
+      await call("PATCH", `/users/${u.name}`, { role });
+      toast.success(`${u.name} is now ${roleLabel(role as Role)}`);
+    } catch (e) {
+      toast.error("Could not change the role", { description: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Select value={u.role} onValueChange={(v) => void change(v)} disabled={busy}>
+      <SelectTrigger aria-label={`Role of ${u.name}`} className="h-9 w-40">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {ROLES.map((r) => (
+          <SelectItem key={r.id} value={r.id}>
+            {r.id === "super_admin" && <ShieldCheck className="size-3.5" aria-hidden="true" />} {r.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -784,7 +818,7 @@ export function UsersAdminPage() {
     <PageShell
       eyebrow="Admin"
       title="Users"
-      sub="People who have signed in through your identity provider. Each gets a kitchen handle at their first sign-in and can change it from the account menu."
+      sub="People who have signed in through your identity provider. Each gets a kitchen handle at their first sign-in and can change it from the account menu. A role set here sticks: the identity provider no longer changes it."
     >
       {users.isLoading ? (
         <RowSkeleton rows={3} />
@@ -802,7 +836,7 @@ export function UsersAdminPage() {
                   </p>
                   <p className="mt-0.5 text-[12px] text-muted-foreground">{signIn(u)}</p>
                 </div>
-                <RoleBadge u={u} />
+                <RoleSelect u={u} />
               </li>
             ))}
           </ul>
@@ -823,7 +857,7 @@ export function UsersAdminPage() {
                     </span>
                   </TD>
                   <TD>
-                    <RoleBadge u={u} />
+                    <RoleSelect u={u} />
                   </TD>
                   <TD className="text-[12.5px] text-muted-foreground">{signIn(u)}</TD>
                 </tr>
