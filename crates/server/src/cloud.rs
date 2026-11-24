@@ -10,6 +10,8 @@
 //!   batched, and a 429 waits for `Retry-After` instead of retrying blindly (a retry is a new run).
 //! - `github-comment`: a comment mentioning the agent (`GITHUB_MENTION`, `@cook` by default). Comments can be public,
 //!   so they carry a pointer ("you have messages: read them with read_pass"), never the messages.
+//! - `coder`: a Coder agent run (see coder.rs): the first wake creates it, later ones for the same
+//!   pot are follow-up messages to it.
 //! - `webhook`: JSON `{text, agent, project, reasons, wakes}` to your endpoint, signed with
 //!   `X-Corntchap-Signature: sha256=<hmac>` when the target has a `secret`.
 
@@ -23,7 +25,7 @@ use uuid::Uuid;
 use crate::state::AppState;
 
 /// Cloud wake target types (the others, `relay`, are woken through the fire on a machine).
-pub const CLOUD_TYPES: &[&str] = &["webhook", "github-comment", "claude-routine"];
+pub const CLOUD_TYPES: &[&str] = &["webhook", "github-comment", "claude-routine", "coder"];
 
 /// Wakes that never start a cloud run. A cloud cook is fire and forget (each run a new session
 /// that cannot stay to chat), so it is on call: someone calls it by hand (a direct message, an
@@ -69,6 +71,7 @@ pub struct WakeText {
 /// Send one wake to a cloud target.
 pub async fn deliver(
     state: &AppState,
+    target: Option<Uuid>,
     typ: &str,
     config: &Value,
     agent: &str,
@@ -81,6 +84,9 @@ pub async fn deliver(
     };
     // the wake text the request carries, in characters
     let mut chars = 0usize;
+    if typ == "coder" {
+        return crate::coder::deliver(state, target, config, project, text).await;
+    }
     let req = match typ {
         "webhook" => {
             let url = config["url"]
@@ -402,7 +408,7 @@ async fn pantry_line(c: &mut PgConnection, agent: Uuid, project: Uuid) -> String
 }
 
 /// The cut-off is on a character boundary, marked with an ellipsis.
-fn cut(s: &str, max: usize) -> String {
+pub fn cut(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }

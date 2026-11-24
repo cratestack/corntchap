@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useQueries } from "@tanstack/react-query";
-import { Cloud, Flame, MessageSquare, Loader2, MessageCircle, Minus, Pencil, Plug, Plus, Power, RotateCw, Trash2, UserPlus, Webhook } from "lucide-react";
+import { Cloud, Flame, MessageSquare, Loader2, MessageCircle, Minus, Pencil, Plug, Plus, Power, RotateCw, Server, Trash2, UserPlus, Webhook } from "lucide-react";
 import { toast } from "sonner";
 import type { ActivityView } from "@corntchap/api";
 import { cn } from "@/lib/utils";
@@ -259,10 +259,11 @@ const WAKE_KIND: Record<string, { title: string; icon: typeof Flame }> = {
   "claude-routine": { title: "Claude Code routine", icon: Cloud },
   "github-comment": { title: "GitHub comment", icon: MessageSquare },
   webhook: { title: "Webhook", icon: Webhook },
+  coder: { title: "Coder agent", icon: Server },
 };
 
 function wakeDetail(w: WakeTargetRow): string {
-  if (w.type === "webhook") return String(w.config.url ?? "");
+  if (w.type === "webhook" || w.type === "coder") return String(w.config.url ?? "");
   if (w.type === "claude-routine") return `routine ${String(w.config.url ?? "").match(/trig_[A-Za-z0-9]+/)?.[0] ?? ""}`;
   if (w.type === "github-comment") return `${String(w.config.mention ?? "the default mention")} on ${String(w.config.repo ?? "")}#${String(w.config.issue ?? "")}`;
   return "wakes the sessions on its machine";
@@ -374,7 +375,12 @@ export function AddWake({
     { id: "relay", title: "Relay", sub: "A fire on your laptop wakes its sessions", icon: Flame },
     { id: "claude-routine", title: "Claude Code on the web", sub: "A routine is started on each wake", icon: Cloud },
     { id: "github-comment", title: "GitHub comment", sub: "Codex cloud, Copilot and others", icon: MessageSquare },
-    ...(admin ? [{ id: "webhook", title: "Webhook", sub: "Your own endpoint", icon: Webhook }] : []),
+    ...(admin
+      ? [
+          { id: "webhook", title: "Webhook", sub: "Your own endpoint", icon: Webhook },
+          { id: "coder", title: "Coder", sub: "An agent run on your Coder deployment", icon: Server },
+        ]
+      : []),
   ];
   async function submit(e: FormEvent) {
     e.preventDefault();

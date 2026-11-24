@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { ChefHat, ChevronRight, Cloud, Flame, Laptop, Loader2, Minus, Plus, MessageSquare, Webhook } from "lucide-react";
+import { ChefHat, ChevronRight, Cloud, Flame, Laptop, Loader2, Server, Minus, Plus, MessageSquare, Webhook } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page";
@@ -253,6 +253,7 @@ const CLOUD_WAKES = [
   { id: "claude-routine", title: "Claude Code on the web", sub: "A routine is started on each wake", icon: Cloud },
   { id: "github-comment", title: "GitHub comment", sub: "Codex cloud, Copilot and others", icon: MessageSquare },
   { id: "webhook", title: "Webhook", sub: "Your own endpoint (admins)", icon: Webhook },
+  { id: "coder", title: "Coder", sub: "An agent run on your Coder deployment (admins)", icon: Server },
 ] as const;
 
 /**
@@ -499,7 +500,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
                 </label>
               ) : (
                 <p className="rounded-xl border border-border bg-muted/40 px-3.5 py-3 text-[12.5px] text-muted-foreground">
-                  A cloud cook has no fire. After the token you pick how it is woken: a Claude routine, GitHub comments or a webhook.
+                  A cloud cook has no fire. After the token you pick how it is woken: a Claude routine, GitHub comments, a webhook or Coder.
                 </p>
               )}
             </FormSheetBody>
@@ -543,7 +544,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
           <>
             <FormSheetBody className="pb-4">
               <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
-                {CLOUD_WAKES.filter((w) => w.id !== "webhook" || me.is_admin).map((w) => (
+                {CLOUD_WAKES.filter((w) => (w.id !== "webhook" && w.id !== "coder") || me.is_admin).map((w) => (
                   <li key={w.id}>
                     <button
                       type="button"

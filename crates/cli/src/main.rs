@@ -463,6 +463,7 @@ enum RepoCmd {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum AgentCmd {
     /// Create an agent; prints its token once (put it in the agent's MCP config).
@@ -559,17 +560,17 @@ enum WakeCmd {
     /// Add a wake target to an agent.
     Add {
         agent: String,
-        /// relay | claude-routine | webhook | github-comment
-        #[arg(long = "type", value_parser = ["relay", "claude-routine", "webhook", "github-comment"])]
+        /// relay | claude-routine | webhook | github-comment | coder
+        #[arg(long = "type", value_parser = ["relay", "claude-routine", "webhook", "github-comment", "coder"])]
         typ: String,
         #[arg(long = "project")]
         projects: Vec<String>,
         #[arg(long = "label")]
         labels: Vec<String>,
-        /// claude-routine: the routine's API trigger URL (…/routines/trig_…/fire); webhook: URL to POST
+        /// claude-routine: the routine's API trigger URL (…/routines/trig_…/fire); webhook: URL to POST; coder: the deployment URL
         #[arg(long)]
         url: Option<String>,
-        /// claude-routine: the routine's API token (sk-ant-oat01-…); webhook: bearer token; github-comment: GitHub token
+        /// claude-routine: the routine's API token (sk-ant-oat01-…); webhook: bearer token; github-comment: GitHub token; coder: Coder session token
         #[arg(long)]
         token: Option<String>,
         /// webhook: sign each body with HMAC-SHA256 (X-Corntchap-Signature: sha256=…)
@@ -583,6 +584,21 @@ enum WakeCmd {
         /// github-comment: who the comment mentions, e.g. @codex or @copilot (default: the server's GITHUB_MENTION, @cook)
         #[arg(long)]
         mention: Option<String>,
+        /// coder (Coder Agents, current Coder): the organization id; give this or --template
+        #[arg(long)]
+        organization: Option<String>,
+        /// coder (Coder Agents): run in this workspace id
+        #[arg(long)]
+        workspace: Option<String>,
+        /// coder (Coder Tasks, older Coder): template name or version id
+        #[arg(long)]
+        template: Option<String>,
+        /// coder (Coder Tasks): template version preset id
+        #[arg(long)]
+        preset: Option<String>,
+        /// coder (Coder Tasks): the Coder user the task belongs to (default me)
+        #[arg(long = "coder-owner")]
+        coder_owner: Option<String>,
         /// cloud targets: also start a run for new ready work (default: on call, started only by a
         /// direct message, an @mention or a comment on its task). Narrow it with --label.
         #[arg(long)]
@@ -1412,12 +1428,25 @@ async fn agent(a: AgentCmd, api: &Api) -> Result<()> {
                 repo,
                 issue,
                 mention,
+                organization,
+                workspace,
+                template,
+                preset,
+                coder_owner,
                 takes_work,
             } => {
                 let mut config = json!({});
                 match typ.as_str() {
                     "webhook" => config = json!({"url": url, "token": token, "secret": secret}),
                     "claude-routine" => config = json!({"url": url, "token": token}),
+                    "coder" => {
+                        config = json!({"url": url, "token": token, "organization": organization,
+                            "workspace": workspace, "template": template, "preset": preset,
+                            "owner": coder_owner});
+                        if let Some(o) = config.as_object_mut() {
+                            o.retain(|_, v| !v.is_null());
+                        }
+                    }
                     "github-comment" => {
                         config = json!({"repo": repo, "issue": issue, "token": token});
                         if let Some(m) = mention.filter(|m| !m.trim().is_empty()) {
