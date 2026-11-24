@@ -255,8 +255,21 @@ pub async fn what_now(
         me,
     )
     .await?;
-    // TODO(review flow): once the `reviews` table (branch claude/review-flow) is merged, list the
-    // reviews waiting on this cook here. It is not queried now, so this runs without that table.
+    let reviews = rows(
+        &mut c,
+        "select jsonb_build_object('id', pr.key || '-R' || r.number,
+             'task', (select pr.key || '-' || t.number from tasks t where t.id = r.task_id),
+             'from', (select name from principals where id = r.requested_by),
+             'note', r.note, 'round', r.round)
+         from reviews r join projects pr on pr.id = r.project_id
+         where r.project_id = $1 and r.state = 'requested'
+           and (r.reviewer = $2 or (r.reviewer is null and r.requested_by is distinct from $2))
+         order by r.reviewer is null, r.created_at limit 10"
+            .into(),
+        project_id,
+        me,
+    )
+    .await?;
 
     // work that needs no checkout
     let open_questions = rows(
@@ -353,6 +366,7 @@ pub async fn what_now(
         holding: &holding,
         questions: &questions_to_me,
         comments: &comments,
+        reviews: &reviews,
         ready_here: &ready_here,
         ready_here_total,
         ready_elsewhere: &ready_elsewhere,
@@ -371,7 +385,7 @@ pub async fn what_now(
         "holding": holding, "parked": parked,
         "ready_here": ready_here, "ready_here_total": ready_here_total,
         "ready_elsewhere": ready_elsewhere,
-        "waiting_on_you": {"questions": questions_to_me, "comments": comments},
+        "waiting_on_you": {"questions": questions_to_me, "comments": comments, "reviews": reviews},
         "folder_free": {
             "open_questions": open_questions, "open_questions_total": open_questions_total,
             "needs_split": needs_split, "triage": triage, "stale": stale, "no_repo": no_repo,
@@ -391,6 +405,7 @@ pub struct Parts<'a> {
     pub holding: &'a [Value],
     pub questions: &'a [Value],
     pub comments: &'a [Value],
+    pub reviews: &'a [Value],
     pub ready_here: &'a [Value],
     pub ready_here_total: i64,
     pub ready_elsewhere: &'a [Value],
@@ -436,6 +451,15 @@ pub fn next_step(x: &Parts) -> String {
             "Answer {} ({}): it is addressed to you (answer_question).",
             s(q, "id"),
             s(q, "title")
+        );
+    }
+    if let Some(r) = x.reviews.first() {
+        return format!(
+            "Review {} (round {}) for {}: read the task and what the note points at ({}), then give a verdict with review (approve, changes or comment).",
+            s(r, "task"),
+            r["round"].as_i64().unwrap_or(1),
+            r["from"].as_str().unwrap_or("its requester"),
+            s(r, "note"),
         );
     }
     if let Some(c) = x.comments.first() {

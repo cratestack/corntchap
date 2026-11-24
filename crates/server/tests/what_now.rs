@@ -558,3 +558,27 @@ async fn the_dispatcher_does_not_wake_a_confined_station_for_other_repositories(
     assert!(has);
     assert_eq!(picked.unwrap()["id"], json!(free));
 }
+
+#[tokio::test]
+async fn a_review_asked_of_the_cook_waits_on_it_and_comes_next() {
+    let w = world().await;
+    let st = w.station("ses_r", "backend", None).await;
+    let t = w.task("Rate limiter", "backend", 3, "").await;
+    tool(
+        &w.app,
+        &w.alice,
+        "request_review",
+        json!({"task": t, "reviewer": "c1", "note": "branch pay-1-limits"}),
+    )
+    .await;
+    let v = w.now(&st).await;
+    let r = &v["waiting_on_you"]["reviews"];
+    assert_eq!(r.as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(r[0]["task"], json!(t));
+    assert_eq!(r[0]["from"], "alice");
+    let next = v["next"].as_str().unwrap();
+    assert!(
+        next.starts_with(&format!("Review {t}")) && next.contains("pay-1-limits"),
+        "{next}"
+    );
+}

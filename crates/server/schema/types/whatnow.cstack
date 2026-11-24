@@ -60,6 +60,20 @@ type NowWaiting {
   questions NowQuestion[]
   /// Comments from people on your tasks, unanswered.
   comments NowComment[]
+  /// Reviews asked of you (or of anyone on the team, not by you), waiting for a verdict.
+  reviews NowReview[]
+}
+
+type NowReview {
+  /// The review id, e.g. ANR-R3.
+  id String
+  /// The task to review, e.g. ANR-12.
+  task String
+  /// Who asked.
+  from String?
+  /// What to look at: a pull request, a branch.
+  note String
+  round Int
 }
 
 /// Work that needs no checkout of any repository.
