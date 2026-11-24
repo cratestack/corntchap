@@ -13,7 +13,7 @@ The CLI (`corntchap-cli`) comes from the GitHub releases; the server runs from t
 ```bash
 brew install cratestack/tap/corntchap-cli                                  # macOS and Linux (Homebrew)
 curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | sh   # macOS and Linux, no package manager
-curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | VERSION=v0.2.0 sh   # pin a version
+curl -fsSL https://raw.githubusercontent.com/cratestack/corntchap/main/install.sh | VERSION=v0.2.1 sh   # pin a version
 ```
 
 ```powershell
