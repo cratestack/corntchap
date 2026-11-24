@@ -437,7 +437,7 @@ enum ProjectCmd {
         yes: bool,
     },
     /// A pot's repositories (a pot has none, one or several): add, remove, list, link.
-    #[command(subcommand)]
+    #[command(subcommand, alias = "repos")]
     Repo(RepoCmd),
     /// Set a pot's default lease length, e.g. `pot lease PAY 30m` (team owner or admin).
     Lease {
@@ -460,6 +460,25 @@ enum RepoCmd {
         /// Its default branch.
         #[arg(long)]
         branch: Option<String>,
+    },
+    /// Add several repositories at once, by GitHub full name (acme/api) or url; see `repo available`.
+    AddMany {
+        pot: String,
+        /// Full names or urls (also separated by commas or newlines).
+        #[arg(required = true)]
+        repos: Vec<String>,
+    },
+    /// The repositories the connected GitHub Apps can see, newest push first; `*` marks those already in the pot.
+    Available {
+        pot: String,
+        /// Only full names containing this text.
+        #[arg(short = 'q', long)]
+        query: Option<String>,
+        /// Only this GitHub App installation (id).
+        #[arg(long)]
+        installation: Option<i64>,
+        #[arg(long)]
+        json: bool,
     },
     /// Remove a repository from a pot: open tasks and cook scopes stop naming it.
     Rm { pot: String, name: String },
@@ -1559,6 +1578,46 @@ async fn repo_cmd(c: RepoCmd, api: &Api) -> Result<()> {
                 s(&v["added"], "name"),
                 s(&v, "project")
             ));
+        }
+        RepoCmd::AddMany { pot, repos } => {
+            let v = api
+                .post(
+                    &format!("/projects/{}/repos/bulk", pot.to_uppercase()),
+                    json!({"repos": repos.join("\n")}),
+                )
+                .await?;
+            for a in v["added"].as_array().into_iter().flatten() {
+                ok_line(format!("repository {} added", s(a, "name")));
+            }
+            for k in v["skipped"].as_array().into_iter().flatten() {
+                println!("skipped {}: {}", s(k, "input"), s(k, "reason"));
+            }
+        }
+        RepoCmd::Available {
+            pot,
+            query,
+            installation,
+            json,
+        } => {
+            let mut params = vec![("project", pot.to_uppercase())];
+            if let Some(q) = query {
+                params.push(("q", q));
+            }
+            if let Some(i) = installation {
+                params.push(("installation", i.to_string()));
+            }
+            let r = api.raw(reqwest::Method::GET, "/forges/repos");
+            let v = api.send(r.query(&params)).await?;
+            if json {
+                out(&v);
+            } else if v["connected"] != true {
+                println!("no GitHub App is connected: an admin connects one on the Forges page");
+            } else {
+                for e in v["errors"].as_array().into_iter().flatten() {
+                    eprintln!("warning: {}", e.as_str().unwrap_or(""));
+                }
+                println!("{}", ui::forge_repos_table(&v["repos"]));
+            }
         }
         RepoCmd::Rm { pot, name } => {
             let v = api

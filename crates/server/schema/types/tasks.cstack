@@ -172,6 +172,8 @@ type TaskDetail {
   prs PrView[]
   /// Every review round of the task, oldest first.
   reviews ReviewView[]
+  /// Set by link_pr and refresh_pr when GitHub could not be read (the app is not installed on the repository): the pull request's data stays empty.
+  warning String?
   items TaskItemView[]
   comments TaskCommentView[]
   dependencies TaskLinkView[]

@@ -57,10 +57,14 @@
 //! Both need a branch for the provider in the `forge_connections.provider` check (the migration already
 //! allows `gitlab` and `gitea`), a connection form on the admin page and one line in [`for_provider`].
 
+pub mod catalog;
 pub mod events;
 pub mod github;
 pub mod link;
+pub mod pick;
 pub mod store;
+pub mod sync;
+pub mod unfollowed;
 pub mod web;
 
 use http::HeaderMap;
