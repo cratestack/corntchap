@@ -63,7 +63,7 @@ fn s(v: &Value) -> Option<String> {
     v.as_str().map(str::to_string)
 }
 
-fn repo_of(v: &Value) -> Option<RepoRef> {
+pub fn repo_of(v: &Value) -> Option<RepoRef> {
     let r = &v["repository"];
     let full_name = s(&r["full_name"])?;
     let html_url = s(&r["html_url"]).unwrap_or_default();
@@ -92,7 +92,7 @@ fn pr_state(p: &Value) -> Option<PrState> {
     }
 }
 
-fn pr_ref(p: &Value) -> PrRef {
+pub fn pr_ref(p: &Value) -> PrRef {
     PrRef {
         number: p["number"].as_i64().unwrap_or(0),
         url: s(&p["html_url"]).unwrap_or_default(),
@@ -112,7 +112,7 @@ fn pr_ref(p: &Value) -> PrRef {
     }
 }
 
-fn conclusion(c: &Value) -> Option<Conclusion> {
+pub fn conclusion(c: &Value) -> Option<Conclusion> {
     Some(match c.as_str()? {
         "success" | "neutral" | "skipped" => Conclusion::Success,
         "failure" | "startup_failure" | "action_required" => Conclusion::Failure,

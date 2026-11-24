@@ -393,6 +393,39 @@ pub fn repos_table(v: &Value) -> String {
     )
 }
 
+/// What `project repo available` prints: `*` marks a repository already in the pot.
+pub fn forge_repos_table(v: &Value) -> String {
+    let rows = v
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            let mut flags = vec![];
+            if r["private"] == true {
+                flags.push("private");
+            }
+            if r["archived"] == true {
+                flags.push("archived");
+            }
+            vec![
+                plain(if r["in_pot"] == true { "*" } else { "" }),
+                plain(s(r, "full_name")),
+                r["default_branch"]
+                    .as_str()
+                    .map(plain)
+                    .unwrap_or_else(|| dim_cell("-")),
+                plain(flags.join(", ")),
+                plain(s(r, "pushed_at").chars().take(10).collect::<String>()),
+            ]
+        })
+        .collect();
+    table(
+        &["", "repository", "branch", "", "pushed"],
+        rows,
+        "no repositories visible to the connected GitHub Apps",
+    )
+}
+
 pub fn projects_table(v: &Value) -> String {
     let rows = v
         .as_array()

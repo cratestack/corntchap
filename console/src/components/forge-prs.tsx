@@ -142,10 +142,11 @@ export function TaskPrs({ task }: { task: { id: string; prs?: PrView[] | undefin
     e.preventDefault();
     setBusy("link");
     try {
-      await call("taskLinkPr", { id: task.id, url: url.trim() });
+      const r = await call("taskLinkPr", { id: task.id, url: url.trim() });
       setUrl("");
       setAdding(false);
-      toast.success("Pull request linked");
+      if (r.warning) toast.warning("Pull request linked, but not read", { description: r.warning });
+      else toast.success("Pull request linked");
     } catch (err) {
       toast.error("Could not link that pull request", { description: errorMessage(err) });
     } finally {

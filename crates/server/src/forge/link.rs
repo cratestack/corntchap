@@ -8,7 +8,7 @@ use crate::{
     error::{Error, Result, invalid},
     repos::normalize_git_url,
     service,
-    state::Principal,
+    state::{AppState, Principal},
 };
 
 /// A task's PRs, newest first.
@@ -28,7 +28,7 @@ pub async fn prs_of(c: &mut PgConnection, task: Uuid) -> Result<Value> {
 
 /// `(provider, owner/repo, number)` of a PR's web address: `https://github.com/acme/shop/pull/12`.
 /// The host must be github.com or the web host of a connection.
-async fn parse_url(c: &mut PgConnection, url: &str) -> Result<(String, String, i64)> {
+pub(super) async fn parse_url(c: &mut PgConnection, url: &str) -> Result<(String, String, i64)> {
     let bad = || {
         Error::Invalid(format!(
             "{url:?} is not a pull request address (like https://github.com/acme/shop/pull/12)"
@@ -62,7 +62,11 @@ async fn parse_url(c: &mut PgConnection, url: &str) -> Result<(String, String, i
 
 /// Link a PR to a task by hand. It wins over the branch and title rules, and replaces a link made
 /// by them. The PR is followed even if its repository is in no pot.
-pub async fn link_pr(db: &PgPool, p: &Principal, task: &str, url: &str) -> Result<Value> {
+/// Then the PR is read from GitHub at once (title, state, branch, checks, reviews), when an
+/// installed app covers its repository; otherwise the answer carries a `warning` saying why the row
+/// stays empty. Linking an already linked PR again refreshes it.
+pub async fn link_pr(st: &AppState, p: &Principal, task: &str, url: &str) -> Result<Value> {
+    let db = &st.db;
     let mut tx = db.begin().await?;
     let t = service::task_by_ref(&mut tx, p, task).await?;
     let (provider, repo, number) = parse_url(&mut tx, url).await?;
@@ -102,8 +106,39 @@ pub async fn link_pr(db: &PgPool, p: &Principal, task: &str, url: &str) -> Resul
                "task": format!("{}-{}", t.key, t.number)}),
     )
     .await?;
-    let out = service::task_full(&mut tx, t.id).await?;
     tx.commit().await?;
+    let warning = super::sync::sync_pr(st, &host, &repo, number).await?;
+    let mut c = db.acquire().await?;
+    let mut out = service::task_full(&mut c, t.id).await?;
+    out["warning"] = json!(warning);
+    Ok(out)
+}
+
+/// Read the task's pull requests (or the one at `url`) from GitHub again.
+pub async fn refresh_pr(
+    st: &AppState,
+    p: &Principal,
+    task: &str,
+    url: Option<&str>,
+) -> Result<Value> {
+    let mut c = st.db.acquire().await?;
+    let t = service::task_by_ref(&mut c, p, task).await?;
+    let only = match url.map(str::trim).filter(|u| !u.is_empty()) {
+        Some(u) => {
+            let (_, repo, number) = parse_url(&mut c, u).await?;
+            Some((repo, number))
+        }
+        None => None,
+    };
+    drop(c);
+    let warnings = super::sync::refresh_task(st, t.id, only).await?;
+    let mut c = st.db.acquire().await?;
+    let mut out = service::task_full(&mut c, t.id).await?;
+    out["warning"] = if warnings.is_empty() {
+        Value::Null
+    } else {
+        json!(warnings.join(" "))
+    };
     Ok(out)
 }
 

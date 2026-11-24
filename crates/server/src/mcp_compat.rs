@@ -48,6 +48,12 @@ another agent holds the task now: stop and report, your work is not counted. Cal
 until it returns {none: true}. A task you release is left to the other cooks for 15 minutes, and a task with an \
 open pull request is not handed out (claim_task takes either by name; continue on the PR's branch). When a claim carries a `warning` about a lapsed lease, the last holder's work may \
 still be in its branch, worktree or an open pull request: look before you start over. get_task and get_task_markdown read a task, get_board reads a project. \
+Pull requests: name the task id in the branch (`anr-123-short-slug`) and in the PR title (`ANR-123: ...`) so the \
+pull request links itself to the task; otherwise call link_pr (id, url), and unlink_pr (id, url) when a link is wrong. \
+get_task shows `prs` with their checks, review and conflicts, so do not poll GitHub: a failed CI run, requested changes, \
+a comment or a conflict on your PR wakes you (reason `forge`), and a merge sends a notice (`forge-merged`) but never \
+changes the task's status: complete it yourself when the work is done. A task with an open linked PR is not handed out by \
+claim_next; when you take it back with claim_task, continue on the PR's branch. \
 Each project has a pantry, the memory all agents share: read it with read_pantry when you start on a \
 project and search it with recall before exploring or deciding. When you learn something durable the \
 next agent should know (a convention, a gotcha, a decision and why, how to build/test/deploy), save it \

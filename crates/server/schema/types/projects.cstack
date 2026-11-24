@@ -88,3 +88,51 @@ type CookReposView {
   /// Aliases; empty means all of the pot's repositories.
   repos String[]
 }
+
+/// A repository a connected GitHub App can see.
+type ForgeRepoView {
+  /// owner/name.
+  full_name String
+  html_url String
+  clone_url String
+  default_branch String?
+  private Boolean
+  archived Boolean
+  description String?
+  /// RFC 3339.
+  pushed_at String?
+  /// The account the app is installed on.
+  account String
+  installation Int
+  /// Already one of the pot's repositories.
+  in_pot Boolean
+  /// Its alias in the pot when in_pot.
+  pot_name String?
+  /// The alias add_repos would give it.
+  suggested_name String
+  /// How many events this repository sent that no pot followed (it is in no pot): add it to one.
+  unfollowed_events Int?
+}
+
+/// The repositories a pot could add from GitHub.
+type ForgeRepos {
+  project String?
+  /// False when no GitHub App that can list repositories is connected.
+  connected Boolean
+  total Int
+  repos ForgeRepoView[]
+  /// One message per installation that could not be listed.
+  errors String[]
+}
+
+type RepoSkipped {
+  input String
+  reason String
+}
+
+type ReposAdded {
+  project String
+  added RepoView[]
+  skipped RepoSkipped[]
+  repos RepoView[]
+}

@@ -1083,7 +1083,29 @@ impl ProcedureRegistry for Procedures {
         _z: task_link_pr::Authorized,
     ) -> Result<task_link_pr::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(crate::forge::link::link_pr(&self.state.db, &p, &a.id, &a.url).await)
+        typed(crate::forge::link::link_pr(&self.state, &p, &a.id, &a.url).await)
+    }
+
+    async fn task_refresh_pr(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: task_refresh_pr::Args,
+        _z: task_refresh_pr::Authorized,
+    ) -> Result<task_refresh_pr::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::forge::link::refresh_pr(&self.state, &p, &a.id, a.url.as_deref()).await)
+    }
+
+    async fn forge_repo_dismiss(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: forge_repo_dismiss::Args,
+        _z: forge_repo_dismiss::Authorized,
+    ) -> Result<forge_repo_dismiss::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::forge::pick::dismiss(&self.state, &p, &a.repo).await)
     }
 
     async fn task_unlink_pr(
@@ -1105,14 +1127,47 @@ impl ProcedureRegistry for Procedures {
         _z: repo_add::Authorized,
     ) -> Result<repo_add::Output, CratestackError> {
         let p = principal(ctx)?;
+        let r = crate::repos::add_repo(
+            &self.state.db,
+            &p,
+            &a.project,
+            &a.url,
+            a.name.as_deref(),
+            a.defaultBranch.as_deref(),
+        )
+        .await;
+        if r.is_ok() {
+            crate::forge::sync::spawn_backfill(&self.state, &a.project, vec![a.url.clone()]);
+        }
+        typed(r)
+    }
+
+    async fn repo_add_many(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: repo_add_many::Args,
+        _z: repo_add_many::Authorized,
+    ) -> Result<repo_add_many::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::forge::pick::add_many(&self.state, &p, &a.project, &a.repos).await)
+    }
+
+    async fn forge_repos(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: forge_repos::Args,
+        _z: forge_repos::Authorized,
+    ) -> Result<forge_repos::Output, CratestackError> {
+        let p = principal(ctx)?;
         typed(
-            crate::repos::add_repo(
-                &self.state.db,
+            crate::forge::pick::list(
+                &self.state,
                 &p,
-                &a.project,
-                &a.url,
-                a.name.as_deref(),
-                a.defaultBranch.as_deref(),
+                a.project.as_deref(),
+                a.query.as_deref(),
+                a.installation,
             )
             .await,
         )

@@ -109,7 +109,14 @@ mutation procedure taskSplitByRepo(id: String): SplitResult
 /// @param url The pull request's address, e.g. https://github.com/acme/shop/pull/12.
 mutation procedure taskLinkPr(id: String, url: String): TaskDetail
   @allow(auth() != null)
-  @mcp(tool: "link_pr", description: "Link a pull request (its web address, e.g. https://github.com/acme/shop/pull/12) to a task. A link made here wins over the automatic ones (the task's id in the branch, the title or the body). The task then shows the pull request's state, checks and reviews, and its holder is told about failed checks, requested changes and comments. A merge never changes the task's status.")
+  @mcp(tool: "link_pr", description: "Link a pull request (its web address, e.g. https://github.com/acme/shop/pull/12) to a task. A link made here wins over the automatic ones (the task's id in the branch, the title or the body). The task then shows the pull request's state, checks and reviews, and its holder is told about failed checks, requested changes and comments. A merge never changes the task's status. The pull request is read from GitHub at once (title, state, branch, checks, review) when the GitHub App is installed on its repository; otherwise the answer has a `warning`.")
+
+/// Read a task's pull requests from GitHub again.
+/// @param id Task id, e.g. PAY-42.
+/// @param url One pull request's address; leave out to refresh all of the task's pull requests.
+mutation procedure taskRefreshPr(id: String, url: String?): TaskDetail
+  @allow(auth() != null)
+  @mcp(tool: "refresh_pr", description: "Read the pull requests linked to a task from GitHub again (title, state, branch, checks, review, conflicts), through the GitHub App installed on their repository. link_pr does this once when it links. A `warning` says when the app is not installed on the repository.")
 
 /// Take a pull request off a task.
 /// @param id Task id, e.g. PAY-42.
