@@ -175,26 +175,34 @@ async fn logout(State(st): State<AppState>, Authn(p): Auth) -> J {
 async fn users_list(State(st): State<AppState>, Authn(p): Auth) -> J {
     ok(admin::list_users(&st.db, &p).await?)
 }
-/// Change a person (admins only): `{"is_admin": bool}` and/or `{"disabled": bool}`. An admin setting is manual: the
-/// IdP role no longer changes it. A disabled person's tokens and sessions stop working.
+/// Change a person (super-admins only): `{"role": "super_admin" | "orchestrator" | "member"}` and/or
+/// `{"disabled": bool}`. A role set here is manual: the IdP roles no longer change it. A disabled person's
+/// tokens and sessions stop working.
 async fn users_update(
     State(st): State<AppState>,
     Authn(p): Auth,
     Path(name): Path<String>,
     Json(b): Json<Value>,
 ) -> J {
-    let (admin_flag, disabled) = (b["is_admin"].as_bool(), b["disabled"].as_bool());
-    if admin_flag.is_none() && disabled.is_none() {
+    let role = match b["role"].as_str() {
+        Some(r) => Some(r.parse::<crate::state::Role>().map_err(Error::Invalid)?),
+        None if b.get("role").is_none_or(Value::is_null) => None,
+        None => return Err(Error::Invalid("role is a string".into())),
+    };
+    let disabled = b["disabled"].as_bool();
+    if role.is_none() && disabled.is_none() {
         return Err(Error::Invalid(
-            "is_admin and/or disabled (true or false) is required".into(),
+            "role (super_admin, orchestrator or member) and/or disabled (true or false) is required".into(),
         ));
     }
-    let mut out = json!({"name": name.trim().trim_start_matches('@').to_lowercase()});
-    if let Some(on) = admin_flag {
-        out = admin::set_admin(&st.db, &p, &name, on).await?;
+    crate::roles::require_super_admin(&p, "change people")?;
+    let v = crate::roles::update_person(&st.db, &p, &name, role, disabled).await?;
+    let mut out = json!({"name": v["name"]});
+    if role.is_some() {
+        out["role"] = v["role"].clone();
+        out["role_source"] = v["role_source"].clone();
     }
-    if let Some(d) = disabled {
-        let v = admin::set_user_disabled(&st.db, &p, &name, d).await?;
+    if disabled.is_some() {
         out["disabled"] = v["disabled"].clone();
     }
     ok(out)
@@ -426,11 +434,11 @@ async fn task_unlink_pr(
     ok(crate::forge::link::unlink_pr(&st.db, &p.worker()?, &id, b["url"].as_str()).await?)
 }
 
-/// Connected git hosts with their installations and last delivery (admins only). No secrets.
+/// Connected git hosts with their installations and last delivery (super-admins only). No secrets.
 async fn forges_list(State(st): State<AppState>, Authn(p): Auth) -> J {
-    if !p.is_user() || !p.is_admin {
+    if !p.is_user() || !p.is_super_admin() {
         return Err(Error::Forbidden(
-            "only admins see the connected git hosts".into(),
+            "only a super-admin sees the connected git hosts".into(),
         ));
     }
     ok(json!({
@@ -456,7 +464,7 @@ async fn forges_repos(
     .await?)
 }
 
-/// `{"repo": "acme/api"}`: stop listing a repository that sends events no pot follows (admins).
+/// `{"repo": "acme/api"}`: stop listing a repository that sends events no pot follows (super-admins).
 async fn forges_dismiss(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Value>) -> J {
     ok(crate::forge::pick::dismiss(&st, &p, &req_s(&b, "repo")?).await?)
 }
@@ -471,9 +479,9 @@ async fn task_refresh_pr(
 }
 
 async fn forges_remove(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<Uuid>) -> J {
-    if !p.is_user() || !p.is_admin {
+    if !p.is_user() || !p.is_super_admin() {
         return Err(Error::Forbidden(
-            "only admins remove a connected git host".into(),
+            "only a super-admin removes a connected git host".into(),
         ));
     }
     if !crate::forge::store::remove(&st.db, id).await? {

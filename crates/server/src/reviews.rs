@@ -487,7 +487,7 @@ pub async fn cancel(db: &PgPool, p: &Principal, id: &str) -> Result<Value> {
     if r.state != "requested" {
         return Err(Error::Conflict(format!("{rref} is already {}", r.state)));
     }
-    if r.requested_by != Some(p.id) && !p.is_admin {
+    if r.requested_by != Some(p.id) && !p.is_super_admin() {
         return Err(Error::Forbidden(format!(
             "only the one who asked for {rref} cancels it"
         )));

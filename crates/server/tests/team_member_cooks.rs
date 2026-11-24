@@ -21,7 +21,7 @@ struct World {
     dave: String,
 }
 
-/// octo (admin); alice owns team acme; carol is a plain chef of acme and owns cook ck;
+/// octo (super-admin); alice (an orchestrator) owns team acme; carol is a plain chef of acme and owns cook ck;
 /// alice owns cook ak; dave (in no team) owns cook dk; erin is another user.
 async fn world() -> World {
     let app = common::start(false).await;
@@ -32,6 +32,8 @@ async fn world() -> World {
     for u in ["alice", "carol", "dave", "erin"] {
         app.add_user(u).await;
     }
+    // owning a team needs the orchestrator role
+    app.set_role("alice", "orchestrator").await;
     let alice = admin::operator_token(&app.state.db, "alice", None)
         .await
         .unwrap();
@@ -227,6 +229,8 @@ async fn a_non_member_still_sees_no_team() {
 #[tokio::test]
 async fn owners_keep_every_right() {
     let w = world().await;
+    // a second owner must be an orchestrator too
+    w.app.set_role("dave", "orchestrator").await;
     for (who, role) in [("erin", "chef"), ("dave", "owner")] {
         ok(
             &w.app

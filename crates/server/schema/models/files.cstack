@@ -28,7 +28,7 @@ model File {
   @@map("files")
   @@deny("read", auth().kind == "relay")
   @@deny("read", status == "deleted")
-  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "files")
 }
 
@@ -45,6 +45,6 @@ model Question {
 
   @@map("questions")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "questions")
 }

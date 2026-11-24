@@ -74,7 +74,7 @@ pub async fn record(db: &PgPool, p: &Principal, r: Record) -> Result<Value> {
     )
     .bind(&runtime)
     .bind(session)
-    .bind(who.is_admin)
+    .bind(who.is_super_admin())
     .bind(who.id)
     .fetch_optional(&mut *tx)
     .await?;

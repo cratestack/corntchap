@@ -52,8 +52,11 @@ pub struct OidcConfig {
     /// Issuer URL as browsers and API clients see it (defaults to `issuer`). Advertised as the
     /// OAuth authorization server and used to rewrite the end-session URL for the browser.
     pub public_issuer: Option<String>,
-    /// IdP role/group that grants admin (`OIDC_ADMIN_ROLE`, default `corntchap-admin`).
+    /// IdP role/group that makes a person a super-admin (`OIDC_ADMIN_ROLE`, default `corntchap-admin`).
     pub admin_role: String,
+    /// IdP role/group that makes a person an orchestrator (`OIDC_ORCHESTRATOR_ROLE`, default
+    /// `corntchap-orchestrator`). The admin role wins when a person has both.
+    pub orchestrator_role: String,
 }
 
 impl OidcConfig {
@@ -68,6 +71,88 @@ impl OidcConfig {
 }
 
 pub const DEFAULT_ADMIN_ROLE: &str = "corntchap-admin";
+pub const DEFAULT_ORCHESTRATOR_ROLE: &str = "corntchap-orchestrator";
+
+/// What a person may do on the instance. `SuperAdmin` runs the instance (people, forges, any-URL cloud
+/// targets, every team); an `Orchestrator` creates and manages their own teams, pots, cooks and fires; a
+/// `Member` works in the teams they are put in and manages the cooks they own. Cooks and fires are always
+/// `Member` (they act through their owner, see `admin::acting`). Ordered: a higher role can do what a lower one can.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    #[default]
+    Member,
+    Orchestrator,
+    SuperAdmin,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Member => "member",
+            Role::Orchestrator => "orchestrator",
+            Role::SuperAdmin => "super_admin",
+        }
+    }
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Role {
+    type Err = String;
+    /// The stored spelling (`super_admin`); the CLI's `super-admin` is accepted too.
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().replace('-', "_").as_str() {
+            "member" => Ok(Role::Member),
+            "orchestrator" => Ok(Role::Orchestrator),
+            "super_admin" => Ok(Role::SuperAdmin),
+            other => Err(format!(
+                "unknown role {other:?}: super_admin, orchestrator or member"
+            )),
+        }
+    }
+}
+
+impl sqlx::Type<sqlx::Postgres> for Role {
+    fn type_info() -> sqlx::postgres::PgTypeInfo {
+        <str as sqlx::Type<sqlx::Postgres>>::type_info()
+    }
+    fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
+        <str as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+    }
+}
+
+impl<'r> sqlx::Decode<'r, sqlx::Postgres> for Role {
+    fn decode(value: sqlx::postgres::PgValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&str as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+        Ok(s.parse::<Role>()?)
+    }
+}
+
+impl<'q> sqlx::Encode<'q, sqlx::Postgres> for Role {
+    fn encode_by_ref(
+        &self,
+        buf: &mut sqlx::postgres::PgArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        <&str as sqlx::Encode<sqlx::Postgres>>::encode_by_ref(&self.as_str(), buf)
+    }
+}
 
 impl Config {
     pub fn new(database_url: String, public_url: String, bind: String) -> Self {
@@ -96,7 +181,7 @@ pub struct Principal {
     pub kind: String,
     pub name: String,
     pub owner_id: Option<Uuid>,
-    pub is_admin: bool,
+    pub role: Role,
     pub max_leases: i64,
     pub runtime: Option<String>,
     pub agent_kind: Option<String>,
@@ -111,6 +196,14 @@ pub struct Principal {
 impl Principal {
     pub fn is_user(&self) -> bool {
         self.kind == "user"
+    }
+    /// Runs the instance: people, forges, any-URL cloud targets, every team and cook.
+    pub fn is_super_admin(&self) -> bool {
+        self.role == Role::SuperAdmin
+    }
+    /// Orchestrator or above: may own teams and pots.
+    pub fn can_orchestrate(&self) -> bool {
+        self.role >= Role::Orchestrator
     }
     pub fn granted(&self, g: &str) -> bool {
         self.grants.iter().any(|x| x == g)

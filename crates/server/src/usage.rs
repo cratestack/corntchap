@@ -128,7 +128,8 @@ impl Sum {
     }
 }
 
-/// The usage of the cooks you may see (yours; all for admins; a cook sees itself, or its owner's
+/// The usage of the cooks you may see (yours, and for an orchestrator every cook's usage in the pots they own; all for
+/// super-admins; a cook sees itself, or its owner's
 /// view with the `manage` grant) for the last `days` days (default 7, at most 90).
 pub async fn report(
     db: &sqlx::PgPool,
@@ -148,16 +149,19 @@ pub async fn report(
          join principals a on a.id = u.principal_id
          left join projects pr on pr.id = u.project_id
          where u.day >= $1::text::date
-           and ($2 or a.id = $3 or a.owner_id = $3)
+           and ($2 or a.id = $3 or a.owner_id = $3
+                or ($6 and exists (select 1 from team_members m
+                                   where m.team_id = pr.team_id and m.principal_id = $3 and m.role = 'owner')))
            and ($4::text is null or pr.key = $4)
            and ($5::text is null or a.name = $5)
          group by 1, 2, 3, 4",
     )
     .bind(first.to_string())
-    .bind(who.is_admin)
+    .bind(who.is_super_admin())
     .bind(who.id)
     .bind(project.map(|k| k.trim().to_uppercase()))
     .bind(cook.map(|c| c.trim().to_lowercase()))
+    .bind(who.can_orchestrate())
     .fetch_all(db)
     .await?;
 

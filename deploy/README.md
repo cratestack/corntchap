@@ -59,13 +59,15 @@ A person is identified by the OIDC issuer and subject (`sub`) together and nothi
 with a random kitchen handle (`saffron-okra-42`) that has nothing to do with the identity. Neither `preferred_username` nor
 an e-mail address ever links or claims an account, so the realm's username and e-mail settings are not a trust boundary
 here. A handle once used by an account is never given to a different account (a renamed-away name stays reserved to its first holder). The ID token's `name` (else a *verified* `email`) becomes the display name, refreshed at every sign-in and used only for showing
-people; the handle is what others `@mention` and what admins type. People change their own handle with
+people; the handle is what others `@mention` and what super-admins type. People change their own handle with
 `corntchap-cli me rename <handle>` or in the console.
 
-Admins come from the IdP: add a realm role named `corntchap-admin` (override with `OIDC_ADMIN_ROLE`) and a client mapper
-"User Realm Role" that puts roles into the ID token (claim `realm_access.roles`, add to ID token). The flag is synced on
-every sign-in; a top-level `roles` or `groups` array also works. Admins made with `corntchap init` or by an
-admin (`corntchap-cli user admin <handle> --on`) are never demoted by the IdP. Set `OIDC_PUBLIC_ISSUER` when browsers reach Keycloak under a different
+Roles come from the IdP: add a realm role named `corntchap-admin` (super-admin; override with `OIDC_ADMIN_ROLE`) and one
+named `corntchap-orchestrator` (override with `OIDC_ORCHESTRATOR_ROLE`), and a client mapper
+"User Realm Role" that puts roles into the ID token (claim `realm_access.roles`, add to ID token). The role is synced on
+every sign-in (the admin role wins over the orchestrator one; neither means member); a top-level `roles` or `groups`
+array also works. Roles made with `corntchap init` or set by a super-admin
+(`corntchap-cli user role <handle> super-admin|orchestrator|member`) are never changed by the IdP. Set `OIDC_PUBLIC_ISSUER` when browsers reach Keycloak under a different
 URL than the server does (it is used for the IdP logout redirect). Browser logout (`POST /logout`) also ends the
 Keycloak session.
 

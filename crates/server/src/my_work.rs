@@ -54,7 +54,7 @@ async fn rows(
     project: Option<&str>,
 ) -> Result<Vec<Value>> {
     Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .bind(p.is_admin)
+        .bind(p.is_super_admin())
         .bind(p.id)
         .bind(project)
         .fetch_all(db)
@@ -63,7 +63,7 @@ async fn rows(
 
 async fn count(db: &PgPool, sql: String, p: &Principal, project: Option<&str>) -> Result<i64> {
     Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .bind(p.is_admin)
+        .bind(p.is_super_admin())
         .bind(p.id)
         .bind(project)
         .fetch_one(db)

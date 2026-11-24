@@ -4,13 +4,26 @@ import type { AuthProvider } from "@refinedev/core";
 import { CONSOLE_HEADER, errorStatus, redirectToLogin } from "./api";
 import { LogoMark } from "@/components/brand";
 
+export type Role = "super_admin" | "orchestrator" | "member";
+
+/** Runs the instance: people, forges, any-URL cloud targets, every team and cook. */
+export const isSuperAdmin = (me: { role: Role }) => me.role === "super_admin";
+/** Orchestrator or above: may own teams and pots. */
+export const canOrchestrate = (me: { role: Role }) => me.role === "super_admin" || me.role === "orchestrator";
+/** May manage a team or pot: a super-admin, or an owner of it who is still an orchestrator (a demoted owner's powers are dormant). */
+export const canManageTeam = (me: { role: Role }, teamRole: string | null | undefined) =>
+  isSuperAdmin(me) || (teamRole === "owner" && canOrchestrate(me));
+
+export const roleLabel = (r: Role) => (r === "super_admin" ? "super-admin" : r);
+
 export interface SessionUser {
   id: string;
   /** The handle (@mention). */
   name: string;
   display_name: string | null;
   kind: string;
-  is_admin: boolean;
+  /** super_admin runs the instance; an orchestrator manages their own teams, pots, cooks and fires. */
+  role: Role;
   /** CSRF token for the server-rendered POST /logout. */
   csrf: string | null;
 }

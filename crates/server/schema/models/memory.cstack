@@ -25,6 +25,6 @@ model Memory {
 
   @@map("memories")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", auth().isAdmin == true || project.team.members.some.principalRef == auth().id)
+  @@allow("read", auth().role == "super_admin" || project.team.members.some.principalRef == auth().id)
   @@mcp(resource: "memories")
 }

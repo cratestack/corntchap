@@ -10,7 +10,7 @@ import { CodeBlock, CopyButton, CopyLine } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api";
 import { useProc, useProjects, useTeamChefs, useV1, type TeamRow } from "@/lib/data";
-import { useSession } from "@/lib/session";
+import { canManageTeam, useSession } from "@/lib/session";
 import { fmtAgo, useNow } from "@/lib/format";
 import { lastView } from "@/lib/views";
 import { PotRepos } from "@/components/repos";
@@ -83,7 +83,7 @@ export function PotDetailsPage() {
   const teamsQ = useV1<TeamRow[]>("/teams");
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
-  const canManage = me.is_admin || teamsQ.data?.find((t) => t.name === team)?.role === "owner";
+  const canManage = canManageTeam(me, teamsQ.data?.find((t) => t.name === team)?.role);
 
   const cooks = useMemo(() => (members.data ?? []).filter((m) => m.kind !== "user"), [members.data]);
   const people = useMemo(() => (members.data ?? []).filter((m) => m.kind === "user"), [members.data]);

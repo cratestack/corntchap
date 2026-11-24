@@ -1,9 +1,9 @@
 mod common;
-use corntchap::admin;
+use corntchap::{admin, state::Role};
 use serde_json::{Value, json};
 
-async fn row(app: &common::TestApp, sub: &str) -> (bool, String) {
-    sqlx::query_as("select is_admin, admin_source from principals where oidc_sub = $1")
+async fn row(app: &common::TestApp, sub: &str) -> (String, String) {
+    sqlx::query_as("select role, role_source from principals where oidc_sub = $1")
         .bind(sub)
         .fetch_one(&app.state.db)
         .await
@@ -44,53 +44,74 @@ async fn jit_creates_user_and_maps_admin_role() {
     let app = common::start(false).await;
     app.sign_in_as("sub-dev", "Dev", false);
     app.browser_login("/").await;
-    assert_eq!(row(&app, "sub-dev").await, (false, "oidc".to_string()));
+    assert_eq!(
+        row(&app, "sub-dev").await,
+        ("member".to_string(), "oidc".to_string())
+    );
 
+    // a second usable super-admin, so the sync may demote the first
+    app.sign_in_as("sub-keep", "Keep", true);
+    app.browser_login("/").await;
     // the admin role is synced on every sign-in, both ways
     app.sign_in_as("sub-dev", "Dev", true);
     app.browser_login("/").await;
-    assert_eq!(row(&app, "sub-dev").await, (true, "oidc".to_string()));
+    assert_eq!(
+        row(&app, "sub-dev").await,
+        ("super_admin".to_string(), "oidc".to_string())
+    );
     app.sign_in_as("sub-dev", "Dev", false);
     app.browser_login("/").await;
-    assert_eq!(row(&app, "sub-dev").await, (false, "oidc".to_string()));
+    assert_eq!(
+        row(&app, "sub-dev").await,
+        ("member".to_string(), "oidc".to_string())
+    );
 
     // an admin made by `init` is never touched by the IdP role (here: a signed-in person the operator marked `init`)
     app.sign_in_as("sub-boss", "Boss", true);
     app.browser_login("/").await;
-    sqlx::query("update principals set admin_source = 'init' where oidc_sub = 'sub-boss'")
+    sqlx::query("update principals set role_source = 'init' where oidc_sub = 'sub-boss'")
         .execute(&app.state.db)
         .await
         .unwrap();
     app.sign_in_as("sub-boss", "Boss", false);
     app.browser_login("/").await;
-    assert_eq!(row(&app, "sub-boss").await, (true, "init".to_string()));
+    assert_eq!(
+        row(&app, "sub-boss").await,
+        ("super_admin".to_string(), "init".to_string())
+    );
 
     // a manual setting is explicit and sticks, both ways: the IdP role only ever changes admins it made itself
     let boss = app.handle_of("sub-boss").await;
     let boss_p = app.principal(&boss).await;
     app.sign_in_as("sub-dev", "Dev", true);
     app.browser_login("/").await;
-    assert_eq!(row(&app, "sub-dev").await, (true, "oidc".to_string()));
+    assert_eq!(
+        row(&app, "sub-dev").await,
+        ("super_admin".to_string(), "oidc".to_string())
+    );
     let dev = app.handle_of("sub-dev").await;
-    admin::set_admin(&app.state.db, &boss_p, &dev, false)
+    corntchap::roles::set_role(&app.state.db, &boss_p, &dev, Role::Member)
         .await
         .unwrap();
-    assert_eq!(row(&app, "sub-dev").await, (false, "manual".to_string()));
+    assert_eq!(
+        row(&app, "sub-dev").await,
+        ("member".to_string(), "manual".to_string())
+    );
     app.sign_in_as("sub-dev", "Dev", true);
     app.browser_login("/").await;
     assert_eq!(
         row(&app, "sub-dev").await,
-        (false, "manual".to_string()),
+        ("member".to_string(), "manual".to_string()),
         "a manual demotion sticks"
     );
-    admin::set_admin(&app.state.db, &boss_p, &dev, true)
+    corntchap::roles::set_role(&app.state.db, &boss_p, &dev, Role::SuperAdmin)
         .await
         .unwrap();
     app.sign_in_as("sub-dev", "Dev", false);
     app.browser_login("/").await;
     assert_eq!(
         row(&app, "sub-dev").await,
-        (true, "manual".to_string()),
+        ("super_admin".to_string(), "manual".to_string()),
         "a manual promotion is not demoted"
     );
 }
@@ -574,4 +595,103 @@ async fn a_sign_in_never_becomes_an_agent() {
             .iter()
             .all(|c| !c.to_str().unwrap().contains("ct_session="))
     );
+}
+
+#[tokio::test]
+async fn the_orchestrator_role_maps_and_the_admin_role_wins() {
+    let app = common::start(false).await;
+    app.sign_in_as("sub-keep", "Keep", true);
+    app.browser_login("/").await;
+    app.sign_in_roles("sub-o", "O", &["corntchap-orchestrator"]);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-o").await,
+        ("orchestrator".to_string(), "oidc".to_string())
+    );
+    // both roles: the admin role wins
+    app.sign_in_roles("sub-o", "O", &["corntchap-orchestrator", "corntchap-admin"]);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-o").await,
+        ("super_admin".to_string(), "oidc".to_string())
+    );
+    // dropping the admin role leaves the orchestrator one; a group path matches too
+    app.sign_in_roles("sub-o", "O", &["/corntchap-orchestrator"]);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-o").await,
+        ("orchestrator".to_string(), "oidc".to_string())
+    );
+    // neither: back to member
+    app.sign_in_roles("sub-o", "O", &["offline_access"]);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-o").await,
+        ("member".to_string(), "oidc".to_string())
+    );
+    // a role claim of an unrelated name changes nothing
+    app.sign_in_roles("sub-o", "O", &["corntchap-orchestrators", "admin"]);
+    app.browser_login("/").await;
+    assert_eq!(row(&app, "sub-o").await.0, "member");
+}
+
+/// The IdP sync only touches roles it made itself: a manual orchestrator (a migrated team owner, or one a
+/// super-admin chose) stays, whatever the token says.
+#[tokio::test]
+async fn the_sync_leaves_manual_and_init_roles_alone() {
+    let app = common::start(false).await;
+    app.sign_in_as("sub-boss", "Boss", true);
+    app.browser_login("/").await;
+    let boss = app.handle_of("sub-boss").await;
+    let boss_p = app.principal(&boss).await;
+    app.sign_in_roles("sub-m", "M", &[]);
+    app.browser_login("/").await;
+    let m = app.handle_of("sub-m").await;
+    corntchap::roles::set_role(&app.state.db, &boss_p, &m, Role::Orchestrator)
+        .await
+        .unwrap();
+    assert_eq!(
+        row(&app, "sub-m").await,
+        ("orchestrator".to_string(), "manual".to_string())
+    );
+    for roles in [&[][..], &["corntchap-admin"][..]] {
+        app.sign_in_roles("sub-m", "M", roles);
+        app.browser_login("/").await;
+        assert_eq!(
+            row(&app, "sub-m").await,
+            ("orchestrator".to_string(), "manual".to_string()),
+            "claims {roles:?} change nothing"
+        );
+    }
+    // only a super-admin sets roles
+    let m_p = app.principal(&m).await;
+    assert!(
+        corntchap::roles::set_role(&app.state.db, &m_p, &boss, Role::Member)
+            .await
+            .is_err()
+    );
+}
+
+/// The IdP dropping the admin claim never demotes the last usable super-admin.
+#[tokio::test]
+async fn dropping_the_admin_claim_keeps_the_last_super_admin() {
+    let app = common::start(false).await;
+    app.sign_in_as("sub-solo", "Solo", true);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-solo").await,
+        ("super_admin".to_string(), "oidc".to_string())
+    );
+    app.sign_in_roles("sub-solo", "Solo", &[]);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-solo").await,
+        ("super_admin".to_string(), "oidc".to_string())
+    );
+    // with a second usable super-admin the sync demotes as usual
+    app.sign_in_as("sub-two", "Two", true);
+    app.browser_login("/").await;
+    app.sign_in_roles("sub-solo", "Solo", &[]);
+    app.browser_login("/").await;
+    assert_eq!(row(&app, "sub-solo").await.0, "member");
 }

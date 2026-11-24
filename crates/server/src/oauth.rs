@@ -353,13 +353,14 @@ pub async fn authorize(
     let pot_row: Option<(Uuid, String, String, Uuid, bool)> = match &pot {
         Some(k) => sqlx::query_as(
             "select pr.id, pr.key, t.name, t.id,
-                    $3 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $2 and m.role = 'owner')
+                    $3 or ($4 and exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $2 and m.role = 'owner'))
              from projects pr join teams t on t.id = pr.team_id
              where pr.key = $1 and ($3 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $2))",
         )
         .bind(k)
         .bind(user.id)
-        .bind(user.is_admin)
+        .bind(user.is_super_admin())
+        .bind(user.can_orchestrate())
         .fetch_optional(&mut *c)
         .await?,
         None => None,
@@ -555,12 +556,13 @@ pub async fn decide(
     let pot_row: Option<(Uuid, Uuid, bool)> = match &pot {
         Some(k) => sqlx::query_as(
             "select pr.id, pr.team_id,
-                    $3 or exists (select 1 from team_members m where m.team_id = pr.team_id and m.principal_id = $2 and m.role = 'owner')
+                    $3 or ($4 and exists (select 1 from team_members m where m.team_id = pr.team_id and m.principal_id = $2 and m.role = 'owner'))
              from projects pr where pr.key = $1",
         )
         .bind(k)
         .bind(user.id)
-        .bind(user.is_admin)
+        .bind(user.is_super_admin())
+        .bind(user.can_orchestrate())
         .fetch_optional(&mut *tx)
         .await?,
         None => None,

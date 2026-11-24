@@ -39,6 +39,7 @@ async fn world() -> World {
     for u in ["alice", "bob", "carol"] {
         app.add_user(u).await;
     }
+    app.set_role("alice", "orchestrator").await; // owning a team needs the role
     let token = |u: &'static str| {
         let db = app.state.db.clone();
         async move { admin::operator_token(&db, u, None).await.unwrap() }

@@ -21,6 +21,6 @@ model PassMessage {
 
   @@map("pass_messages")
   @@deny("read", auth().kind == "relay")
-  @@allow("read", (toRef == "pot" && (auth().isAdmin == true || project.team.members.some.principalRef == auth().id)) || authorRef == auth().id || relayedRef == auth().id || toRef == auth().id)
+  @@allow("read", (toRef == "pot" && (auth().role == "super_admin" || project.team.members.some.principalRef == auth().id)) || authorRef == auth().id || relayedRef == auth().id || toRef == auth().id)
   @@mcp(resource: "pass")
 }

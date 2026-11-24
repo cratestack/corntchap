@@ -70,7 +70,7 @@ struct PrincipalRow {
     kind: String,
     name: String,
     owner_id: Option<uuid::Uuid>,
-    is_admin: bool,
+    role: crate::state::Role,
     max_leases: i64,
     runtime: Option<String>,
     agent_kind: Option<String>,
@@ -93,7 +93,7 @@ impl TokenValidator for DbTokenValidator {
     async fn validate(&self, token: &str) -> std::result::Result<Option<Principal>, AuthError> {
         let hash = sha256(token.as_bytes());
         let row: Option<PrincipalRow> = sqlx::query_as(
-            "select p.id, p.kind, p.name, p.owner_id, p.is_admin, p.max_leases, p.runtime, p.agent_kind, p.grants,
+            "select p.id, p.kind, p.name, p.owner_id, p.role, p.max_leases, p.runtime, p.agent_kind, p.grants,
                     t.id as token_id, (t.last_used_at is null or t.last_used_at < now() - interval '1 minute') as stale,
                     (p.last_seen_at is null or p.last_seen_at < now() - interval '1 minute') as seen_stale,
                     t.pot_id
@@ -137,7 +137,7 @@ impl TokenValidator for DbTokenValidator {
             kind: r.kind,
             name: r.name,
             owner_id: r.owner_id,
-            is_admin: r.is_admin,
+            role: r.role,
             max_leases: r.max_leases,
             runtime: r.runtime,
             agent_kind: r.agent_kind,
@@ -200,29 +200,35 @@ impl AuthenticationStrategy<Principal> for SessionCookieStrategy {
         let Ok(uid) = session.identity.external_id.parse::<uuid::Uuid>() else {
             return Ok(None);
         };
-        let row: Option<(uuid::Uuid, String, String, Option<uuid::Uuid>, bool, i64)> =
-            sqlx::query_as(
-                "select id, kind, name, owner_id, is_admin, max_leases from principals
+        let row: Option<(
+            uuid::Uuid,
+            String,
+            String,
+            Option<uuid::Uuid>,
+            crate::state::Role,
+            i64,
+        )> = sqlx::query_as(
+            "select id, kind, name, owner_id, role, max_leases from principals
                  where id = $1 and kind = 'user' and disabled_at is null",
-            )
-            .bind(uid)
-            .fetch_optional(&self.store.db)
-            .await
-            .map_err(|e| AuthError::Internal(e.to_string()))?;
-        Ok(row.map(
-            |(id, kind, name, owner_id, is_admin, max_leases)| Principal {
+        )
+        .bind(uid)
+        .fetch_optional(&self.store.db)
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+        Ok(
+            row.map(|(id, kind, name, owner_id, role, max_leases)| Principal {
                 id,
                 kind,
                 name,
                 owner_id,
-                is_admin,
+                role,
                 max_leases,
                 runtime: None,
                 agent_kind: None,
                 token_id: None,
                 grants: vec![],
-            },
-        ))
+            }),
+        )
     }
 }
 

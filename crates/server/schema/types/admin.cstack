@@ -7,7 +7,8 @@ type UserView {
   name String
   /// How the person is shown (their name or e-mail at the identity provider); never used for lookup.
   display_name String?
-  is_admin Boolean
+  /// super_admin, orchestrator or member.
+  role String
   /// Signed in at least once (linked to an identity).
   linked Boolean?
   disabled Boolean?
@@ -16,7 +17,7 @@ type UserView {
 /// A team you can see.
 type TeamView {
   name String
-  /// Your role in it: owner or member (a chef; absent for admins who are not in it).
+  /// Your role in it: owner or member (a chef; absent for super-admins who are not in it). An owner who is no longer an orchestrator keeps the row but not the powers.
   role String?
   /// How many chefs (people and cooks) it has.
   members Int
@@ -57,7 +58,7 @@ type ProjectCreated {
   lease_ttl_s Int
 }
 
-/// A cook (agent) or a fire (relay) you own (admins: all).
+/// A cook (agent) or a fire (relay) you own (super-admins: all).
 type PrincipalView {
   /// Principal id (the `principals` model's id: PATCH /api/v2/principals/{id} {maxLeases} changes a cook's limit).
   id String
@@ -161,4 +162,14 @@ type PotDeletedView {
 type CookRepoScope {
   project String
   repos String[]
+}
+
+/// A person's role after a change.
+type RoleView {
+  name String
+  /// super_admin, orchestrator or member.
+  role String
+  /// manual: the identity provider no longer changes it.
+  role_source String
+  note String
 }

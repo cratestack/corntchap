@@ -842,7 +842,7 @@ pub async fn list(
 pub async fn delete(db: &PgPool, state: &AppState, p: &Principal, r: &str) -> Result<Value> {
     let mut tx = db.begin().await?;
     let f = load(&mut tx, p, r).await?;
-    if f.created_by != Some(p.id) && !p.can_plan() && !p.is_admin {
+    if f.created_by != Some(p.id) && !p.can_plan() && !p.is_super_admin() {
         return Err(Error::Forbidden(format!(
             "{} was uploaded by someone else: a person deletes it, or its owner grants {} `plan`",
             f.fref, p.name

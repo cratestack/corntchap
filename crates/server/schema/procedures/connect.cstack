@@ -4,7 +4,7 @@ part of "../corntchap.cstack"
 // connect_cloud; the secret entered there goes to connect_cloud_save without the model.
 
 /// Start connecting a cook to a cloud wake, or check (and test) a setup.
-/// @param kind claude-routine (a Claude Code routine on the web), github-comment (a mention in a GitHub comment: Codex cloud, Copilot, …) webhook, coder (an agent run on a Coder deployment; admins) or devin (a Devin session).
+/// @param kind claude-routine (a Claude Code routine on the web), github-comment (a mention in a GitHub comment: Codex cloud, Copilot, …) webhook, coder (an agent run on a Coder deployment; super-admins) or devin (a Devin session).
 /// @param cook The cook to connect (default: you, when a cook connects itself).
 /// @param projects Comma-separated pot keys it wakes for (default all).
 /// @param code An existing setup: show its state instead of opening one.
@@ -15,7 +15,7 @@ mutation procedure cloudConnect(kind: String?, cook: String?, projects: String?,
 
 /// Finish a cloud setup with its values. The answer never repeats the secret.
 /// @param code The setup code from connect_cloud.
-/// @param url claude-routine: the API trigger URL; webhook: the endpoint; coder: the deployment URL; devin: the API URL (optional, admins).
+/// @param url claude-routine: the API trigger URL; webhook: the endpoint; coder: the deployment URL; devin: the API URL (optional, super-admins).
 /// @param token claude-routine: the trigger's token; github-comment: a GitHub token allowed to comment; webhook: an optional bearer token; coder: a Coder session token; devin: a Devin API key.
 /// @param secret webhook: the HMAC-SHA256 signing secret.
 /// @param repo github-comment: owner/name.

@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     auth::{generate_token, sha256},
     error::{Error, Result, invalid},
-    state::Principal,
+    state::{Principal, Role},
 };
 
 pub fn norm_name(s: &str) -> Result<String> {
@@ -263,7 +263,7 @@ async fn insert_user(
     wanted: Option<String>,
     identity: Option<&OidcIdentity<'_>>,
     display_name: Option<&str>,
-    is_admin: bool,
+    role: Role,
     source: &str,
     pick: Pick<'_>,
 ) -> Result<(Uuid, String)> {
@@ -274,7 +274,7 @@ async fn insert_user(
         };
         let (iss, sub) = (identity.map(|i| i.issuer), identity.map(|i| i.sub));
         let id: Option<Uuid> = sqlx::query_scalar(
-            "insert into principals (id, kind, name, oidc_iss, oidc_sub, display_name, is_admin, admin_source)
+            "insert into principals (id, kind, name, oidc_iss, oidc_sub, display_name, role, role_source)
              values ($1,'user',$2,$3,$4,$5,$6,$7) on conflict do nothing returning id",
         )
         .bind(Uuid::new_v4())
@@ -282,7 +282,7 @@ async fn insert_user(
         .bind(iss)
         .bind(sub)
         .bind(display_name)
-        .bind(is_admin)
+        .bind(role)
         .bind(source)
         .fetch_optional(&mut *c)
         .await?;
@@ -334,7 +334,7 @@ pub async fn provision_user(
         None,
         Some(identity),
         display_name,
-        false,
+        Role::Member,
         "oidc",
         pick,
     )
@@ -453,27 +453,28 @@ pub async fn rename_self(db: &PgPool, p: &Principal, new_name: &str) -> Result<V
     Ok(json!({"name": new, "previous": old}))
 }
 
-/// People who can actually act as admin: enabled, and either linked to a sign-in or made by `init` (the CLI's
-/// bootstrap identity). An admin row nobody can sign in as does not count. Locks the rows so two concurrent
-/// demotions or disables cannot both pass.
-async fn usable_admins(c: &mut PgConnection) -> Result<Vec<Uuid>> {
+/// People who can actually act as super-admin: enabled, and either linked to a sign-in or made by `init` (the
+/// CLI's bootstrap identity). A super-admin row nobody can sign in as does not count. Locks the rows so two
+/// concurrent demotions or disables cannot both pass.
+pub(crate) async fn usable_super_admins(c: &mut PgConnection) -> Result<Vec<Uuid>> {
     Ok(sqlx::query_scalar(
         "select id from principals
-         where kind = 'user' and is_admin and disabled_at is null
-           and (oidc_sub is not null or admin_source = 'init')
+         where kind = 'user' and role = 'super_admin' and disabled_at is null
+           and (oidc_sub is not null or role_source = 'init')
          for update",
     )
     .fetch_all(c)
     .await?)
 }
 
-fn last_admin() -> Error {
+pub(crate) fn last_super_admin() -> Error {
     Error::Conflict(
-        "that is the last admin who can sign in: make someone else an admin first".into(),
+        "that is the last super-admin who can sign in: make someone else a super-admin first"
+            .into(),
     )
 }
 
-async fn person_id(c: &mut PgConnection, handle: &str) -> Result<Uuid> {
+pub(crate) async fn person_id(c: &mut PgConnection, handle: &str) -> Result<Uuid> {
     sqlx::query_scalar("select id from principals where name = $1 and kind = 'user'")
         .bind(handle)
         .fetch_optional(c)
@@ -481,79 +482,20 @@ async fn person_id(c: &mut PgConnection, handle: &str) -> Result<Uuid> {
         .ok_or_else(|| Error::NotFound(format!("no user with the handle {handle}")))
 }
 
-fn clean_handle_arg(handle: &str) -> String {
+pub(crate) fn clean_handle_arg(handle: &str) -> String {
     handle.trim().trim_start_matches('@').to_lowercase()
 }
 
-/// Make a person an admin, or not (admins only). Any manual change makes the setting manual
-/// (`admin_source = 'manual'`): the IdP role sync only ever touches admins it made itself, so a manual
-/// demotion sticks and a manual promotion is explicit. The last usable admin cannot be demoted.
-pub async fn set_admin(db: &PgPool, p: &Principal, handle: &str, on: bool) -> Result<Value> {
-    if !p.is_user() || !p.is_admin {
-        return Err(Error::Forbidden(
-            "only an admin can change who is an admin".into(),
-        ));
-    }
-    let handle = clean_handle_arg(handle);
-    let mut tx = db.begin().await?;
-    let admins = usable_admins(&mut tx).await?;
-    let target = person_id(&mut tx, &handle).await?;
-    if !on && admins.contains(&target) && admins.iter().all(|a| *a == target) {
-        return Err(last_admin());
-    }
-    sqlx::query("update principals set is_admin = $2, admin_source = 'manual' where id = $1")
-        .bind(target)
-        .bind(on)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(json!({
-        "name": handle, "is_admin": on, "admin_source": "manual",
-        "note": "manual admin setting: the IdP role no longer changes it",
-    }))
-}
-
-/// Disable or enable a person (admins only). A disabled person's tokens and browser sessions stop working at
-/// once (and are revoked, so enabling later does not revive them); nobody can disable the last usable admin.
+/// Disable or enable a person (super-admins only). A disabled person's tokens and browser sessions stop working at
+/// once (and are revoked, so enabling later does not revive them); nobody can disable the last usable super-admin.
 pub async fn set_user_disabled(
     db: &PgPool,
     p: &Principal,
     handle: &str,
     disable: bool,
 ) -> Result<Value> {
-    if !p.is_user() || !p.is_admin {
-        return Err(Error::Forbidden(
-            "only an admin can disable or enable people".into(),
-        ));
-    }
-    let handle = clean_handle_arg(handle);
-    let mut tx = db.begin().await?;
-    let admins = usable_admins(&mut tx).await?;
-    let target = person_id(&mut tx, &handle).await?;
-    if disable && admins.contains(&target) && admins.iter().all(|a| *a == target) {
-        return Err(last_admin());
-    }
-    sqlx::query(
-        "update principals set disabled_at = case when $2 then coalesce(disabled_at, now()) else null end where id = $1",
-    )
-    .bind(target)
-    .bind(disable)
-    .execute(&mut *tx)
-    .await?;
-    if disable {
-        sqlx::query("delete from auth_sessions where user_id = $1")
-            .bind(target)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(
-            "update tokens set revoked_at = now() where principal_id = $1 and revoked_at is null",
-        )
-        .bind(target)
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
-    Ok(json!({"name": handle, "disabled": disable}))
+    let v = crate::roles::update_person(db, p, handle, None, Some(disable)).await?;
+    Ok(json!({"name": v["name"], "disabled": disable}))
 }
 
 pub async fn mint_token(
@@ -577,7 +519,7 @@ pub async fn mint_token(
 }
 
 /// Who an administrative call acts as: a person acts as themselves; a cook granted `manage` acts
-/// as its owner (with the owner's admin powers only if it is also granted `admin`). Anything
+/// as its owner (with the owner's role only if it is also granted `admin`; else at most an orchestrator's). Anything
 /// else is refused with how to grant it.
 pub async fn acting(db: &PgPool, p: &Principal) -> Result<Principal> {
     if p.is_user() {
@@ -604,20 +546,26 @@ async fn owner_of(db: &PgPool, p: &Principal) -> Result<Principal> {
     let owner = p
         .owner_id
         .ok_or_else(|| Error::Forbidden(format!("{} has no owner to act for", p.name)))?;
-    let row: Option<(Uuid, String, bool, i64)> = sqlx::query_as(
-        "select id, name, is_admin, max_leases from principals where id = $1 and kind = 'user' and disabled_at is null",
+    let row: Option<(Uuid, String, Role, i64)> = sqlx::query_as(
+        "select id, name, role, max_leases from principals where id = $1 and kind = 'user' and disabled_at is null",
     )
     .bind(owner)
     .fetch_optional(db)
     .await?;
-    let (id, name, is_admin, max_leases) =
+    let (id, name, role, max_leases) =
         row.ok_or_else(|| Error::Forbidden(format!("{}'s owner is disabled", p.name)))?;
     Ok(Principal {
         id,
         kind: "user".into(),
         name,
         owner_id: None,
-        is_admin: is_admin && p.granted("admin"),
+        // `manage` lets a cook work as its owner's orchestrator side (their teams, pots, cooks); only `admin`
+        // passes a super-admin's role on, so an orchestrator's cook never becomes a super-admin.
+        role: if p.granted("admin") {
+            role
+        } else {
+            role.min(Role::Orchestrator)
+        },
         max_leases,
         runtime: None,
         agent_kind: None,
@@ -664,25 +612,29 @@ pub async fn set_grants(
     Ok(json!({"name": name.to_lowercase(), "grants": g}))
 }
 
+/// Super-admins see every person with their sign-in state; an orchestrator sees the people directory (handle,
+/// display name and role: no sign-in or contact details) to put people in their teams.
 pub async fn list_users(db: &PgPool, p: &Principal) -> Result<Value> {
     let p = &acting_or_self(db, p).await?;
-    if !p.is_admin {
-        return Err(Error::Forbidden("only an admin can list users".into()));
+    if !p.is_user() || !p.can_orchestrate() {
+        return Err(Error::Forbidden(
+            "only an orchestrator or a super-admin can list people".into(),
+        ));
     }
-    let rows: Vec<Value> = sqlx::query_scalar(
-        "select jsonb_build_object('name', name, 'display_name', display_name, 'is_admin', is_admin,
-            'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals where kind = 'user' order by name",
-    )
-    .fetch_all(db)
-    .await?;
+    let sql = if p.is_super_admin() {
+        "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role,
+            'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals where kind = 'user' order by name"
+    } else {
+        "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role)
+         from principals where kind = 'user' and disabled_at is null order by name"
+    };
+    let rows: Vec<Value> = sqlx::query_scalar(sql).fetch_all(db).await?;
     Ok(Value::Array(rows))
 }
 
 pub async fn create_team(db: &PgPool, p: &Principal, name: &str) -> Result<Value> {
     let p = &acting(db, p).await?;
-    if !p.is_admin {
-        return Err(Error::Forbidden("only an admin can create teams".into()));
-    }
+    crate::roles::require_orchestrator(p, "create teams")?;
     let name = norm_name(name)?;
     let mut tx = db.begin().await?;
     let id = Uuid::new_v4();
@@ -712,14 +664,15 @@ pub async fn list_teams(db: &PgPool, p: &Principal) -> Result<Value> {
             'projects', coalesce((select jsonb_agg(key order by key) from projects where team_id = t.id), '[]'::jsonb))
          from teams t where $1 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $2) order by t.name",
     )
-    .bind(p.is_admin)
+    .bind(p.is_super_admin())
     .bind(p.id)
     .fetch_all(db)
     .await?;
     Ok(Value::Array(rows))
 }
 
-/// Resolve a team the principal owns (or any team for admins).
+/// Resolve a team the principal owns (or any team for super-admins). Owning needs the orchestrator role: a demoted
+/// owner's row stays but counts as a plain member until they are an orchestrator again.
 async fn owned_team(c: &mut PgConnection, p: &Principal, team: &str) -> Result<Uuid> {
     let row: Option<(Uuid, bool, bool)> = sqlx::query_as(
         "select t.id, exists (select 1 from team_members where team_id = t.id and principal_id = $2 and role = 'owner'),
@@ -733,7 +686,7 @@ async fn owned_team(c: &mut PgConnection, p: &Principal, team: &str) -> Result<U
     match row {
         None => Err(Error::NotFound(format!("team {team} not found"))),
         Some((id, owner, member)) => {
-            if p.is_admin || (owner && p.is_user()) {
+            if p.is_super_admin() || (owner && p.is_user() && p.can_orchestrate()) {
                 Ok(id)
             } else if member {
                 Err(Error::Forbidden("only a team owner can do that".into()))
@@ -759,7 +712,7 @@ async fn member_team(c: &mut PgConnection, p: &Principal, team: &str) -> Result<
     match row {
         None => Err(Error::NotFound(format!("team {team} not found"))),
         Some((id, owner, member)) => {
-            if p.is_admin || (owner && p.is_user()) {
+            if p.is_super_admin() || (owner && p.is_user() && p.can_orchestrate()) {
                 Ok((id, true))
             } else if member {
                 Ok((id, false))
@@ -786,24 +739,29 @@ pub async fn add_member(
     };
     let mut c = db.acquire().await?;
     let (tid, manager) = member_team(&mut c, p, team).await?;
-    let target: Option<(Uuid, String, Option<Uuid>)> =
-        sqlx::query_as("select id, kind, owner_id from principals where name = $1 and kind <> 'relay' and disabled_at is null")
+    let target: Option<(Uuid, String, Option<Uuid>, Role)> =
+        sqlx::query_as("select id, kind, owner_id, role from principals where name = $1 and kind <> 'relay' and disabled_at is null")
             .bind(principal.to_lowercase())
             .fetch_optional(&mut *c)
             .await?;
-    let Some((pid, kind, owner)) = target else {
+    let Some((pid, kind, owner, target_role)) = target else {
         return Err(Error::NotFound(format!(
             "no user or agent named {principal}"
         )));
     };
     // An agent joins a team only with its owner's say-so (otherwise a foreign team could put work on their machine).
-    if kind == "agent" && !(p.is_admin || owner == Some(p.id)) {
+    if kind == "agent" && !(p.is_super_admin() || owner == Some(p.id)) {
         return Err(Error::Forbidden(
-            "only the agent's owner (or an admin) can add it to a team".into(),
+            "only the agent's owner (or a super-admin) can add it to a team".into(),
         ));
     }
     if role == "owner" && kind != "user" {
         return invalid("only users can own a team");
+    }
+    if role == "owner" && target_role < Role::Orchestrator {
+        return invalid(format!(
+            "{principal} is a {target_role}: only an orchestrator or a super-admin can own a team (a super-admin sets roles)"
+        ));
     }
     // A plain member (chef) may add only their own cooks, as members.
     if !manager && (kind != "agent" || owner != Some(p.id) || role != "member") {
@@ -861,7 +819,7 @@ pub async fn list_members(db: &PgPool, p: &Principal, team: &str) -> Result<Valu
         "select t.id from teams t where t.name = $1 and ($2 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $3))",
     )
     .bind(team)
-    .bind(p.is_admin)
+    .bind(p.is_super_admin())
     .bind(p.id)
     .fetch_optional(&mut *c)
     .await?;
@@ -954,9 +912,9 @@ pub async fn create_principal(
     ensure_not_a_handle(&mut tx, &name).await?;
     let owner_id = match owner {
         Some(o) if o.to_lowercase() != p.name => {
-            if !p.is_admin {
+            if !p.is_super_admin() {
                 return Err(Error::Forbidden(
-                    "only an admin can create agents for someone else".into(),
+                    "only a super-admin can create agents for someone else".into(),
                 ));
             }
             sqlx::query_scalar("select id from principals where name = $1 and kind = 'user'")
@@ -1028,7 +986,7 @@ pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<V
         crate::cloud::fire_and_forget_sql("a.id")
     )))
     .bind(kind)
-    .bind(p.is_admin)
+    .bind(p.is_super_admin())
     .bind(p.id)
     .fetch_all(db)
     .await?;
@@ -1043,7 +1001,7 @@ async fn managed(c: &mut PgConnection, p: &Principal, name: &str) -> Result<(Uui
     .fetch_optional(c)
     .await?;
     match row {
-        Some((id, kind, owner)) if p.is_admin || owner == Some(p.id) => Ok((id, kind)),
+        Some((id, kind, owner)) if p.is_super_admin() || owner == Some(p.id) => Ok((id, kind)),
         _ => Err(Error::NotFound(format!("no agent or relay named {name}"))),
     }
 }
@@ -1096,7 +1054,7 @@ pub async fn add_wake_target(
     // relays need nothing; cloud targets: the same rules as a cloud setup (src/connect.rs)
     let config = match typ {
         "relay" => config,
-        _ => crate::connect::cloud_config(typ, &config, p.is_admin)?,
+        _ => crate::connect::cloud_config(typ, &config, p.is_super_admin())?,
     };
     let tid = Uuid::new_v4();
     let projects: Vec<String> = projects.into_iter().map(|s| s.to_uppercase()).collect();
@@ -1142,7 +1100,7 @@ pub async fn delete_wake_target(db: &PgPool, p: &Principal, id: Uuid) -> Result<
         "delete from wake_targets w using principals a where w.id = $1 and a.id = w.agent_id and ($2 or a.owner_id = $3)",
     )
     .bind(id)
-    .bind(p.is_admin)
+    .bind(p.is_super_admin())
     .bind(p.id)
     .execute(db)
     .await?
@@ -1173,7 +1131,7 @@ pub async fn init_admin(db: &PgPool, name: Option<&str>) -> Result<(String, Opti
         None => {
             sqlx::query_as(
                 "select id, name, oidc_sub is not null from principals
-                 where kind = 'user' and admin_source = 'init' and is_admin and disabled_at is null
+                 where kind = 'user' and role_source = 'init' and role = 'super_admin' and disabled_at is null
                  order by created_at limit 1",
             )
             .fetch_optional(&mut *tx)
@@ -1183,12 +1141,12 @@ pub async fn init_admin(db: &PgPool, name: Option<&str>) -> Result<(String, Opti
     let (id, handle) = match existing {
         Some((_, handle, true)) => {
             return Err(Error::Conflict(format!(
-                "{handle} is a person who signs in through the identity provider: init makes local admins only (use `corntchap-cli user admin {handle} --on`)"
+                "{handle} is a person who signs in through the identity provider: init makes local admins only (use `corntchap-cli user role {handle} super-admin`)"
             )));
         }
         Some((id, handle, false)) => {
             sqlx::query(
-                "update principals set is_admin = true, admin_source = 'init' where id = $1",
+                "update principals set role = 'super_admin', role_source = 'init' where id = $1",
             )
             .bind(id)
             .execute(&mut *tx)
@@ -1197,7 +1155,16 @@ pub async fn init_admin(db: &PgPool, name: Option<&str>) -> Result<(String, Opti
         }
         None => {
             let wanted = name.map(norm_handle).transpose()?;
-            insert_user(&mut tx, wanted, None, None, true, "init", &mut random_pick).await?
+            insert_user(
+                &mut tx,
+                wanted,
+                None,
+                None,
+                Role::SuperAdmin,
+                "init",
+                &mut random_pick,
+            )
+            .await?
         }
     };
     let token = mint_token(&mut tx, id, "bootstrap", Some(7 * 86_400)).await?;
@@ -1378,7 +1345,7 @@ pub(crate) async fn owned_project(
     .bind(p.id)
     .fetch_one(c)
     .await?;
-    if p.is_admin || (owner && p.is_user()) {
+    if p.is_super_admin() || (owner && p.is_user() && p.can_orchestrate()) {
         Ok((id, name))
     } else if member {
         Err(Error::Forbidden(

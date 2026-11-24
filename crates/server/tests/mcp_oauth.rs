@@ -97,7 +97,7 @@ async fn an_mcp_client_signs_in_with_oauth_and_is_bound_to_its_pot() {
     .await;
 
     // the person signs in once in the browser, and owns team acme
-    app.sign_in_as("sub-alice", "alice", false);
+    app.sign_in_roles("sub-alice", "alice", &["corntchap-orchestrator"]);
     let cookie = app.browser_login("/").await;
     let me: Value = app
         .http

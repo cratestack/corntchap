@@ -42,4 +42,4 @@ procedure fileList(project: String, task: String?, question: String?): FileView[
 /// @param id File id, e.g. PAY-F12.
 mutation procedure fileDelete(id: String): OkResult
   @allow(auth() != null)
-  @mcp(tool: "delete_file", description: "Delete a file you uploaded (people, cooks granted plan, and admins: any file in their pots).")
+  @mcp(tool: "delete_file", description: "Delete a file you uploaded (people, cooks granted plan, and super-admins: any file in their pots).")

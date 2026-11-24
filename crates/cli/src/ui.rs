@@ -510,15 +510,15 @@ pub fn users_table(v: &Value) -> String {
             vec![
                 plain(s(u, "name")),
                 plain(s(u, "display_name")),
-                plain(if u["is_admin"] == true {
-                    "admin"
-                } else {
-                    "chef"
+                plain(match u["role"].as_str() {
+                    Some("super_admin") => "super-admin",
+                    Some("orchestrator") => "orchestrator",
+                    _ => "member",
                 }),
-                if u["linked"] == true {
-                    plain("signed in")
-                } else {
-                    dim_cell("not signed in yet")
+                match u["linked"].as_bool() {
+                    Some(true) => plain("signed in"),
+                    Some(false) => dim_cell("not signed in yet"),
+                    None => plain(""),
                 },
             ]
         })

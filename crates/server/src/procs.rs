@@ -51,7 +51,7 @@ pub fn ctx_fields(p: &Principal) -> Vec<(String, Value)> {
         ("id".to_string(), Value::String(p.id.to_string())),
         ("name".to_string(), Value::String(p.name.clone())),
         ("kind".to_string(), Value::String(p.kind.clone())),
-        ("isAdmin".to_string(), Value::Bool(p.is_admin)),
+        ("role".to_string(), Value::String(p.role.to_string())),
         ("maxLeases".to_string(), Value::Int(p.max_leases)),
     ];
     if let Some(o) = p.owner_id {
@@ -84,7 +84,9 @@ fn principal(ctx: &CratestackContext) -> Result<Principal, CratestackError> {
             .ok_or_else(bad)?,
         name: field_str(ctx, "name").ok_or_else(bad)?,
         kind: field_str(ctx, "kind").ok_or_else(bad)?,
-        is_admin: matches!(ctx.auth_field("isAdmin"), Some(Value::Bool(true))),
+        role: field_str(ctx, "role")
+            .and_then(|r| r.parse().ok())
+            .unwrap_or_default(),
         max_leases: match ctx.auth_field("maxLeases") {
             Some(Value::Int(n)) => *n,
             _ => 1,
@@ -712,6 +714,21 @@ impl ProcedureRegistry for Procedures {
         let p = principal(ctx)?;
         let db = &self.state.db;
         typed(admin::list_users(db, &p).await)
+    }
+
+    async fn admin_set_role(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: admin_set_role::Args,
+        _z: admin_set_role::Authorized,
+    ) -> Result<admin_set_role::Output, CratestackError> {
+        let p = principal(ctx)?;
+        let role = match a.role.parse::<crate::state::Role>() {
+            Ok(r) => r,
+            Err(e) => return typed(Err(crate::error::Error::Invalid(e))),
+        };
+        typed(crate::roles::set_role(&self.state.db, &p, &a.user, role).await)
     }
 
     async fn admin_teams(

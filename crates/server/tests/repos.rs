@@ -34,6 +34,8 @@ async fn world(background: bool) -> World {
         .unwrap();
     let root = tok.unwrap();
     app.add_user("alice").await;
+    // owning a team needs the orchestrator role
+    app.set_role("alice", "orchestrator").await;
     app.add_user("bob").await;
     let alice = admin::operator_token(&app.state.db, "alice", None)
         .await

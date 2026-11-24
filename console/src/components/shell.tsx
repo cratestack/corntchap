@@ -20,7 +20,7 @@ import {
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { logout, useSession } from "@/lib/session";
+import { canOrchestrate, isSuperAdmin, logout, roleLabel, useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { useLive } from "@/lib/live";
 import { useAgents, useClaimedTasks, useInvalidateAll, useMyWork, useOpenQuestionCounts, useProjects, useV1, type AgentRow } from "@/lib/data";
@@ -106,8 +106,8 @@ function AccountMenu({ compact = false, side }: { compact?: boolean; side?: "top
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[13px] font-semibold text-sidebar-foreground">{me.display_name ?? me.name}</span>
               <span className="block truncate text-[11px] text-sidebar-muted">
-                {me.display_name ? `@${me.name}` : me.is_admin ? "admin" : me.kind}
-                {me.display_name && me.is_admin ? " · admin" : ""}
+                {me.display_name ? `@${me.name}` : me.role !== "member" ? roleLabel(me.role) : me.kind}
+                {me.display_name && me.role !== "member" ? ` · ${roleLabel(me.role)}` : ""}
               </span>
             </span>
           )}
@@ -232,7 +232,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
             })}
             {projects.data?.length === 0 && (
               <li className="px-2.5 py-1 text-[12px] text-sidebar-muted">
-                No pots yet.{me.is_admin ? " Start one under Pots below." : " Ask an admin to start one."}
+                No pots yet.{canOrchestrate(me) ? " Start one under Pots below." : " Ask an orchestrator to start one."}
               </li>
             )}
           </ul>
@@ -276,11 +276,13 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
             <SideLink to="/teams" icon={Users} onNavigate={onNavigate}>
               Teams
             </SideLink>
-            {me.is_admin && (
+            {canOrchestrate(me) && (
+              <SideLink to="/admin/pots" icon={FolderKanban} onNavigate={onNavigate}>
+                Pots
+              </SideLink>
+            )}
+            {isSuperAdmin(me) && (
               <>
-                <SideLink to="/admin/pots" icon={FolderKanban} onNavigate={onNavigate}>
-                  Pots
-                </SideLink>
                 <SideLink to="/admin/users" icon={UserRound} onNavigate={onNavigate}>
                   Users
                 </SideLink>

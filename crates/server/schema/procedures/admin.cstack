@@ -1,25 +1,32 @@
 part of "../corntchap.cstack"
 
 // Administration: the console's people-side actions as procedures and MCP tools (src/admin.rs).
-// The same rules as the console apply: admins manage users and every team; team owners manage
-// their team and its pots; people manage the cooks and fires they own. Cooks (agents) calling
-// these get "forbidden" except for reading what they can already see.
+// The same rules as the console apply: super-admins manage users and every team; orchestrators create and
+// manage their own teams, pots, cooks and fires (team owners are orchestrators); people manage the cooks and
+// fires they own. Cooks (agents) calling these get "forbidden" except for reading what they can already see.
 
-/// People who can sign in (admins only).
+/// People who can sign in: super-admins see all details; orchestrators the directory (handle, display name, role).
 procedure adminUsers(): UserView[]
   @allow(auth() != null)
-  @mcp(tool: "list_users", description: "People who can sign in (admins only).")
+  @mcp(tool: "list_users", description: "People who can sign in. Super-admins see everyone with their sign-in state; orchestrators get the directory (handle, display name and role, to add people to their teams); members are refused.")
 
-/// Teams you belong to (admins: all), with their pots.
+/// Set a person's role (super-admins only): super_admin, orchestrator or member.
+/// @param user The person's handle.
+/// @param role super_admin (runs the instance), orchestrator (creates and manages their own teams, pots, cooks and fires) or member.
+mutation procedure adminSetRole(user: String, role: String): RoleView
+  @allow(auth() != null)
+  @mcp(tool: "set_role", description: "Set a person's role (super-admins only): super_admin, orchestrator or member. The role becomes manual (the identity provider no longer changes it). The last super-admin who can sign in cannot be demoted. A demoted team owner keeps the owner row but loses its powers until they are an orchestrator again.")
+
+/// Teams you belong to (super-admins: all), with their pots.
 procedure adminTeams(): TeamView[]
   @allow(auth() != null)
-  @mcp(tool: "list_teams", description: "Teams you belong to (admins: all), with your role, how many chefs and its pots.")
+  @mcp(tool: "list_teams", description: "Teams you belong to (super-admins: all), with your role, how many chefs and its pots.")
 
-/// Create a team (admins only); you become its owner.
+/// Create a team (orchestrators and super-admins); you become its owner.
 /// @param name Team name, e.g. payments.
 mutation procedure adminAddTeam(name: String): TeamCreated
   @allow(auth() != null)
-  @mcp(tool: "create_team", description: "Create a team (admins only); a person creating it becomes its owner.")
+  @mcp(tool: "create_team", description: "Create a team (orchestrators and super-admins); the person creating it becomes its owner.")
 
 /// A team's chefs: the people and cooks in it.
 /// @param team Team name.
@@ -27,20 +34,20 @@ procedure adminTeamMembers(team: String): MemberView[]
   @allow(auth() != null)
   @mcp(tool: "list_team_members", description: "A team's chefs (people and cooks) with their role (chef or owner). fireAndForget cooks take ready work, open a PR and stop: do not message, ask or assign reviews to them; give them a task.")
 
-/// Add a person or a cook to a team. Team owners and admins add anyone; a team member (chef) may add a cook they own. A cook joins only with its owner's say-so.
+/// Add a person or a cook to a team. Team owners (orchestrators) and super-admins add anyone; a team member (chef) may add a cook they own. A cook joins only with its owner's say-so. Only an orchestrator or a super-admin can be made an owner.
 /// @param team Team name.
 /// @param principal A person's handle or a cook's name.
 /// @param role chef (default; also accepted as member) or owner (people only).
 mutation procedure adminAddMember(team: String, principal: String, role: String?): MemberAdded
   @allow(auth() != null)
-  @mcp(tool: "add_team_member", description: "Add a chef (a person or a cook) to a team. Team owners and admins add anyone; any team member may add a cook they own (as chef). A cook joins only if you own it or are an admin.")
+  @mcp(tool: "add_team_member", description: "Add a chef (a person or a cook) to a team. Team owners (orchestrators) and super-admins add anyone; any team member may add a cook they own (as chef). A cook joins only if you own it or are a super-admin. A person becomes an owner only if they are an orchestrator or a super-admin.")
 
-/// Remove a chef from a team (team owners and admins; a member may remove a cook they own).
+/// Remove a chef from a team (team owners and super-admins; a member may remove a cook they own).
 /// @param team Team name.
 /// @param principal A person's handle or a cook's name.
 mutation procedure adminRemoveMember(team: String, principal: String): OkResult
   @allow(auth() != null)
-  @mcp(tool: "remove_team_member", description: "Remove a person or a cook from a team (team owners and admins; any member may remove a cook they own).")
+  @mcp(tool: "remove_team_member", description: "Remove a person or a cook from a team (team owners and super-admins; any member may remove a cook they own; an owner may remove any cook from their team, but cannot manage cooks that belong to others).")
 
 /// Create a pot (project) in a team you own.
 /// @param team Team name.
@@ -50,24 +57,24 @@ mutation procedure adminRemoveMember(team: String, principal: String): OkResult
 /// @param leaseTtlS Lease length in seconds (default 600).
 mutation procedure adminAddProject(team: String, key: String, name: String, repoUrl: String?, leaseTtlS: Int?): ProjectCreated
   @allow(auth() != null)
-  @mcp(tool: "create_project", description: "Create a pot (project) in a team you own (admins: any team).")
+  @mcp(tool: "create_project", description: "Create a pot (project) in a team you own (super-admins: any team).")
 
-/// Cooks (agents) you own (admins: all).
+/// Cooks (agents) you own (super-admins: all).
 procedure adminCooks(): PrincipalView[]
   @allow(auth() != null)
-  @mcp(tool: "list_cooks", description: "Cooks (agents) you own (admins: all) with their runtime, leases held and last activity. fireAndForget cooks (cloud targets only) take ready work, open a PR and stop: give them a task rather than messaging them.")
+  @mcp(tool: "list_cooks", description: "Cooks (agents) you own (super-admins: all) with their runtime, leases held and last activity. fireAndForget cooks (cloud targets only) take ready work, open a PR and stop: give them a task rather than messaging them.")
 
-/// Fires (relays) you own (admins: all).
+/// Fires (relays) you own (super-admins: all).
 procedure adminFires(): PrincipalView[]
   @allow(auth() != null)
-  @mcp(tool: "list_fires", description: "Fires (relays that wake local cooks) you own (admins: all).")
+  @mcp(tool: "list_fires", description: "Fires (relays that wake local cooks) you own (super-admins: all).")
 
 /// Create a cook (people only). Returns its token once.
 /// @param name Cook name, e.g. codex-laptop.
 /// @param agentKind claude-code, codex, opencode, copilot, antigravity or other.
 /// @param runtime local or cloud.
 /// @param maxLeases Tasks it may hold at once (default 1).
-/// @param owner Owner's login (admins only; default you).
+/// @param owner Owner's login (super-admins only; default you).
 mutation procedure adminAddCook(name: String, agentKind: String?, runtime: String?, maxLeases: Int?, owner: String?): PrincipalToken
   @allow(auth() != null)
   @mcp(tool: "create_cook", description: "Create a cook (agent identity) owned by you (people only). Returns its bearer token once: it is a secret, put it straight into the cook's MCP config.")
@@ -82,14 +89,14 @@ mutation procedure adminAddFire(name: String): PrincipalToken
 /// @param name The cook's or fire's name.
 mutation procedure adminRotate(name: String): PrincipalToken
   @allow(auth() != null)
-  @mcp(tool: "rotate_token", description: "Revoke every token of a cook or fire you own (admins: any) and issue a new one, returned once. The old token stops working at once.")
+  @mcp(tool: "rotate_token", description: "Revoke every token of a cook or fire you own (super-admins: any) and issue a new one, returned once. The old token stops working at once.")
 
 /// Disable or enable a cook or fire you own.
 /// @param name The cook's or fire's name.
 /// @param enabled false to disable (it can no longer claim or connect), true to enable again.
 mutation procedure adminSetEnabled(name: String, enabled: Boolean): EnabledView
   @allow(auth() != null)
-  @mcp(tool: "set_enabled", description: "Disable (enabled=false) or enable again a cook or fire you own (admins: any).")
+  @mcp(tool: "set_enabled", description: "Disable (enabled=false) or enable again a cook or fire you own (super-admins: any).")
 
 /// Wake targets of a cook you own.
 /// @param cook The cook's name.
@@ -98,12 +105,12 @@ procedure adminWakeTargets(cook: String): WakeTargetView[]
   @mcp(tool: "list_wake_targets", description: "How an idle cook you own is woken: relay, webhook or github-comment targets, with their pot/label filters.")
 
 /// Add a wake target to a cook you own. Same rules as connect_cloud: a cook's owner may add a
-/// claude-routine (Anthropic's trigger host) or github-comment; webhooks are an admin's call.
+/// claude-routine (Anthropic's trigger host) or github-comment; webhooks, Coder and any other URL are a super-admin's call.
 /// @param cook The cook's name.
-/// @param type relay (default), claude-routine (a Claude Code routine on the web), webhook, github-comment (a mention in a GitHub comment, e.g. @codex for Codex cloud) coder (a Coder agent; admins only) or devin (a Devin session).
+/// @param type relay (default), claude-routine (a Claude Code routine on the web), webhook, github-comment (a mention in a GitHub comment, e.g. @codex for Codex cloud) coder (a Coder agent; super-admins only) or devin (a Devin session).
 /// @param projects Comma-separated pot keys to wake for (default all).
 /// @param labels Comma-separated labels to wake for (default any).
-/// @param url claude-routine: the routine's API trigger URL (https://api.anthropic.com/v1/claude_code/routines/trig_.../fire); webhook: the URL to POST to; coder: the deployment URL (https://coder.example.com); devin: the API URL (optional; default https://api.devin.ai, admins only).
+/// @param url claude-routine: the routine's API trigger URL (https://api.anthropic.com/v1/claude_code/routines/trig_.../fire); webhook: the URL to POST to; coder: the deployment URL (https://coder.example.com); devin: the API URL (optional; default https://api.devin.ai, super-admins only).
 /// @param repo github-comment: owner/repo.
 /// @param issue github-comment: issue or PR number to comment on.
 /// @param token claude-routine: the routine's API token; coder: a Coder session token; devin: a Devin API key; webhook: a bearer token; github-comment: a GitHub token allowed to comment (stored, never shown again).
@@ -116,7 +123,7 @@ procedure adminWakeTargets(cook: String): WakeTargetView[]
 /// @param workspace coder (Coder Agents): a workspace id to run in (optional; else the agent picks a template).
 mutation procedure adminAddWakeTarget(cook: String, type: String?, projects: String?, labels: String?, url: String?, repo: String?, issue: Int?, token: String?, secret: String?, mention: String?, template: String?, preset: String?, owner: String?, organization: String?, workspace: String?): WakeTargetAdded
   @allow(auth() != null)
-  @mcp(tool: "add_wake_target", description: "Add a way to wake an idle cook you own: relay (a fire on its machine), claude-routine (fires a Claude Code routine on the web, each wake a fresh cloud session), webhook, github-comment (a mention on an issue or PR, e.g. @codex for Codex cloud or @copilot), coder (an agent run on a Coder deployment, admins only) or devin (a Devin session): the first wake starts a run, later ones are follow-up messages to it. A cook whose targets are all cloud ones (webhooks: admins only) is fire and forget: only ready work in its pots (narrow it with labels) and a direct message from its own owner start a run; it opens a pull request and stops, and nothing else wakes it. A claude-routine's own prompt must tell it to act on corntchap wakes: the answer gives the text to paste.")
+  @mcp(tool: "add_wake_target", description: "Add a way to wake an idle cook you own: relay (a fire on its machine), claude-routine (fires a Claude Code routine on the web, each wake a fresh cloud session), webhook, github-comment (a mention on an issue or PR, e.g. @codex for Codex cloud or @copilot), coder (an agent run on a Coder deployment, super-admins only) or devin (a Devin session): the first wake starts a run, later ones are follow-up messages to it. A cook whose targets are all cloud ones (webhooks: super-admins only) is fire and forget: only ready work in its pots (narrow it with labels) and a direct message from its own owner start a run; it opens a pull request and stops, and nothing else wakes it. A claude-routine's own prompt must tell it to act on corntchap wakes: the answer gives the text to paste.")
 
 /// Delete a wake target.
 /// @param id The wake target's id.
@@ -124,71 +131,71 @@ mutation procedure adminDeleteWakeTarget(id: String): OkResult
   @allow(auth() != null)
   @mcp(tool: "delete_wake_target", description: "Delete a wake target of a cook you own.")
 
-/// Set what a cook may do beyond working its tasks (people only: the cook's owner or an admin).
+/// Set what a cook may do beyond working its tasks (people only: the cook's owner or a super-admin).
 /// @param name The cook's name.
-/// @param grants Comma-separated: plan (edit, toss, restore, unblock any task in its teams), manage (act as its owner on teams, pots, cooks, fires, wake targets), admin (the owner's admin powers). Empty: work only.
+/// @param grants Comma-separated: plan (edit, toss, restore, unblock any task in its teams), manage (act as its owner on teams, pots, cooks, fires, wake targets), admin (the owner's role: an orchestrator's cook acts as an orchestrator, never as a super-admin). Empty: work only.
 mutation procedure adminSetGrants(name: String, grants: String): GrantsView
   @allow(auth() != null)
   @mcp(tool: "set_grants", description: "Set what a cook may do beyond working its tasks: plan, manage, admin (comma-separated; empty for work only). Only a person can, never a cook. A cook never exceeds its owner's rights.")
 
-/// Rename a cook you own (its owner or an admin). Tokens, stations, leases, wake targets and team memberships follow (they point at the cook, not its name).
+/// Rename a cook you own (its owner or a super-admin). Tokens, stations, leases, wake targets and team memberships follow (they point at the cook, not its name).
 /// @param name The cook's current name.
 /// @param newName The new name (a handle: letters, digits, '.', '_' and '-').
 mutation procedure cookRename(name: String, newName: String): RenamedView
   @allow(auth() != null)
-  @mcp(tool: "rename_cook", description: "Rename a cook you own (admins: any). Its tokens, stations, leases, wake targets and team memberships keep working; text that already names it (@mentions in comments and pass messages, the agent name in a fire's config.toml targets) does not follow.")
+  @mcp(tool: "rename_cook", description: "Rename a cook you own (super-admins: any). Its tokens, stations, leases, wake targets and team memberships keep working; text that already names it (@mentions in comments and pass messages, the agent name in a fire's config.toml targets) does not follow.")
 
-/// Delete a cook you own (its owner or an admin).
+/// Delete a cook you own (its owner or a super-admin).
 /// @param name The cook's name.
 mutation procedure cookDelete(name: String): DeletedView
   @allow(auth() != null)
-  @mcp(tool: "delete_cook", description: "Delete a cook you own (admins: any). Its leases are released first (tasks go back to open); its tokens, stations, wake targets, team memberships and messages sent to it are deleted; comments, events and tasks it wrote stay without an author. A cook cannot delete itself. Cannot be undone.")
+  @mcp(tool: "delete_cook", description: "Delete a cook you own (super-admins: any). Its leases are released first (tasks go back to open); its tokens, stations, wake targets, team memberships and messages sent to it are deleted; comments, events and tasks it wrote stay without an author. A cook cannot delete itself. Cannot be undone.")
 
-/// Rename a fire (relay) you own (its owner or an admin).
+/// Rename a fire (relay) you own (its owner or a super-admin).
 /// @param name The fire's current name.
 /// @param newName The new name.
 mutation procedure fireRename(name: String, newName: String): RenamedView
   @allow(auth() != null)
-  @mcp(tool: "rename_fire", description: "Rename a fire (relay) you own (admins: any). Its token keeps working; the machine's config.toml needs no change (a fire is known by its token).")
+  @mcp(tool: "rename_fire", description: "Rename a fire (relay) you own (super-admins: any). Its token keeps working; the machine's config.toml needs no change (a fire is known by its token).")
 
-/// Delete a fire (relay) you own (its owner or an admin).
+/// Delete a fire (relay) you own (its owner or a super-admin).
 /// @param name The fire's name.
 mutation procedure fireDelete(name: String): DeletedView
   @allow(auth() != null)
-  @mcp(tool: "delete_fire", description: "Delete a fire (relay) you own (admins: any): its tokens stop working at once. Cannot be undone.")
+  @mcp(tool: "delete_fire", description: "Delete a fire (relay) you own (super-admins: any): its tokens stop working at once. Cannot be undone.")
 
 /// Rename a pot (display name only; the key stays).
 /// @param key The pot's key, e.g. PAY.
 /// @param name The new display name.
 mutation procedure potRename(key: String, name: String): PotRenamedView
   @allow(auth() != null)
-  @mcp(tool: "rename_project", description: "Rename a pot (its display name; the key, which is part of every task id and MCP URL, never changes). Owners of the pot's team and admins.")
+  @mcp(tool: "rename_project", description: "Rename a pot (its display name; the key, which is part of every task id and MCP URL, never changes). Owners of the pot's team and super-admins.")
 
 /// Delete a pot and everything in it.
 /// @param key The pot's key, e.g. PAY.
 /// @param confirm Must equal the key.
 mutation procedure potDelete(key: String, confirm: String): PotDeletedView
   @allow(auth() != null)
-  @mcp(tool: "delete_project", description: "Delete a pot and everything in it: tasks, checklists, comments, events, pass, pantry, views, menus, stations, files (metadata and stored objects). Owners of the pot's team and admins; confirm must equal the key. Cannot be undone.")
+  @mcp(tool: "delete_project", description: "Delete a pot and everything in it: tasks, checklists, comments, events, pass, pantry, views, menus, stations, files (metadata and stored objects). Owners of the pot's team and super-admins; confirm must equal the key. Cannot be undone.")
 
 /// Rename a team.
 /// @param name The team's current name.
 /// @param newName The new name.
 mutation procedure teamRename(name: String, newName: String): RenamedView
   @allow(auth() != null)
-  @mcp(tool: "rename_team", description: "Rename a team (owners of the team and admins). Pots and members stay.")
+  @mcp(tool: "rename_team", description: "Rename a team (owners of the team and super-admins). Pots and members stay.")
 
 /// Delete a team that has no pots.
 /// @param name The team's name.
 /// @param confirm Must equal the name.
 mutation procedure teamDelete(name: String, confirm: String): DeletedView
   @allow(auth() != null)
-  @mcp(tool: "delete_team", description: "Delete a team (owners of the team and admins); refused while it still has pots. confirm must equal the name. Its memberships go; the people and cooks stay.")
+  @mcp(tool: "delete_team", description: "Delete a team (owners of the team and super-admins); refused while it still has pots. confirm must equal the name. Its memberships go; the people and cooks stay.")
 
-/// Set a pot's default lease length (team owner or admin). A cook can still ask for a longer
+/// Set a pot's default lease length (team owner or super-admin). A cook can still ask for a longer
 /// lease when it claims (ttlS) or with heartbeat.
 /// @param project Pot key, e.g. PAY.
 /// @param ttlS Seconds, 10 to 86400.
 mutation procedure setLeaseTtl(project: String, ttlS: Int): PotLease
   @allow(auth() != null)
-  @mcp(tool: "set_lease_ttl", description: "Set a pot's default lease length in seconds (its team's owner or an admin). Leases already held keep their expiry; cooks can still ask for longer on claim_next/claim_task (ttlS) or heartbeat.")
+  @mcp(tool: "set_lease_ttl", description: "Set a pot's default lease length in seconds (its team's owner or a super-admin). Leases already held keep their expiry; cooks can still ask for longer on claim_next/claim_task (ttlS) or heartbeat.")

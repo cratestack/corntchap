@@ -127,8 +127,8 @@ async fn sso_device_flow_rest_and_mcp() {
     // 4. bearer works; garbage does not; a new OIDC subject is provisioned
     let (st, me) = app.get(&admin_token, "/me").await;
     assert_eq!(
-        (st, me["display_name"].as_str(), me["is_admin"].as_bool()),
-        (200, Some("Octo Cat"), Some(true))
+        (st, me["display_name"].as_str(), me["role"].as_str()),
+        (200, Some("Octo Cat"), Some("super_admin"))
     );
     assert_ne!(
         me["name"], "octo",
@@ -151,12 +151,12 @@ async fn sso_device_flow_rest_and_mcp() {
         .unwrap();
     assert_eq!(who["name"], app.handle_of("sub-new").await, "{who}");
     assert_eq!(who["display_name"], "Octo Cat", "{who}");
-    let (is_admin, src): (bool, String) =
-        sqlx::query_as("select is_admin, admin_source from principals where oidc_sub = 'sub-new'")
+    let (role, src): (String, String) =
+        sqlx::query_as("select role, role_source from principals where oidc_sub = 'sub-new'")
             .fetch_one(&app.state.db)
             .await
             .unwrap();
-    assert!(!is_admin);
+    assert_eq!(role, "member");
     assert_eq!(src, "oidc");
 
     // 5. admin sets up a team, project and an agent with a token

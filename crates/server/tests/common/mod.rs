@@ -43,7 +43,8 @@ pub struct Ident {
     pub email_verified: bool,
     /// The `name` claim; `None` leaves it out.
     pub name: Option<String>,
-    pub admin_role: bool,
+    /// IdP realm roles to put in the token (besides `offline_access`), e.g. `corntchap-admin`.
+    pub roles: Vec<String>,
 }
 
 impl Default for Ident {
@@ -54,7 +55,7 @@ impl Default for Ident {
             email: "octo@example.test".into(),
             email_verified: true,
             name: Some("Octo Cat".into()),
-            admin_role: false,
+            roles: vec![],
         }
     }
 }
@@ -129,8 +130,10 @@ pub async fn mock_oidc(who: Who) -> String {
         if let Some(n) = &w.name {
             claims["name"] = json!(n);
         }
-        if w.admin_role {
-            claims["realm_access"] = json!({"roles": ["offline_access", "corntchap-admin"]});
+        if !w.roles.is_empty() {
+            let mut roles = vec!["offline_access".to_string()];
+            roles.extend(w.roles.iter().cloned());
+            claims["realm_access"] = json!({ "roles": roles });
         }
         let mut h = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
         h.kid = Some("k1".into());
@@ -182,6 +185,7 @@ pub async fn start_with(background: bool, tweak: impl FnOnce(&mut Config)) -> Te
         client_secret: "csecret".into(),
         public_issuer: None,
         admin_role: "corntchap-admin".into(),
+        orchestrator_role: "corntchap-orchestrator".into(),
     });
     cfg.run_background = background;
     tweak(&mut cfg);
@@ -343,12 +347,22 @@ impl TestApp {
     }
 
     /// Choose who the mock IdP signs in next.
-    pub fn sign_in_as(&self, sub: &str, username: &str, admin_role: bool) {
+    pub fn sign_in_as(&self, sub: &str, username: &str, super_admin: bool) {
+        let roles: &[&str] = if super_admin {
+            &["corntchap-admin"]
+        } else {
+            &[]
+        };
+        self.sign_in_roles(sub, username, roles);
+    }
+
+    /// Like `sign_in_as`, with these IdP realm roles in the token.
+    pub fn sign_in_roles(&self, sub: &str, username: &str, roles: &[&str]) {
         *self.who.lock().unwrap() = Ident {
             sub: sub.into(),
             username: username.into(),
             email: format!("{username}@example.test"),
-            admin_role,
+            roles: roles.iter().map(|r| r.to_string()).collect(),
             ..Ident::default()
         };
     }
@@ -370,9 +384,21 @@ impl TestApp {
         .unwrap();
     }
 
+    /// Set a person's role directly (a manual setting, as a super-admin would make).
+    pub async fn set_role(&self, handle: &str, role: &str) {
+        let n = sqlx::query("update principals set role = $2, role_source = 'manual' where name = $1 and kind = 'user'")
+            .bind(handle)
+            .bind(role)
+            .execute(&self.state.db)
+            .await
+            .unwrap()
+            .rows_affected();
+        assert_eq!(n, 1, "no person {handle}");
+    }
+
     pub async fn principal(&self, handle: &str) -> Principal {
-        let (id, is_admin): (uuid::Uuid, bool) =
-            sqlx::query_as("select id, is_admin from principals where name = $1")
+        let (id, role): (uuid::Uuid, corntchap::state::Role) =
+            sqlx::query_as("select id, role from principals where name = $1")
                 .bind(handle)
                 .fetch_one(&self.state.db)
                 .await
@@ -382,7 +408,7 @@ impl TestApp {
             kind: "user".into(),
             name: handle.into(),
             owner_id: None,
-            is_admin,
+            role,
             max_leases: 1,
             runtime: None,
             agent_kind: None,
