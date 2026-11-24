@@ -744,6 +744,32 @@ async fn owned_team(c: &mut PgConnection, p: &Principal, team: &str) -> Result<U
     }
 }
 
+/// Resolve a team the principal belongs to in any role (or any team for admins), with whether
+/// they may manage it (owner or admin). Non-members get "not found".
+async fn member_team(c: &mut PgConnection, p: &Principal, team: &str) -> Result<(Uuid, bool)> {
+    let row: Option<(Uuid, bool, bool)> = sqlx::query_as(
+        "select t.id, exists (select 1 from team_members where team_id = t.id and principal_id = $2 and role = 'owner'),
+                exists (select 1 from team_members where team_id = t.id and principal_id = $2)
+         from teams t where t.name = $1",
+    )
+    .bind(team)
+    .bind(p.id)
+    .fetch_optional(c)
+    .await?;
+    match row {
+        None => Err(Error::NotFound(format!("team {team} not found"))),
+        Some((id, owner, member)) => {
+            if p.is_admin || (owner && p.is_user()) {
+                Ok((id, true))
+            } else if member {
+                Ok((id, false))
+            } else {
+                Err(Error::NotFound(format!("team {team} not found")))
+            }
+        }
+    }
+}
+
 pub async fn add_member(
     db: &PgPool,
     p: &Principal,
@@ -759,7 +785,7 @@ pub async fn add_member(
         _ => return invalid("role must be chef or owner"),
     };
     let mut c = db.acquire().await?;
-    let tid = owned_team(&mut c, p, team).await?;
+    let (tid, manager) = member_team(&mut c, p, team).await?;
     let target: Option<(Uuid, String, Option<Uuid>)> =
         sqlx::query_as("select id, kind, owner_id from principals where name = $1 and kind <> 'relay' and disabled_at is null")
             .bind(principal.to_lowercase())
@@ -778,6 +804,12 @@ pub async fn add_member(
     }
     if role == "owner" && kind != "user" {
         return invalid("only users can own a team");
+    }
+    // A plain member (chef) may add only their own cooks, as members.
+    if !manager && (kind != "agent" || owner != Some(p.id) || role != "member") {
+        return Err(Error::Forbidden(
+            "a team member can only add their own cooks; only a team owner can add anyone else or change roles".into(),
+        ));
     }
     sqlx::query(
         "insert into team_members (team_id, principal_id, role) values ($1,$2,$3)
@@ -799,7 +831,21 @@ pub async fn remove_member(
 ) -> Result<Value> {
     let p = &acting(db, p).await?;
     let mut c = db.acquire().await?;
-    let tid = owned_team(&mut c, p, team).await?;
+    let (tid, manager) = member_team(&mut c, p, team).await?;
+    if !manager {
+        let own: Option<Uuid> = sqlx::query_scalar(
+            "select id from principals where name = $1 and kind = 'agent' and owner_id = $2",
+        )
+        .bind(principal.to_lowercase())
+        .bind(p.id)
+        .fetch_optional(&mut *c)
+        .await?;
+        if own.is_none() {
+            return Err(Error::Forbidden(
+                "a team member can only remove their own cooks".into(),
+            ));
+        }
+    }
     sqlx::query("delete from team_members where team_id = $1 and principal_id = (select id from principals where name = $2)")
         .bind(tid)
         .bind(principal.to_lowercase())

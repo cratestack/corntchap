@@ -27,20 +27,20 @@ procedure adminTeamMembers(team: String): MemberView[]
   @allow(auth() != null)
   @mcp(tool: "list_team_members", description: "A team's chefs (people and cooks) with their role (chef or owner).")
 
-/// Add a person or a cook to a team (team owners and admins; a cook only with its owner's say-so).
+/// Add a person or a cook to a team. Team owners and admins add anyone; a team member (chef) may add a cook they own. A cook joins only with its owner's say-so.
 /// @param team Team name.
 /// @param principal A person's handle or a cook's name.
 /// @param role chef (default; also accepted as member) or owner (people only).
 mutation procedure adminAddMember(team: String, principal: String, role: String?): MemberAdded
   @allow(auth() != null)
-  @mcp(tool: "add_team_member", description: "Add a chef (a person or a cook) to a team (team owners and admins). A cook joins only if you own it or are an admin.")
+  @mcp(tool: "add_team_member", description: "Add a chef (a person or a cook) to a team. Team owners and admins add anyone; any team member may add a cook they own (as chef). A cook joins only if you own it or are an admin.")
 
-/// Remove a chef from a team (team owners and admins).
+/// Remove a chef from a team (team owners and admins; a member may remove a cook they own).
 /// @param team Team name.
 /// @param principal A person's handle or a cook's name.
 mutation procedure adminRemoveMember(team: String, principal: String): OkResult
   @allow(auth() != null)
-  @mcp(tool: "remove_team_member", description: "Remove a person or a cook from a team (team owners and admins).")
+  @mcp(tool: "remove_team_member", description: "Remove a person or a cook from a team (team owners and admins; any member may remove a cook they own).")
 
 /// Create a pot (project) in a team you own.
 /// @param team Team name.
