@@ -506,6 +506,7 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "list_views",
             "list_wake_targets",
             "my_questions",
+            "my_work",
             "pass",
             "pick_question",
             "read_pantry",

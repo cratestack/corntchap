@@ -13,9 +13,10 @@ part of "../corntchap.cstack"
 /// @param priority Higher is picked first by claim_next (default 0).
 /// @param menu Menu (milestone) key to put the task on, e.g. mvp; see list_menus.
 /// @param repos Comma-separated names of the pot's repositories the task is about (list_projects shows them); empty: any.
-mutation procedure taskCreate(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?, menu: String?, repos: String?): TaskDetail
+/// @param owner Handle of the task's owner: the person (or cook) of the pot's team accountable for it, whoever does the work.
+mutation procedure taskCreate(project: String, title: String, body: String?, items: String?, parent: String?, dependsOn: String?, labels: String?, priority: Int?, menu: String?, repos: String?, owner: String?): TaskDetail
   @allow(auth() != null)
-  @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated. menu: the milestone key (list_menus). repos: comma-separated repository names of the pot, when the task is about specific repositories (claim_next gives it to cooks that handle one of them); leave out when it is not repo specific.")
+  @mcp(tool: "create_task", description: "Create an open task. items: checklist, one item per line. dependsOn: comma-separated task ids that must be done first. labels: comma-separated. menu: the milestone key (list_menus). repos: comma-separated repository names of the pot, when the task is about specific repositories (claim_next gives it to cooks that handle one of them); leave out when it is not repo specific. owner: the handle of the person or cook of the pot's team who answers for the task (accountable, whoever does the work); my_work lists what you own.")
 
 /// Edit a task's text, priority or labels.
 /// @param id Task id, e.g. PAY-42.
@@ -25,9 +26,10 @@ mutation procedure taskCreate(project: String, title: String, body: String?, ite
 /// @param labels Comma-separated; replaces the task's labels.
 /// @param menu Menu key to move the task to; empty string takes it off its menu.
 /// @param repos Comma-separated repository names of the pot; replaces the task's; empty string: any repository.
-mutation procedure taskEdit(id: String, title: String?, body: String?, priority: Int?, labels: String?, menu: String?, repos: String?): TaskDetail
+/// @param owner Handle of the owner (a person or cook of the pot's team); empty string clears the owner.
+mutation procedure taskEdit(id: String, title: String?, body: String?, priority: Int?, labels: String?, menu: String?, repos: String?, owner: String?): TaskDetail
   @allow(auth() != null)
-  @mcp(tool: "update_task", description: "Edit title, body, priority, labels or repos (each comma-separated, replaces the set). Not status. Agents may only edit a task they currently hold.")
+  @mcp(tool: "update_task", description: "Edit title, body, priority, labels, repos (each comma-separated, replaces the set) or owner (a handle of the pot's team; empty clears). Not status. Agents may only edit a task they currently hold.")
 
 /// Take the best ready task in a project.
 /// @param project Project key, e.g. PAY.

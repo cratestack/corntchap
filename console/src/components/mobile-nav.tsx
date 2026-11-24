@@ -12,6 +12,7 @@ import {
   GitBranch,
   Info,
   LayoutGrid,
+  ListChecks,
   LogOut,
   MessageCircle,
   Monitor,
@@ -30,7 +31,7 @@ import { cn } from "@/lib/utils";
 import { logout, useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { useLive } from "@/lib/live";
-import { useProjects, useV1, type AgentRow } from "@/lib/data";
+import { useMyWork, useProjects, useV1, type AgentRow } from "@/lib/data";
 import { useTheme } from "@/lib/theme";
 import { lastPot, lastView } from "@/lib/views";
 import { fmtAgo, plural, useNow } from "@/lib/format";
@@ -93,6 +94,7 @@ export function BottomTabs() {
   const on = (seg: string) => !!pot && path === `${base}/${seg}`;
   const board = !!pot && (on("board") || path.startsWith(`${base}/v/`));
   const cooks = path === "/cooks" || path.startsWith("/cooks/");
+  const waiting = useMyWork().data?.counts.waiting ?? 0;
   const known = board || on("pass") || on("questions") || cooks;
   const potTo = (seg: string) => (pot ? `/pots/${pot.key}/${seg}` : "/");
   return (
@@ -115,8 +117,9 @@ export function BottomTabs() {
               !known && "text-foreground",
             )}
           >
-            <span className={cn("flex h-7 w-12 items-center justify-center rounded-full", !known && "bg-corn/25")}>
+            <span className={cn("relative flex h-7 w-12 items-center justify-center rounded-full", !known && "bg-corn/25")}>
               <MoreHorizontal className="size-[19px]" aria-hidden="true" />
+              <Badge n={waiting} label="thing waiting on you" />
             </span>
             More
           </button>
@@ -201,6 +204,7 @@ function FireLine({ onPick }: { onPick: () => void }) {
 
 export function MoreSheet({ open, onOpenChange, pot }: { open: boolean; onOpenChange: (v: boolean) => void; pot: ProjectSummary | null }) {
   const me = useSession();
+  const waiting = useMyWork().data?.counts.waiting ?? 0;
   const [renaming, setRenaming] = useState(false);
   const close = () => onOpenChange(false);
   return (
@@ -210,6 +214,11 @@ export function MoreSheet({ open, onOpenChange, pot }: { open: boolean; onOpenCh
           <SheetTitle className="sr-only">More</SheetTitle>
           <SheetDescription className="sr-only">Other pot tabs, the kitchen admin pages, theme and account</SheetDescription>
           <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pt-2 pb-2">
+            <section>
+              <SheetRow to="/me/work" icon={ListChecks} onPick={close} hint={waiting > 0 ? `${waiting} waiting` : undefined}>
+                My work
+              </SheetRow>
+            </section>
             {pot && (
               <section>
                 <h2 className="label-caps px-3 pb-1">{pot.name.toUpperCase() === pot.key ? pot.key : `${pot.key} · ${pot.name}`}</h2>
@@ -394,6 +403,7 @@ export function TabletRail({ account }: { account: ReactNode }) {
   const projects = useProjects();
   const loc = useLocation();
   const me = useSession();
+  const waiting = useMyWork().data?.counts.waiting ?? 0;
   const { setPaletteOpen } = useUi();
   const path = loc.pathname.toLowerCase();
   const pots = useMemo(() => projects.data ?? [], [projects.data]);
@@ -413,6 +423,9 @@ export function TabletRail({ account }: { account: ReactNode }) {
           );
         })}
         <div className="my-2 h-px w-8 bg-sidebar-border" aria-hidden="true" />
+        <RailLink to="/me/work" label="My work" badge={waiting}>
+          <ListChecks className="size-5" aria-hidden="true" />
+        </RailLink>
         <RailLink to="/cooks" label="Cooks">
           <ChefHat className="size-5" aria-hidden="true" />
         </RailLink>

@@ -5,6 +5,7 @@ import {
   ChefHat,
   Command as CommandIcon,
   CircleHelp,
+  ListChecks,
   MessageCircle,
   Flame,
   FolderKanban,
@@ -22,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { logout, useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { useLive } from "@/lib/live";
-import { useAgents, useClaimedTasks, useInvalidateAll, useOpenQuestionCounts, useProjects, useV1, type AgentRow } from "@/lib/data";
+import { useAgents, useClaimedTasks, useInvalidateAll, useMyWork, useOpenQuestionCounts, useProjects, useV1, type AgentRow } from "@/lib/data";
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import { lastView } from "@/lib/views";
@@ -144,6 +145,24 @@ function AccountMenu({ compact = false, side }: { compact?: boolean; side?: "top
   );
 }
 
+/** First in the sidebar: the My work page, with what waits on you as a badge. */
+function MyWorkLink({ onNavigate }: { onNavigate?: (() => void) | undefined }) {
+  const w = useMyWork().data;
+  const waiting = w?.counts.waiting ?? 0;
+  return (
+    <NavLink to="/me/work" onClick={onNavigate} className={({ isActive }) => navClass(isActive)}>
+      <ListChecks className="size-4 text-sidebar-muted" aria-hidden="true" />
+      <span className="flex-1">My work</span>
+      {waiting > 0 && (
+        <span className="inline-flex items-center rounded-full bg-primary px-1.5 py-px font-mono text-[10.5px] font-bold text-primary-foreground">
+          <span aria-hidden="true">{waiting}</span>
+          <span className="sr-only">{plural(waiting, "thing")} waiting on you</span>
+        </span>
+      )}
+    </NavLink>
+  );
+}
+
 function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   const me = useSession();
   const projects = useProjects();
@@ -167,6 +186,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       <nav aria-label="Main" className="scrollbar-thin flex-1 space-y-6 overflow-y-auto px-3 pb-4">
+        <MyWorkLink onNavigate={onNavigate} />
         <div>
           <div className="label-caps !text-sidebar-muted px-2.5 pb-1.5">Pots</div>
           <ul className="space-y-0.5">

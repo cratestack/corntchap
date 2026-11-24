@@ -66,6 +66,9 @@ type ChangePayload {
   note String?
   /// review.done: approved, changes_requested or commented.
   verdict String?
+  /// task.owner_changed: the owner before and after (handles; absent: nobody).
+  old_owner String?
+  new_owner String?
 }
 
 type ChangeView {

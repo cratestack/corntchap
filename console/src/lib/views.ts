@@ -12,6 +12,8 @@ export interface Filters {
   status?: string;
   label?: string;
   holder?: string;
+  /** a handle, `me`, or `-` for tasks nobody owns */
+  owner?: string;
   /** a menu key, or "-" for tasks on no menu */
   menu?: string;
   q?: string;

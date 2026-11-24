@@ -25,6 +25,7 @@ type J = Result<Json<Value>>;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/me", get(me).patch(me_rename))
+        .route("/me/work", get(me_work))
         .route("/logout", post(logout))
         .route("/users", get(users_list))
         .route("/users/{name}", patch(users_update))
@@ -265,6 +266,7 @@ async fn tasks_list(
         q.get("label").map(|x| x.as_str()),
         ready,
         q.get("menu").map(|x| x.as_str()),
+        q.get("owner").map(|x| x.as_str()),
     )
     .await?)
 }
@@ -288,6 +290,7 @@ async fn tasks_add(
             repos: arr(&b, "repos"),
             priority: i(&b, "priority").unwrap_or(0),
             menu: s(&b, "menu"),
+            owner: s(&b, "owner"),
         },
     )
     .await?)
@@ -854,6 +857,7 @@ async fn task_patch(
             repos,
             priority: i(&b, "priority"),
             menu: s(&b, "menu"),
+            owner: s(&b, "owner"),
         },
     )
     .await?)
@@ -1002,6 +1006,15 @@ async fn changes(
     let project = q.get("project").map(|k| k.to_uppercase());
     ok(service::changes_since(&st.db, &p.worker()?, cursor, project.as_deref(), limit).await?)
 }
+/// `?project=PAY` optional: what the caller owns, holds and is waited on for (see `my_work`).
+async fn me_work(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    ok(crate::my_work::my_work(&st.db, &p.worker()?, q.get("project").map(|x| x.as_str())).await?)
+}
+
 /// `?station=st_...`: what the station should do now (see `what_now`).
 async fn what_now(
     State(st): State<AppState>,

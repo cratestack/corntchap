@@ -2,6 +2,7 @@ mod api;
 mod file;
 mod hook;
 mod menu;
+mod mywork;
 mod opencode;
 mod pantry;
 mod pass;
@@ -165,10 +166,14 @@ enum TaskCmd {
         /// Only tasks on this menu (`-` for tasks on no menu).
         #[arg(long, allow_hyphen_values = true)]
         menu: Option<String>,
+        /// Only tasks owned by this handle (`me` for yours, `-` for tasks nobody owns).
+        #[arg(long, allow_hyphen_values = true)]
+        owner: Option<String>,
         #[arg(long)]
         json: bool,
     },
     /// Create a task.
+    #[command(alias = "new")]
     Add {
         project: String,
         title: String,
@@ -190,8 +195,11 @@ enum TaskCmd {
         /// A repository of the pot the task is about (repeat for several; `project repo ls` lists them).
         #[arg(long = "repo")]
         repos: Vec<String>,
+        /// The task's owner: a person or cook of the pot's team who is accountable for it.
+        #[arg(long)]
+        owner: Option<String>,
     },
-    /// Change a task's title, body, labels (replaced), priority or menu.
+    /// Change a task's title, body, labels (replaced), priority, menu or owner.
     Edit {
         id: String,
         #[arg(long)]
@@ -214,6 +222,12 @@ enum TaskCmd {
         /// Make the task not repository specific (any repository).
         #[arg(long)]
         no_repos: bool,
+        /// Set the task's owner: a person or cook of the pot's team.
+        #[arg(long, conflicts_with = "no_owner")]
+        owner: Option<String>,
+        /// Clear the task's owner.
+        #[arg(long)]
+        no_owner: bool,
     },
     /// Split a task that names several repositories into one subtask per repository.
     Split { id: String },
@@ -340,6 +354,14 @@ enum TaskCmd {
 enum MeCmd {
     /// Rename yourself: letters, digits, '-', '_' and '.' (max 64); a taken or reserved handle is refused.
     Rename { handle: String },
+    /// What you own, hold and are waited on for, across your pots.
+    Work {
+        /// Only this pot.
+        #[arg(long)]
+        pot: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1047,6 +1069,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
                 s(&v, "previous")
             ));
         }
+        Cmd::Me(MeCmd::Work { pot, json }) => mywork::work(&api, pot, json).await?,
         Cmd::User(UserCmd::Ls { json }) => {
             show(&api.get("/users").await?, json, ui::users_table);
         }
@@ -1672,10 +1695,14 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             ready,
             label,
             menu,
+            owner,
             json,
         } => {
-            let params =
+            let mut params =
                 menu::task_ls_params(status.as_deref(), label.as_deref(), menu.as_deref(), ready);
+            if let Some(o) = owner {
+                params.push(("owner", o));
+            }
             let r = api.raw(
                 reqwest::Method::GET,
                 &format!("/projects/{}/tasks", project.to_uppercase()),
@@ -1694,8 +1721,9 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             priority,
             menu,
             repos,
+            owner,
         } => {
-            let v = api.post(&format!("/projects/{}/tasks", project.to_uppercase()), json!({"title": title, "body": body, "items": items, "labels": labels, "depends_on": depends_on, "parent": parent, "priority": priority, "menu": menu, "repos": repos})).await?;
+            let v = api.post(&format!("/projects/{}/tasks", project.to_uppercase()), json!({"title": title, "body": body, "items": items, "labels": labels, "depends_on": depends_on, "parent": parent, "priority": priority, "menu": menu, "repos": repos, "owner": owner})).await?;
             ok_line(format!("created {}", s(&v, "id")));
         }
         TaskCmd::Edit {
@@ -1708,6 +1736,8 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             no_menu,
             repos,
             no_repos,
+            owner,
+            no_owner,
         } => {
             let mut b = menu::task_edit_body(
                 title.as_deref(),
@@ -1720,9 +1750,14 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             if no_repos || !repos.is_empty() {
                 b["repos"] = json!(repos);
             }
+            if no_owner {
+                b["owner"] = json!("");
+            } else if let Some(o) = owner {
+                b["owner"] = json!(o);
+            }
             if b.as_object().is_some_and(|m| m.is_empty()) {
                 return Err(anyhow!(
-                    "nothing to change: pass --title, --body, --label, --priority, --menu, --no-menu, --repo or --no-repos"
+                    "nothing to change: pass --title, --body, --label, --priority, --menu, --no-menu, --repo, --no-repos, --owner or --no-owner"
                 ));
             }
             let v = api.patch(&format!("/tasks/{id}"), b).await?;
