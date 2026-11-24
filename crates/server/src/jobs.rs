@@ -15,7 +15,9 @@ use crate::{service::emit, state::AppState};
 const LOCK_ID: i64 = 0x636f726e74; // "cornt"
 
 const LOCAL_COALESCE: Duration = Duration::from_secs(30);
-const CLOUD_COALESCE: Duration = Duration::from_secs(300);
+
+/// Sweep-originated wakes stop for a cook after this many work wakes in a row that led to no claim.
+const SWEEP_MAX_MISSES: u32 = 3;
 
 /// Every replica listens so SSE streams and long-polls anywhere hear about new events.
 pub fn spawn_listener(state: AppState) {
@@ -117,7 +119,10 @@ async fn run_jobs(state: AppState) {
     tokio::select! {
         _ = reaper => {},
         _ = files => {},
-        _ = Dispatcher::new(state).run() => {},
+        _ = async move {
+            let (dispatcher, failures) = Dispatcher::new(state);
+            dispatcher.run(failures).await
+        } => {},
     }
 }
 
@@ -133,6 +138,7 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
          insert into events (project_id, task_id, kind, actor_id, payload)
          select project_id, id, 'task.lease_expired', null,
                 jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
+                                   'agent_id', expired.was,
                                    'station', (select s.ref from stations s where s.id = expired.station_id))
          from expired",
     )
@@ -257,30 +263,37 @@ pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
 
 #[derive(sqlx::FromRow, Debug)]
 struct Candidate {
-    #[allow(dead_code)]
     target_id: Uuid,
     agent_id: Uuid,
     agent: String,
-    runtime: Option<String>,
     typ: String,
     config: Value,
+    labels: Vec<String>,
     busy: i64,
 }
 
+/// A cloud work wake that failed: (target, agent, project, the wait the endpoint asked for).
+type WakeFailure = (Uuid, Uuid, Uuid, Option<Duration>);
+
 struct Dispatcher {
     state: AppState,
-    last_wake: HashMap<Uuid, Instant>,
+    last_wake: HashMap<(Uuid, bool), Instant>,
     /// Wakes held back by coalescing; flushed once the window passes (agent, project id).
     pending: HashSet<(Uuid, Uuid)>,
     /// Message wakes (pass, comments, answers) for cooks with cloud targets, batched per cook and
     /// pot into one cloud run at the next tick: (agent, project, wake payload).
     cloud: Vec<(Uuid, Uuid, Value)>,
+    /// Failed cloud work wakes to look at again, with the earliest time (agent, project). They go
+    /// through the same capped path as a sweep wake (see [`SWEEP_MAX_MISSES`]).
+    retry: HashMap<(Uuid, Uuid), Instant>,
     /// Cloud targets that asked to wait (HTTP 429): no delivery before then.
     cloud_wait: HashMap<Uuid, Instant>,
-    /// Work wakes in a row that led to no claim, per cook: each one doubles the wait before the
-    /// next (see [`backoff`]); a claim resets it. A cook that cannot claim (a refused tool, a
-    /// broken session) is not woken every 30 seconds forever.
-    misses: HashMap<Uuid, u32>,
+    /// Work wakes in a row that led to no claim, per cook and kind (cloud or not): each one doubles
+    /// the wait before the next (see [`backoff`]); a claim resets it. A cook that cannot claim (a
+    /// refused tool, a broken session) is not woken every 30 seconds forever.
+    misses: HashMap<(Uuid, bool), u32>,
+    /// Where the spawned cloud deliveries report a failed work wake.
+    failed: tokio::sync::mpsc::UnboundedSender<WakeFailure>,
 }
 
 /// The wait before waking a cook again for the same work: the coalescing window, doubled for each
@@ -291,6 +304,13 @@ fn backoff(base: Duration, misses: u32) -> Duration {
         .max(base)
 }
 
+/// When a wait asked for by an endpoint ends: at most an hour from now.
+fn deadline(wait: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(wait.min(Duration::from_secs(3600)))
+        .unwrap_or_else(|| now + Duration::from_secs(3600))
+}
+
 const TRIGGERS: &[&str] = &[
     "task.created",
     "task.released",
@@ -298,21 +318,29 @@ const TRIGGERS: &[&str] = &[
     "task.completed",
     "task.unblocked",
     "task.cancelled",
+    "task.restored",
+    "task.updated",
 ];
 
 impl Dispatcher {
-    fn new(state: AppState) -> Self {
-        Dispatcher {
-            state,
-            last_wake: HashMap::new(),
-            pending: HashSet::new(),
-            cloud: Vec::new(),
-            cloud_wait: HashMap::new(),
-            misses: HashMap::new(),
-        }
+    fn new(state: AppState) -> (Self, tokio::sync::mpsc::UnboundedReceiver<WakeFailure>) {
+        let (failed, rx) = tokio::sync::mpsc::unbounded_channel();
+        (
+            Dispatcher {
+                state,
+                last_wake: HashMap::new(),
+                pending: HashSet::new(),
+                cloud: Vec::new(),
+                retry: HashMap::new(),
+                cloud_wait: HashMap::new(),
+                misses: HashMap::new(),
+                failed,
+            },
+            rx,
+        )
     }
 
-    async fn run(mut self) {
+    async fn run(mut self, mut failures: tokio::sync::mpsc::UnboundedReceiver<WakeFailure>) {
         let mut rx = self.state.events.subscribe();
         // After a (re)start every project with ready work is considered once.
         if let Ok(projects) = sqlx::query_scalar::<_, Uuid>("select id from projects")
@@ -323,7 +351,14 @@ impl Dispatcher {
                 self.consider(p).await;
             }
         }
-        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        let sweep = self.state.config.cloud_sweep;
+        let mut tick = tokio::time::interval(Duration::from_secs(5).min(sweep));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Cloud cooks are fire and forget and no event may come for them: check every project with
+        // ready work on a timer too.
+        let mut sweeper = tokio::time::interval(sweep);
+        sweeper.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        sweeper.tick().await;
         loop {
             tokio::select! {
                 got = rx.recv() => match got {
@@ -335,10 +370,24 @@ impl Dispatcher {
                     }
                     Err(_) => return,
                 },
+                Some((target, agent, project, wait)) = failures.recv() => {
+                    // a work wake that did not get through: honour a wait it asked for, look again later
+                    let at = match wait {
+                        Some(w) => {
+                            let at = deadline(w);
+                            self.cloud_wait.insert(target, at);
+                            at
+                        }
+                        None => deadline(self.state.config.cloud_coalesce),
+                    };
+                    self.retry.insert((agent, project), at);
+                }
                 _ = tick.tick() => {
                     self.flush_pending().await;
+                    self.flush_retry().await;
                     self.flush_cloud().await;
                 }
+                _ = sweeper.tick() => self.sweep().await,
             }
         }
     }
@@ -367,7 +416,7 @@ impl Dispatcher {
             );
             let has_cloud: bool = sqlx::query_scalar(
                 "select exists (select 1 from wake_targets where agent_id = $1 and type = any($2)
-                   and (not $3 or config->>'takes_work' = 'true'))",
+                   and (not $3 or coalesce(config->>'on_call', 'false') <> 'true'))",
             )
             .bind(agent)
             .bind(crate::cloud::CLOUD_TYPES)
@@ -384,29 +433,39 @@ impl Dispatcher {
         if let Ok(Some((kind, _, Some(actor), _))) = &row
             && kind == "task.claimed"
         {
-            self.misses.remove(actor);
+            self.misses.remove(&(*actor, true));
+            self.misses.remove(&(*actor, false));
         }
         if let Ok(Some((kind, Some(project), actor, _))) = row
             && TRIGGERS.contains(&kind.as_str())
         {
             // The cook whose own action this was is in the middle of a turn and goes back to
             // claim_next by itself: waking it too would queue a duplicate, stale prompt.
-            self.consider_except(project, actor).await;
+            self.consider_for(project, actor, false).await;
         }
     }
 
-    async fn candidates(&self, project: Uuid, except: Option<Uuid>) -> Vec<Candidate> {
+    /// Cooks with a wake target that may take ready work in `project`. `cloud_only` (the sweep)
+    /// looks at cloud targets alone.
+    async fn candidates(
+        &self,
+        project: Uuid,
+        except: Option<Uuid>,
+        cloud_only: bool,
+    ) -> Vec<Candidate> {
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "select wt.id as target_id, a.id as agent_id, a.name as agent, a.runtime, wt.type as typ, wt.config,
+            "select wt.id as target_id, a.id as agent_id, a.name as agent, wt.type as typ, wt.config,
+                    coalesce(wt.labels, '{{}}') as labels,
                     (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) as busy
              from wake_targets wt
              join principals a on a.id = wt.agent_id and a.disabled_at is null
              join projects pr on pr.id = $1
              where exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = a.id)
                and ($2::uuid is null or a.id <> $2)
+               and (not $4 or wt.type = any($3))
                and (wt.projects is null or cardinality(wt.projects) = 0 or pr.key = any(wt.projects))
-               -- cloud targets are on call: new work wakes them only when they opted in
-               and (wt.type <> all($3) or wt.config->>'takes_work' = 'true')
+               -- a cloud target that is on call is started only when someone calls it
+               and (wt.type <> all($3) or coalesce(wt.config->>'on_call', 'false') <> 'true')
                and exists (select 1 from tasks t where t.project_id = pr.id
                       and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
                       and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
@@ -414,52 +473,94 @@ impl Dispatcher {
                       -- a cook scoped to some repositories is woken only for tasks about them (or about none)
                       and {scope}
                       -- not the task this cook just gave back, nor one waiting on an open PR
-                      and {takeable})
+                      and {takeable}
+                      -- a cloud cook is not woken again for a task it released until someone has touched it
+                      and case when wt.type = any($3) then not ({given_back}) else true end)
                and (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) < a.max_leases",
             scope = crate::repos::scope_sql("a.id"),
             takeable = crate::service::takeable_sql("a.id"),
+            given_back = crate::service::given_back_sql("a.id"),
         )))
         .bind(project)
         .bind(except)
         .bind(crate::cloud::CLOUD_TYPES)
+        .bind(cloud_only)
         .fetch_all(&self.state.db)
         .await
         .unwrap_or_default()
     }
 
     async fn consider(&mut self, project: Uuid) {
-        self.consider_except(project, None).await;
+        self.consider_for(project, None, false).await;
     }
 
-    async fn consider_except(&mut self, project: Uuid, except: Option<Uuid>) {
-        let cands = self.candidates(project, except).await;
-        let mut by_agent: HashMap<Uuid, Vec<Candidate>> = HashMap::new();
-        for c in cands {
-            by_agent.entry(c.agent_id).or_default().push(c);
+    /// Every project with a ready task is checked for cloud cooks that were not woken for it (no
+    /// event may come: a cook that finished one task of several, a target added later, a failed
+    /// delivery whose retry was dropped). Failed deliveries come back through [`Self::retry`].
+    async fn sweep(&mut self) {
+        let projects: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "select distinct t.project_id from tasks t where {}",
+            crate::service::READY_SQL
+        )))
+        .fetch_all(&self.state.db)
+        .await
+        .unwrap_or_default();
+        for p in projects {
+            self.consider_for(p, None, true).await;
         }
-        for (agent, targets) in by_agent {
-            let cloud = targets[0].runtime.as_deref() == Some("cloud");
+    }
+
+    /// Wake the cooks that may take work in `project`. A sweep (`sweep`, also used for retrying
+    /// failed deliveries) only looks at cloud targets, wakes a cook while its misses are below
+    /// [`SWEEP_MAX_MISSES`], and holds nothing back for later: the next sweep looks again.
+    async fn consider_for(&mut self, project: Uuid, except: Option<Uuid>, sweep: bool) {
+        let cands = self.candidates(project, except, sweep).await;
+        let mut by_agent: HashMap<(Uuid, bool), Vec<Candidate>> = HashMap::new();
+        for c in cands {
+            let cloud = crate::cloud::CLOUD_TYPES.contains(&c.typ.as_str());
+            by_agent.entry((c.agent_id, cloud)).or_default().push(c);
+        }
+        for ((agent, cloud), mut targets) in by_agent {
+            if cloud {
+                // a target that asked to wait (HTTP 429) is skipped until then
+                let n = targets.len();
+                targets.retain(|t| {
+                    !self
+                        .cloud_wait
+                        .get(&t.target_id)
+                        .is_some_and(|w| *w > Instant::now())
+                });
+                if targets.len() < n && !sweep {
+                    self.pending.insert((agent, project));
+                }
+                if targets.is_empty() {
+                    continue;
+                }
+            }
             let window = if cloud {
-                CLOUD_COALESCE
+                self.state.config.cloud_coalesce
             } else {
                 LOCAL_COALESCE
             };
-            let misses = self.misses.get(&agent).copied().unwrap_or(0);
+            let wakes = self.misses.get(&(agent, cloud)).copied().unwrap_or(0);
+            if sweep && wakes >= SWEEP_MAX_MISSES {
+                continue;
+            }
             let recently = self
                 .last_wake
-                .get(&agent)
-                .map(|t| t.elapsed() < backoff(window, misses))
+                .get(&(agent, cloud))
+                .map(|t| t.elapsed() < backoff(window, wakes.saturating_sub(1)))
                 .unwrap_or(false);
             // Cloud agents are never woken while they hold a lease: their session is already running.
             if recently || (cloud && targets[0].busy > 0) {
-                self.pending.insert((agent, project));
+                if !sweep {
+                    self.pending.insert((agent, project));
+                }
                 continue;
             }
-            // woken before and no claim since: this wake counts as one more miss
-            if self.last_wake.contains_key(&agent) {
-                *self.misses.entry(agent).or_default() += 1;
-            }
-            self.last_wake.insert(agent, Instant::now());
+            // one more wake in a row without a claim
+            *self.misses.entry((agent, cloud)).or_default() += 1;
+            self.last_wake.insert((agent, cloud), Instant::now());
             self.pending.remove(&(agent, project));
             for t in targets {
                 self.wake(project, t).await;
@@ -527,11 +628,16 @@ impl Dispatcher {
                     &text,
                 )
                 .await;
+                let deferred = matches!(&res, Err(f) if f.retry_after.is_some());
                 if let Err(f) = &res
                     && let Some(wait) = f.retry_after
                 {
-                    self.cloud_wait.insert(target, Instant::now() + wait);
+                    self.cloud_wait.insert(target, deadline(wait));
                     keep.extend(wakes.iter().map(|w| (agent, project, w.clone())));
+                }
+                if !deferred {
+                    // this run is the wake: the sweep must not start a second one within the window
+                    self.last_wake.insert((agent, true), Instant::now());
                 }
                 record_delivery(
                     &mut conn,
@@ -547,6 +653,25 @@ impl Dispatcher {
             }
         }
         self.cloud.extend(keep);
+    }
+
+    /// Failed work wakes whose wait has passed are looked at again, capped like a sweep.
+    async fn flush_retry(&mut self) {
+        let now = Instant::now();
+        let due: Vec<(Uuid, Uuid)> = self
+            .retry
+            .iter()
+            .filter(|(_, at)| **at <= now)
+            .map(|(k, _)| *k)
+            .collect();
+        let mut projects: HashSet<Uuid> = HashSet::new();
+        for k in due {
+            self.retry.remove(&k);
+            projects.insert(k.1);
+        }
+        for p in projects {
+            self.consider_for(p, None, true).await;
+        }
     }
 
     async fn flush_pending(&mut self) {
@@ -606,12 +731,17 @@ impl Dispatcher {
                     c.target_id,
                 );
                 let key2 = key.clone();
+                let labels = c.labels.clone();
+                let failed = self.failed.clone();
                 tokio::spawn(async move {
                     let Ok(mut conn) = state.db.acquire().await else {
+                        let _ = failed.send((target, agent_id, project, None));
                         return;
                     };
-                    let text =
-                        crate::cloud::work_text(&mut conn, agent_id, &agent, project, &key2).await;
+                    let text = crate::cloud::work_text(
+                        &mut conn, agent_id, &agent, project, &key2, &labels,
+                    )
+                    .await;
                     let res = crate::cloud::deliver(
                         &state,
                         Some(target),
@@ -622,6 +752,9 @@ impl Dispatcher {
                         &text,
                     )
                     .await;
+                    if let Err(f) = &res {
+                        let _ = failed.send((target, agent_id, project, f.retry_after));
+                    }
                     record_delivery(&mut conn, agent_id, project, &agent, &key2, &typ, 0, res)
                         .await;
                 });

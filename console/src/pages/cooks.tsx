@@ -377,7 +377,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
             {step === "who" && "Name the agent and say where it runs. Its token is made when you hire it."}
             {step === "where" && "The team decides which pots it sees; the lease limit is how many tasks it holds at once."}
             {step === "token" && "Copy the token now: it is shown once and the server keeps only a hash. Then paste the config where the agent runs."}
-            {step === "wake" && `${made?.name} runs in the cloud, so it is on call: started by a message, an @mention or a comment on its task. Pick how.`}
+            {step === "wake" && `${made?.name} runs in the cloud: started for ready work and when called by a message, an @mention or a comment on its task. Pick how.`}
           </DialogDescription>
         </FormSheetHead>
 
@@ -431,7 +431,7 @@ function NewCookSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
                     <Cloud className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
                     <span>
                       <span className="block text-[14px] font-medium">Cloud</span>
-                      <span className="block text-[12px] text-muted-foreground">On call: started by a message or mention</span>
+                      <span className="block text-[12px] text-muted-foreground">Started for ready work or a mention</span>
                     </span>
                   </button>
                 </div>

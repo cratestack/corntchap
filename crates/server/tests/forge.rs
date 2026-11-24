@@ -1180,7 +1180,7 @@ async fn cloud_cooks_start_on_ci_and_comments_but_on_merges_only_when_they_take_
             .post(
                 &w.root,
                 &format!("/agents/{name}/wake-targets"),
-                json!({"type": "webhook", "config": {"url": format!("{base}/hook/{name}"), "takes_work": work}}),
+                json!({"type": "webhook", "config": {"url": format!("{base}/hook/{name}"), "on_call": !work}}),
             )
             .await;
         assert_eq!(code, 200, "{r}");

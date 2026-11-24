@@ -1,6 +1,6 @@
-//! Cloud cooks: a Claude routine, a GitHub comment (@codex) and a signed webhook are on call. They
-//! start for a direct message, an @mention or a comment on their task, and for new work only when
-//! they opted in (takes_work). A broadcast or an answer to their question starts no run. Each
+//! Cloud cooks: a Claude routine, a GitHub comment (@codex) and a signed webhook. They start for
+//! a direct message, an @mention or a comment on their task, and for new work unless they are
+//! `on_call`. A broadcast or an answer to their question starts no run. Each
 //! prompt carries the context a fresh session needs; GitHub comments carry a pointer, never the
 //! messages.
 mod common;
@@ -146,7 +146,7 @@ async fn cloud_cooks_get_work_and_messages() {
         .post(
             &root,
             "/agents/claude-web/wake-targets",
-            json!({"type": "claude-routine", "config": {"url": format!("{base}/v1/claude_code/routines/trig_1/fire"), "token": "sk-ant-oat01-x", "takes_work": true}}),
+            json!({"type": "claude-routine", "config": {"url": format!("{base}/v1/claude_code/routines/trig_1/fire"), "token": "sk-ant-oat01-x"}}),
         )
         .await;
     assert_eq!(code, 200, "{added}");
@@ -159,13 +159,13 @@ async fn cloud_cooks_get_work_and_messages() {
     app.post(
         &root,
         "/agents/codex-cloud/wake-targets",
-        json!({"type": "github-comment", "config": {"repo": "acme/pay", "issue": 7, "token": "ghp_x", "api_url": base}}),
+        json!({"type": "github-comment", "config": {"repo": "acme/pay", "issue": 7, "token": "ghp_x", "api_url": base, "on_call": true}}),
     )
     .await;
     app.post(
         &root,
         "/agents/hooked/wake-targets",
-        json!({"type": "webhook", "config": {"url": format!("{base}/hook"), "secret": "s3cret"}}),
+        json!({"type": "webhook", "config": {"url": format!("{base}/hook"), "secret": "s3cret", "on_call": true}}),
     )
     .await;
     // the token and the secret are never shown back
@@ -176,15 +176,15 @@ async fn cloud_cooks_get_work_and_messages() {
             .await,
         "list",
     );
-    assert_eq!(r[0]["takesWork"], true, "{r}");
+    assert_eq!(r[0]["onCall"], false, "{r}");
     let r = ok(
         &app.mcp(&root, "list_wake_targets", json!({"cook": "hooked"}))
             .await,
         "list",
     );
-    assert_eq!(r[0]["takesWork"], false, "{r}");
+    assert_eq!(r[0]["onCall"], true, "{r}");
 
-    // new work: only the routine opted in, the others are on call
+    // new work: only the routine takes it, the others are on call
     app.post(
         &root,
         "/projects/PAY/tasks",

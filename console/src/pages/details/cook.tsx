@@ -286,7 +286,7 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
       title="Wake targets"
       hint={
         cloud
-          ? "A cloud cook is on call: it starts only for a direct message, an @mention or a comment on its task, or for new work if it takes new work."
+          ? "A cloud cook starts for ready work in its pots and when called (a direct message, an @mention or a comment on its task), unless it is set to be on call only."
           : "How an idle cook hears there is work: a fire on its machine wakes its sessions."
       }
     >
@@ -297,7 +297,7 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
       {rows.map((w) => {
         const kind = WAKE_KIND[w.type] ?? { title: w.type, icon: Cloud };
         const Icon = kind.icon;
-        const takes = w.config.takes_work === true;
+        const takes = w.config.on_call !== true;
         return (
           <GroupRow
             key={w.id}

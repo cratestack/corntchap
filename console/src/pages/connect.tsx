@@ -82,7 +82,7 @@ export function ConnectPage() {
   const [setup, setSetup] = useState<CloudSetup | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
-  const [takesWork, setTakesWork] = useState(false);
+  const [onCall, setOnCall] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   // phones show one step at a time; wider screens show the steps together
@@ -133,7 +133,7 @@ export function ConnectPage() {
         owner: v("owner"),
         organization: v("organization"),
         workspace: v("workspace"),
-        takesWork,
+        onCall,
       });
       setValues({});
       setSetup(next);
@@ -271,12 +271,12 @@ export function ConnectPage() {
                 </div>
               );
             })}
-            <label htmlFor="connect-takes-work" className="flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/40 p-3.5">
-              <Checkbox id="connect-takes-work" checked={takesWork} onCheckedChange={(c) => setTakesWork(c === true)} className="mt-0.5 size-5" />
+            <label htmlFor="connect-on-call" className="flex min-h-14 cursor-pointer items-start gap-3 rounded-xl border border-border bg-muted/40 p-3.5">
+              <Checkbox id="connect-on-call" checked={onCall} onCheckedChange={(c) => setOnCall(c === true)} className="mt-0.5 size-5" />
               <span className="space-y-0.5">
-                <span className="block text-[14px] font-medium">Also start it for new work</span>
+                <span className="block text-[14px] font-medium">Only when called (no new work)</span>
                 <span className="block text-[12.5px] leading-snug text-muted-foreground">
-                  Off: {s.cook} is on call. A direct message, an @mention or a comment on its task starts a run; broadcasts and answers to its questions do not (it reads answers on its next run). On: every ready task in its pots starts a run too.
+                  Off: {s.cook} starts for every ready task in its pots, and when called. On: only a direct message, an @mention or a comment on its task starts a run; broadcasts and answers to its questions do not (it reads answers on its next run).
                 </span>
               </span>
             </label>
