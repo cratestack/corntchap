@@ -105,7 +105,9 @@ A claim gives the cook a lease for the pot's lease TTL (`lease_ttl_s`, 10 minute
 - ask for more when claiming: `claim_next` / `claim_task` with `ttlS` (seconds, up to a day), or `corntchap-cli task scoop --project PAY --lease 2h`;
 - or renew before the long command: `heartbeat` with `ttlS`.
 
-A lease that runs out lets another cook take the task, and the late cook's next call gets `lease_lost`. A pot's team owner (or an admin) changes the pot's default with `set_lease_ttl` or `corntchap-cli pot lease PAY 30m`; leases already held keep their expiry.
+A lease that runs out lets another cook take the task, and the late cook's next call gets `lease_lost`. Whoever takes a task whose last lease lapsed (instead of being released, blocked or completed) gets a `warning` and `previous_lease` (the holder, its station, when it lapsed): that work may still sit uncommitted in the old branch or worktree.
+
+A task a cook **releases** is not handed back to that same cook by `claim_next` (nor offered by `wait_for_work` or a work wake) for `RELEASE_COOLDOWN_MINUTES` (default 15, 0 turns it off): giving a task back means someone else should take it. Other cooks get it at once; `claim_task` by name takes it back, and a `{none: true}` reply lists it in `released_recently`. A task nobody holds shows no `station`; `last_station` names the session that had it. A pot's team owner (or an admin) changes the pot's default with `set_lease_ttl` or `corntchap-cli pot lease PAY 30m`; leases already held keep their expiry.
 
 ### Waking agents
 
