@@ -1,0 +1,118 @@
+part of "../corntchap.cstack"
+
+// what_now: a station's briefing (src/what_now.rs).
+
+/// A task in the briefing. Read it in full with get_task.
+type NowTask {
+  /// Task id, e.g. PAY-42.
+  id String
+  title String
+  /// Higher is picked first by claim_next.
+  priority Int
+  /// The pot's repositories (aliases) the task is about; empty: any.
+  repos String[]
+  labels String[]
+  /// Held and parked tasks: the station that holds it.
+  station String?
+  /// Held tasks: when the lease runs out.
+  lease_expires_at String?
+  /// Stale claims: the cook whose lease lapsed.
+  holder String?
+  /// Stale claims: when it lapsed.
+  lapsed_at String?
+}
+
+/// Ready tasks about one of the pot's other repositories.
+type NowRepoGroup {
+  /// The repository's alias.
+  repo String
+  /// Where to clone it from.
+  url String?
+  default_branch String?
+  /// How many tasks are ready there for you.
+  count Int
+  /// The first three, best first.
+  top NowTask[]
+}
+
+/// A question in the pot's pool.
+type NowQuestion {
+  /// Question id, e.g. PAY-Q3.
+  id String
+  title String
+  /// The task it is about.
+  task String?
+  /// Who asked.
+  from String?
+}
+
+/// A people's comment on one of your tasks that you have not answered.
+type NowComment {
+  task String
+  author String?
+  excerpt String
+  at String
+}
+
+/// What waits on you.
+type NowWaiting {
+  /// Open questions addressed to you.
+  questions NowQuestion[]
+  /// Comments from people on your tasks, unanswered.
+  comments NowComment[]
+}
+
+/// Work that needs no checkout of any repository.
+type NowFolderFree {
+  /// Open questions in the pot that nobody picked (answer them, or relay them to your owner).
+  open_questions NowQuestion[]
+  open_questions_total Int
+  /// Epics and roadmaps with no subtasks yet: split them.
+  needs_split NowTask[]
+  /// Tasks labelled triage or docs.
+  triage NowTask[]
+  /// Claims whose lease lapsed with no pull request open: look for the work, then take or ask.
+  stale NowTask[]
+  /// Ready tasks that name no repository (not already in ready_here).
+  no_repo NowTask[]
+  /// Pantry changes since you last read it.
+  pantry_news Int
+}
+
+/// What a station should do now.
+type WhatNowView {
+  project String
+  cook String
+  /// The station asked about, when one was given.
+  station String?
+  /// The pot repository its folder is a checkout of, when known.
+  station_repo String?
+  station_directory String?
+  /// The session cannot leave its folder.
+  confined Boolean
+  /// Tasks you hold with a live lease (finish these first).
+  holding NowTask[]
+  /// Blocked tasks parked for you (waiting on a question you asked).
+  parked NowTask[]
+  /// Ready tasks you may claim that match this station's repo or name none: the top 5.
+  ready_here NowTask[]
+  ready_here_total Int
+  /// Ready tasks about the pot's other repositories, per repository.
+  ready_elsewhere NowRepoGroup[]
+  waiting_on_you NowWaiting
+  folder_free NowFolderFree
+  /// The pot's guide, how we work here (markdown), whole.
+  guide String?
+  /// ONE sentence: what to do now.
+  next String
+}
+
+/// A pot's guide after it was set.
+type PotGuide {
+  /// Pot key.
+  key String
+  /// The guide (markdown); absent when cleared.
+  guide String?
+  /// Its length in characters.
+  length Int
+}

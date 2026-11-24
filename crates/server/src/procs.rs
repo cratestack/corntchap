@@ -164,11 +164,11 @@ impl ProcedureRegistry for Procedures {
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        _a: whoami::Args,
+        a: whoami::Args,
         _z: whoami::Authorized,
     ) -> Result<whoami::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::whoami(&self.state.db, &p).await)
+        typed(service::whoami(&self.state.db, &p, a.project.as_deref()).await)
     }
 
     async fn project_overview(
@@ -1202,10 +1202,33 @@ impl ProcedureRegistry for Procedures {
                     directory: a.directory,
                     label: a.label,
                     repo: a.repo,
+                    confined: a.confined,
                 },
             )
             .await,
         )
+    }
+
+    async fn what_now(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: what_now::Args,
+        _z: what_now::Authorized,
+    ) -> Result<what_now::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::what_now::what_now(&self.state.db, &p, &a.project, a.station.as_deref()).await)
+    }
+
+    async fn set_pot_guide(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: set_pot_guide::Args,
+        _z: set_pot_guide::Authorized,
+    ) -> Result<set_pot_guide::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::what_now::set_guide(&self.state.db, &p, &a.project, &a.guide).await)
     }
 
     async fn station_list(

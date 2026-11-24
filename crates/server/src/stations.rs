@@ -26,7 +26,7 @@ pub const RUNTIMES: &[&str] = &[
 
 const STATION_JSON: &str = r#"jsonb_build_object(
   'id', st.ref, 'cook', a.name, 'project', pr.key, 'runtime', st.runtime, 'session', st.session_ref,
-  'directory', st.directory, 'repo', st.repo, 'label', st.label, 'main', st.main, 'created_at', st.created_at, 'last_woken_at', st.last_woken_at,
+  'directory', st.directory, 'repo', st.repo, 'confined', st.confined, 'label', st.label, 'main', st.main, 'created_at', st.created_at, 'last_woken_at', st.last_woken_at,
   'holding', coalesce((select jsonb_agg(pr.key || '-' || t.number order by t.number) from tasks t
       where t.station_id = st.id and t.status = 'claimed' and t.lease_expires_at > now()), '[]'::jsonb),
   'waiting', coalesce((select jsonb_agg(pr.key || '-' || t.number order by t.number) from tasks t
@@ -86,6 +86,10 @@ pub struct NewStation {
     pub label: Option<String>,
     /// The pot's repository (alias) the folder is a checkout of, when the CLI matched one.
     pub repo: Option<String>,
+    /// The session cannot leave its folder (a sandbox, a harness locked to one directory):
+    /// `claim_next` from it hands out only tasks about its `repo` or about none. `None` keeps what
+    /// the station had (a new station is not confined).
+    pub confined: Option<bool>,
 }
 
 /// Register (or move) a session as a station of a cook in a pot. The same session registered
@@ -122,12 +126,13 @@ pub async fn register(db: &PgPool, p: &Principal, n: NewStation) -> Result<Value
         None => None,
     };
     let id: Uuid = sqlx::query_scalar(
-        "insert into stations (ref, agent_id, project_id, runtime, session_ref, directory, label, created_by, repo)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        "insert into stations (ref, agent_id, project_id, runtime, session_ref, directory, label, created_by, repo, confined)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10, false))
          on conflict (agent_id, runtime, session_ref) do update
            set project_id = excluded.project_id, directory = coalesce(excluded.directory, stations.directory),
                label = coalesce(excluded.label, stations.label),
                repo = case when excluded.project_id = stations.project_id then coalesce(excluded.repo, stations.repo) else excluded.repo end,
+               confined = coalesce($10, stations.confined),
                main = stations.main and stations.project_id = excluded.project_id
          returning id",
     )
@@ -140,9 +145,12 @@ pub async fn register(db: &PgPool, p: &Principal, n: NewStation) -> Result<Value
     .bind(n.label.as_deref().map(str::trim).filter(|l| !l.is_empty()))
     .bind(p.id)
     .bind(repo)
+    .bind(n.confined)
     .fetch_one(&mut *tx)
     .await?;
-    let out = one(&mut tx, id).await?;
+    let mut out = one(&mut tx, id).await?;
+    // how we work here: the start of the pot's guide comes with the registration
+    out["guide"] = json!(crate::what_now::guide_excerpt(&mut tx, pr.id).await?);
     tx.commit().await?;
     Ok(out)
 }
@@ -433,6 +441,18 @@ pub async fn for_claim(
     }
 }
 
+/// The repository a confined station is tied to: `claim_next` from it hands out only tasks about
+/// that repository or about none. `None` for a station that may leave its folder (or knows no repo).
+pub async fn confined_repo(c: &mut PgConnection, station: Option<Uuid>) -> Result<Option<String>> {
+    let Some(id) = station else { return Ok(None) };
+    let row: Option<Option<String>> =
+        sqlx::query_scalar("select repo from stations where id = $1 and confined")
+            .bind(id)
+            .fetch_optional(c)
+            .await?;
+    Ok(row.flatten())
+}
+
 /// For the dispatcher: an idle station of this cook in this pot (holds no live lease and waits
 /// on no question), least recently woken first, marked as woken now. `Ok(None)` with
 /// `has_any == true` means every station is busy: do not wake.
@@ -467,16 +487,25 @@ pub async fn pick_for_wake(
     if full {
         return Ok((true, None));
     }
-    let row: Option<(String, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+    let row: Option<(String, String, String, Option<String>, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "update stations set last_woken_at = now() where id = (
            select st.id from stations st
            where st.agent_id = $1 and st.project_id = $2
              and not exists (select 1 from tasks t where t.station_id = st.id
                   and ((t.status = 'claimed' and t.lease_expires_at > now()) or (t.status = 'blocked' and t.reserved_for is not null)))
+             -- a confined station is woken only when work it may take is ready: the others get
+             -- the work about other repositories
+             and (not st.confined or st.repo is null or exists (
+                  select 1 from tasks t where t.project_id = $2 and {ready}
+                    and (cardinality(t.repos) = 0 or st.repo = any(t.repos))
+                    and {scope} and {takeable}))
            order by st.main desc, st.last_woken_at nulls first, st.created_at limit 1
            for update skip locked)
          returning ref, runtime, session_ref, directory, label",
-    )
+        ready = crate::service::READY_SQL,
+        scope = crate::repos::scope_sql("$1"),
+        takeable = crate::service::takeable_sql("$1"),
+    )))
     .bind(agent)
     .bind(project)
     .fetch_optional(&mut *c)

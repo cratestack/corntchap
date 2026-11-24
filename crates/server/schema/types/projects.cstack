@@ -11,6 +11,8 @@ type ProjectSummary {
   repos RepoView[]
   team String?
   lease_ttl_s Float
+  /// The pot's guide (how we work here, markdown), whole.
+  guide String?
   open Int
   ready Int
   claimed Int
@@ -45,6 +47,8 @@ type WhoamiView {
   teams TeamRole[]
   projects String[]
   current_leases TaskView[]
+  /// The first 1500 characters of the guide of the pot in scope (how we work here); read the rest with what_now.
+  guide String?
 }
 
 /// One of a pot's repositories.

@@ -1311,6 +1311,12 @@ pub async fn wake(
                 .join(", ")
         ),
     };
+    let hint = crate::what_now::wake_hint(&mut *c, project, key).await;
+    let text = if hint.is_empty() {
+        text
+    } else {
+        format!("{text}\n\n{hint}")
+    };
     let text = text.as_str();
     // A cook can run several sessions: tell this one who it is, so its answer says so.
     let text = match st.as_ref().and_then(|s| s["id"].as_str()) {
