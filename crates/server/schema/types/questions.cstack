@@ -8,6 +8,15 @@ type QuestionNote {
   at String
 }
 
+/// One answer proposal of a question.
+type QuestionChoice {
+  /// Short slug, unique within the question; what an answer refers to.
+  id String
+  label String
+  /// One line of context; cards usually have none.
+  description String?
+}
+
 /// A question in a pot's pool.
 type QuestionView {
   /// Question id, e.g. PAY-Q3.
@@ -20,8 +29,23 @@ type QuestionView {
   station String?
   /// Addressed to this person or cook (else to the pot's people).
   to String?
+  /// The title and the description together, for older readers.
   body String
-  /// Suggested answers, if the asker offered some.
+  /// The short question, one line.
+  title String
+  /// Context, markdown (may be empty).
+  description String
+  /// single (radio), multiple (checkboxes), free (free-form text) or cards (radio cards).
+  kind String
+  /// The answer proposals, in order (empty for free).
+  choices QuestionChoice[]
+  /// single, multiple and cards: the answerer may type their own answer too.
+  allow_other Boolean
+  /// multiple: the fewest choices, when set.
+  min Int?
+  /// multiple: the most choices, when set.
+  max Int?
+  /// The labels of the choices, for older readers.
   options String[]
   /// The asker parked its task until the answer.
   wait Boolean
@@ -29,7 +53,12 @@ type QuestionView {
   status String
   /// The cook currently asking it in a chat (held for a few minutes).
   picked_by String?
+  /// The answer as text ("Names only", "Names and SKUs, Prices, plus: also tags").
   answer String?
+  /// The ids of the chosen choices.
+  answer_choices String[]
+  /// The typed answer: the whole answer of a free question, or the other answer.
+  answer_text String?
   /// Who answered (for a relayed answer: the person, not the cook).
   answered_by String?
   /// The cook that relayed the answer from its owner's chat, if any.

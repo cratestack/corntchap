@@ -520,9 +520,16 @@ async fn questions_ask(
 ) -> J {
     let a = questions::Ask {
         project: Some(k),
-        body: req_s(&b, "question")?,
-        task: s(&b, "task"),
+        title: s(&b, "title"),
+        description: s(&b, "description"),
+        body: s(&b, "question"),
+        kind: s(&b, "kind"),
+        choices: b.get("choices").cloned(),
         options: arr(&b, "options"),
+        allow_other: b["allow_other"].as_bool().unwrap_or(false),
+        min: b["min"].as_i64(),
+        max: b["max"].as_i64(),
+        task: s(&b, "task"),
         to: s(&b, "to"),
         wait: b["wait"].as_bool().unwrap_or(false),
         station: s(&b, "station"),
@@ -545,7 +552,12 @@ async fn questions_answer(
     Path(id): Path<String>,
     Json(b): Json<Value>,
 ) -> J {
-    ok(questions::answer(&st.db, &p.worker()?, &id, &req_s(&b, "answer")?, false).await?)
+    let reply = questions::Reply {
+        choices: b.get("choices").cloned(),
+        text: s(&b, "text"),
+        answer: s(&b, "answer"),
+    };
+    ok(questions::answer(&st.db, &p.worker()?, &id, reply, false).await?)
 }
 async fn questions_note(
     State(st): State<AppState>,
@@ -562,7 +574,14 @@ async fn questions_dismiss(
     body: Option<Json<Value>>,
 ) -> J {
     let reason = body.and_then(|Json(b)| s(&b, "reason")).unwrap_or_default();
-    ok(questions::answer(&st.db, &p.worker()?, &id, &reason, true).await?)
+    ok(questions::answer(
+        &st.db,
+        &p.worker()?,
+        &id,
+        questions::Reply::plain(&reason),
+        true,
+    )
+    .await?)
 }
 async fn questions_release(
     State(st): State<AppState>,

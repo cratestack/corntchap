@@ -1260,9 +1260,16 @@ impl ProcedureRegistry for Procedures {
                 &p,
                 questions::Ask {
                     project: a.project,
+                    title: a.title,
+                    description: a.description,
                     body: a.question,
-                    task: a.task,
+                    kind: a.kind,
+                    choices: a.choices.map(serde_json::Value::String),
                     options: lines(&a.options),
+                    allow_other: a.allowOther.unwrap_or(false),
+                    min: a.min,
+                    max: a.max,
+                    task: a.task,
                     to: a.to,
                     wait: a.wait.unwrap_or(false),
                     station: a.station,
@@ -1329,7 +1336,20 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<question_answer::Output, CratestackError> {
         let p = principal(ctx)?;
         let db = &self.state.db;
-        typed(questions::answer(db, &p, &a.id, &a.answer, false).await)
+        typed(
+            questions::answer(
+                db,
+                &p,
+                &a.id,
+                questions::Reply {
+                    choices: a.choices.map(serde_json::Value::String),
+                    text: a.text,
+                    answer: a.answer,
+                },
+                false,
+            )
+            .await,
+        )
     }
 
     async fn question_release(
@@ -1365,7 +1385,16 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<question_dismiss::Output, CratestackError> {
         let p = principal(ctx)?;
         let db = &self.state.db;
-        typed(questions::answer(db, &p, &a.id, a.reason.as_deref().unwrap_or(""), true).await)
+        typed(
+            questions::answer(
+                db,
+                &p,
+                &a.id,
+                questions::Reply::plain(a.reason.as_deref().unwrap_or("")),
+                true,
+            )
+            .await,
+        )
     }
 
     async fn file_create_upload(
