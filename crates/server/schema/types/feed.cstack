@@ -49,12 +49,23 @@ type ChangePayload {
   failing String?
   /// forge.review and forge.comment: who wrote it, and the start of what they wrote.
   author String?
+  /// review.done: the start of the verdict body.
   excerpt String?
   /// forge.review: approved, changes_requested or commented.
   review String?
   /// forge.comment: the file and line of an inline comment.
   path String?
   line Int?
+  /// review.* events: the review id, e.g. PAY-R3.
+  review_id String?
+  /// review.requested: who was asked (empty: anyone on the team).
+  reviewer String?
+  /// review.*: which time the task is reviewed (1, 2, ...).
+  round Int?
+  /// review.requested: what to look at (first line).
+  note String?
+  /// review.done: approved, changes_requested or commented.
+  verdict String?
 }
 
 type ChangeView {

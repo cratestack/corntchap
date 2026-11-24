@@ -1,0 +1,41 @@
+part of "../corntchap.cstack"
+
+// Reviews of a task's work (src/reviews.rs).
+
+/// One review request and, once given, its verdict.
+type ReviewView {
+  /// Review id, e.g. PAY-R3.
+  id String
+  project String
+  /// The task under review, e.g. PAY-42.
+  task String
+  task_title String
+  /// 1 for the first time the task is reviewed; one more after each verdict.
+  round Int
+  /// requested, approved, changes_requested, commented or cancelled.
+  state String
+  requested_by String?
+  /// The one asked; empty: anyone in the pot's team except the one who asked.
+  reviewer String?
+  /// Who gave the verdict.
+  reviewed_by String?
+  /// What to look at: a pull request address, a branch.
+  note String
+  /// The verdict's text.
+  body String?
+  created_at String
+  decided_at String?
+  updated_at String
+}
+
+/// A task's latest review round, for boards and lists.
+type ReviewSummary {
+  id String
+  round Int
+  state String
+  reviewer String?
+  reviewed_by String?
+  requested_by String?
+  /// When it was asked, or decided.
+  at String
+}

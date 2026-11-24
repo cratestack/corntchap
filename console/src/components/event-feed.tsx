@@ -19,6 +19,7 @@ import {
   RotateCcw,
   Soup,
   MessageCircleQuestion,
+  ClipboardCheck,
   CircleCheck,
   CircleX,
   Paperclip,
@@ -80,6 +81,17 @@ export function describe(e: ChangeView): Described {
       return { icon: CircleX, tone: "text-muted-foreground", verb: "dismissed", detail: p.answer ?? undefined };
     case "question.noted":
       return { icon: MessageSquare, tone: "text-muted-foreground", verb: "added a note to", detail: p.title ?? undefined };
+    case "review.requested":
+      return { icon: ClipboardCheck, tone: "text-primary", verb: p.reviewer ? `asked ${p.reviewer} to review` : "asked the team to review", detail: [p.review_id, p.round && p.round > 1 ? `round ${p.round}` : null, p.note].filter(Boolean).join(" · ") || undefined };
+    case "review.done":
+      return {
+        icon: p.verdict === "approved" ? CircleCheck : p.verdict === "changes_requested" ? CircleX : MessageSquare,
+        tone: p.verdict === "approved" ? "text-success" : p.verdict === "changes_requested" ? "text-destructive" : "text-muted-foreground",
+        verb: p.verdict === "approved" ? "approved" : p.verdict === "changes_requested" ? "asked for changes on" : "commented on the review of",
+        detail: [p.review_id, p.excerpt].filter(Boolean).join(" · ") || undefined,
+      };
+    case "review.cancelled":
+      return { icon: CircleX, tone: "text-muted-foreground", verb: "withdrew the review request on", detail: p.review_id ?? undefined };
     case "task.unblocked":
       return { icon: Unlock, tone: "text-primary", verb: "unblocked" };
     case "task.cancelled":

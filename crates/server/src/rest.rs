@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     admin,
     error::{Error, Result},
-    files, menus, pantry, questions,
+    files, menus, pantry, questions, reviews,
     service::{self, NewTask, TaskEdit},
     state::{AppState, Principal},
     stations, stream,
@@ -90,6 +90,11 @@ pub fn routes() -> Router<AppState> {
         .route("/questions/{id}/dismiss", post(questions_dismiss))
         .route("/questions/{id}/release", post(questions_release))
         .route("/questions/pick", post(questions_pick))
+        .route("/projects/{key}/reviews", get(reviews_list))
+        .route("/tasks/{id}/review-request", post(reviews_request))
+        .route("/tasks/{id}/review", post(reviews_verdict_task))
+        .route("/reviews/{id}/verdict", post(reviews_verdict))
+        .route("/reviews/{id}/cancel", post(reviews_cancel))
         .route("/events/stream", get(stream::events_stream))
         .route("/wait", get(wait))
         .route("/agents", get(agents_list).post(agents_add))
@@ -1019,4 +1024,76 @@ async fn targets_add(
 }
 async fn targets_delete(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<Uuid>) -> J {
     ok(admin::delete_wake_target(&st.db, &p, id).await?)
+}
+
+// ---- reviews ----
+/// `?mine=true&state=&task=`
+async fn reviews_list(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    let mine = q.get("mine").is_some_and(|v| v == "true" || v == "1");
+    ok(reviews::list(
+        &st.db,
+        &p.worker()?,
+        &k,
+        mine,
+        q.get("state").map(|x| x.as_str()),
+        q.get("task").map(|x| x.as_str()),
+    )
+    .await?)
+}
+/// `{"reviewer": "bob", "note": "..."}`
+async fn reviews_request(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(reviews::request(
+        &st.db,
+        &p.worker()?,
+        &id,
+        s(&b, "reviewer").as_deref(),
+        s(&b, "note").as_deref(),
+    )
+    .await?)
+}
+/// `{"verdict": "approve|changes|comment", "body": "..."}` on the review waiting on the caller.
+async fn reviews_verdict_task(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(reviews::give(
+        &st.db,
+        &p.worker()?,
+        None,
+        Some(&id),
+        &req_s(&b, "verdict")?,
+        s(&b, "body").as_deref(),
+    )
+    .await?)
+}
+async fn reviews_verdict(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(reviews::give(
+        &st.db,
+        &p.worker()?,
+        Some(&id),
+        None,
+        &req_s(&b, "verdict")?,
+        s(&b, "body").as_deref(),
+    )
+    .await?)
+}
+async fn reviews_cancel(State(st): State<AppState>, Authn(p): Auth, Path(id): Path<String>) -> J {
+    ok(reviews::cancel(&st.db, &p.worker()?, &id).await?)
 }

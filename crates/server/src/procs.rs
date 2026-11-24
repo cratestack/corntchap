@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     activity, admin, connect,
     error::Error,
-    files, menus, pantry, pass, questions,
+    files, menus, pantry, pass, questions, reviews,
     schema::cratestack_schema::{self, procedures::*},
     service,
     state::{AppState, Principal},
@@ -1276,6 +1276,79 @@ impl ProcedureRegistry for Procedures {
             )
             .await,
         )
+    }
+
+    async fn review_request(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: review_request::Args,
+        _z: review_request::Authorized,
+    ) -> Result<review_request::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            reviews::request(
+                &self.state.db,
+                &p,
+                &a.task,
+                a.reviewer.as_deref(),
+                a.note.as_deref(),
+            )
+            .await,
+        )
+    }
+
+    async fn review_verdict(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: review_verdict::Args,
+        _z: review_verdict::Authorized,
+    ) -> Result<review_verdict::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            reviews::give(
+                &self.state.db,
+                &p,
+                a.id.as_deref(),
+                a.task.as_deref(),
+                &a.verdict,
+                a.body.as_deref(),
+            )
+            .await,
+        )
+    }
+
+    async fn review_list(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: review_list::Args,
+        _z: review_list::Authorized,
+    ) -> Result<review_list::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            reviews::list(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.mine.unwrap_or(false),
+                a.state.as_deref(),
+                a.task.as_deref(),
+            )
+            .await,
+        )
+    }
+
+    async fn review_cancel(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: review_cancel::Args,
+        _z: review_cancel::Authorized,
+    ) -> Result<review_cancel::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(reviews::cancel(&self.state.db, &p, &a.id).await)
     }
 
     async fn question_ask(

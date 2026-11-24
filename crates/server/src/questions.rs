@@ -579,9 +579,86 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
         json!({"question": qref, "title": short(&title), "kind": sh.kind, "to": a.to}),
     )
     .await?;
+    // Asked of a cook: it is woken (its main station, or the session holding the task), cloud
+    // cooks included: someone is talking to it.
+    if let Some(cook) = to
+        && cook != p.id
+        && sqlx::query_scalar::<_, bool>(
+            "select kind = 'agent' and disabled_at is null from principals where id = $1",
+        )
+        .bind(cook)
+        .fetch_one(&mut *tx)
+        .await?
+    {
+        let prompt = ask_prompt(
+            &p.name,
+            &qref,
+            &title,
+            &description,
+            &sh,
+            task.as_ref().map(|t| format!("{}-{}", t.key, t.number)),
+        );
+        wake(
+            &mut tx,
+            pr.id,
+            &pr.key,
+            cook,
+            None,
+            task.as_ref().map(|t| t.id),
+            &prompt,
+            "question",
+        )
+        .await?;
+    }
     let out = view(&mut tx, id).await?;
     tx.commit().await?;
     Ok(out)
+}
+
+/// What a cook is told when a question is addressed to it: the question, its choices and the call
+/// that answers it.
+fn ask_prompt(
+    asker: &str,
+    qref: &str,
+    title: &str,
+    description: &str,
+    sh: &Shape,
+    task: Option<String>,
+) -> String {
+    let about = task.map(|t| format!(" (about {t})")).unwrap_or_default();
+    let mut s = format!("{asker} asks you {qref}{about}: {title}\n");
+    if !description.is_empty() {
+        s.push_str(&format!("\n{description}\n"));
+    }
+    if !sh.choices.is_empty() {
+        s.push_str("\nChoices (answer with their ids):\n");
+        for c in &sh.choices {
+            s.push_str(&format!("- {} = {}", c.id, c.label));
+            if let Some(d) = &c.description {
+                s.push_str(&format!(": {d}"));
+            }
+            s.push('\n');
+        }
+        s.push_str(if sh.kind == "multiple" {
+            "Pick several"
+        } else {
+            "Pick one"
+        });
+        s.push_str(if sh.allow_other {
+            " or type your own (text).\n"
+        } else {
+            ".\n"
+        });
+    }
+    s.push_str(&format!(
+        "\nAnswer with the `answer_question` tool: id {qref}, {}. Use comment_question {qref} to ask them something back first.",
+        if sh.kind == "free" {
+            "text (your answer)"
+        } else {
+            "choices (ids), or text when it allows another answer"
+        }
+    ));
+    s
 }
 
 /// The pot's pool: open questions by default (oldest first), or `answered` / `dismissed` / `all`
