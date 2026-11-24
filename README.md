@@ -152,6 +152,21 @@ A cook has at most one main station per pot. `station scan` keeps it, and moving
 
 `scan` looks for OpenCode sessions (v2 API; the 1.x API as a fallback), Claude Code sessions (`~/.claude/projects/<dir>/<id>.jsonl`) and Codex sessions (`~/.codex/sessions/**/rollout-*.jsonl`), and registers the most recent one per runtime and folder (`--all`: every session). The cook of each runtime is your cook of that `kind` (`--cook` to choose, `--pot` to override the pot). The fire then resumes the session with built-in defaults: OpenCode through its server API, Claude Code with `claude -p --resume <session>` and Codex with `codex exec resume <session> -`, prompt on stdin and the station's folder as the working directory. A `[[target]]` for the cook is only a fallback (wakes that name no station; `adapter = "webhook"`) and may refine a station's runtime (an OpenCode `password_env`, a custom `command` containing `{session}`).
 
+#### Your folder is where you start, not a fence
+
+A session registered in one folder is not limited to its tasks. `what_now` (MCP tool; `corntchap-cli what-now [--pot PAY] [--station st_...]`; REST `GET /api/projects/PAY/what-now?station=st_...`) briefs a cook and station in one pot, short and actionable:
+
+- `holding` and `parked`: what it holds with a live lease, and blocked tasks parked for it;
+- `ready_here`: the top 5 ready tasks it may claim that are about this station's repository or about none (the same rules as `claim_next`);
+- `ready_elsewhere`: ready tasks about the pot's other repositories, per repository: count, the top 3, and the repository's url and default branch, so the session knows what to check out;
+- `waiting_on_you`: open questions addressed to it, and people's comments on its tasks it has not answered;
+- `folder_free`: work that needs no checkout: open questions nobody picked, epics with no subtasks, triage and docs tasks, stale claims (a lapsed lease and no pull request), repository-less tasks, the pantry news;
+- `guide`: the pot's guide, and `next`: ONE sentence, chosen in a fixed order: finish what you hold, answer what waits on you, claim what is ready for your folder, folder-free work, ready work elsewhere (open a worktree or clone of that repository next to your folder, never inside another session's worktree), else `wait_for_work`.
+
+A session that cannot leave its folder (a sandbox, a harness locked to one directory) registers as **confined**: `corntchap-cli station scan --confined` (also `station add` and `station start`), or `register_station` with `confined: true`. `claim_next` from a confined station with a known repository hands out only tasks about that repository or about none, and the dispatcher wakes it only when such work is ready; other stations get the other repositories' work. Without `confined`, routing is unchanged.
+
+**The pot guide** is "how we work here", written by people for agents (markdown, up to 20 000 characters): conventions, what to do first, where the work is. The pot's team owners and admins set it on the pot's About page in the console (editor with preview), with `corntchap-cli pot guide PAY --file guide.md` (`--clear`; without either it prints it), or with the `set_pot_guide` tool. `what_now` returns it whole; `register_station` and `whoami` (with a project, which a pot's MCP URL supplies) carry its first 1 500 characters, and wake prompts say "This pot has a guide: call what_now".
+
 #### Starting new sessions, and opening them in Claude Desktop
 
 Claude Code sessions can also be started for a cook, on that person's subscription, by their own `claude`:
@@ -339,7 +354,7 @@ All of this is optional: a pot with no repository, a task that names none and a 
 - **Tasks name repositories.** `task add PAY "title" --repo backend --repo web` (MCP `create_task` / `update_task` `repos`, the console's New task and edit forms). Names are checked against the pot's. No repository means any.
 - **Cooks can be scoped.** `cook repos NAME --pot PAY backend web` (a cook may set its own with `set_cook_repos`; none given means all). `claim_next` then skips tasks whose repositories do not overlap the scope; a task with no repository goes to anyone, an unscoped cook takes anything, `claim_task` on a named task is never refused (it warns). Work wakes, `wait_for_work` and the dispatcher follow the same rule.
 - **Splitting.** `task split PAY-7` (MCP `split_by_repo`) makes one subtask per repository the task names, titled `[backend] ...`; the task waits for them.
-- **Stations.** `station scan` and `station start` match a checkout's `origin` against any repository of any pot and record its name on the station (shown in `list_stations` and the console). Stations do not scope claims; the cook's scope does.
+- **Stations.** `station scan` and `station start` match a checkout's `origin` against any repository of any pot and record its name on the station (shown in `list_stations` and the console). Stations do not scope claims unless they are confined (see "Your folder is where you start"); the cook's scope does.
 - **Dependencies between repositories.** `project repo link PAY app --on backend [--mode notify|task]` says `app` depends on `backend` (`unlink` removes it; MCP `link_repo`, `unlink_repo`). When a task naming `backend` is served (`complete`), for each dependent repository not named by the task itself: with `notify` (default) the cooks scoped to `app` are woken with the result (unscoped cooks are not) and a comment on the served task and a `task.propagated` event in the activity say who was told; with `task` a follow-up task `[app] Follow up on PAY-12: ...` for `app` is opened on the same menu. One hop: a follow-up does not propagate when served, so cycles never loop. Pass `noPropagate` (`task complete --no-propagate`) when nothing downstream is affected. A cloud cook is started by an upstream wake only if its wake target takes work.
 
 ### GitHub (and other forges)

@@ -4,7 +4,7 @@ use authkestra::axum::Auth as Authn;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -34,6 +34,8 @@ pub fn routes() -> Router<AppState> {
         .route("/projects", get(projects_list).post(projects_add))
         .route("/projects/{key}/tasks", get(tasks_list).post(tasks_add))
         .route("/projects/{key}/claim-next", post(claim_next))
+        .route("/projects/{key}/what-now", get(what_now))
+        .route("/projects/{key}/guide", put(set_guide))
         .route("/projects/{key}/repos", post(repos_add))
         .route("/projects/{key}/repos/{name}", delete(repos_remove))
         .route(
@@ -135,8 +137,12 @@ fn ok(v: Value) -> J {
     Ok(Json(v))
 }
 
-async fn me(State(st): State<AppState>, Authn(p): Auth) -> J {
-    ok(service::whoami(&st.db, &p).await?)
+async fn me(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    ok(service::whoami(&st.db, &p, q.get("project").map(|k| k.as_str())).await?)
 }
 
 /// Change your own handle: `{"name": "<new handle>"}`. People only.
@@ -529,6 +535,7 @@ async fn stations_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<
         directory: s(&b, "directory"),
         label: s(&b, "label"),
         repo: s(&b, "repo"),
+        confined: b["confined"].as_bool(),
     };
     ok(stations::register(&st.db, &p.worker()?, n).await?)
 }
@@ -942,6 +949,37 @@ async fn changes(
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(200);
     let project = q.get("project").map(|k| k.to_uppercase());
     ok(service::changes_since(&st.db, &p.worker()?, cursor, project.as_deref(), limit).await?)
+}
+/// `?station=st_...`: what the station should do now (see `what_now`).
+async fn what_now(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    ok(crate::what_now::what_now(
+        &st.db,
+        &p.worker()?,
+        &k,
+        q.get("station").map(|x| x.as_str()),
+    )
+    .await?)
+}
+
+/// `{guide: "<markdown>"}`: set (or, empty, clear) the pot's guide. Team owners and admins.
+async fn set_guide(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(k): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::what_now::set_guide(
+        &st.db,
+        &p.worker()?,
+        &k,
+        &s(&b, "guide").unwrap_or_default(),
+    )
+    .await?)
 }
 async fn wait(
     State(st): State<AppState>,

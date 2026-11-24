@@ -29,6 +29,12 @@ pub fn release_cooldown_secs() -> u64 {
 /// wake it. `claim_task` by name still takes it (with a warning).
 pub const NO_OPEN_PR_SQL: &str = "not exists (select 1 from forge_prs fp where fp.task_id = t.id and fp.state = 'open' and not fp.unlinked)";
 
+/// SQL predicate on `t` (tasks): open, every dependency and subtask finished (ready to claim,
+/// before the routing and cooldown rules).
+pub const READY_SQL: &str = "t.status = 'open'
+  and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled'))
+  and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))";
+
 /// SQL predicate on `t` (tasks): what `claim_next`, `wait_for_work` and work wakes hand `agent`
 /// beyond the routing rules: not a task it released a moment ago, not one with an open PR.
 pub fn takeable_sql(agent: &str) -> String {
@@ -266,6 +272,7 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
             'repos', {repos},
             'team', (select name from teams where id = pr.team_id),
             'lease_ttl_s', extract(epoch from pr.lease_ttl)::float8,
+            'guide', pr.guide,
             'open', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'open'),
             'ready', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'open'
                 and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))),
@@ -527,6 +534,7 @@ pub async fn claim_next(
     let pr = project_by_key(&mut tx, p, project).await?;
     let ttl = lease_ttl(ttl_s, pr.ttl_secs);
     let st = crate::stations::for_claim(&mut tx, p, station, pr.id).await?;
+    let only_repo = crate::stations::confined_repo(&mut tx, st).await?;
     let menu = menu.map(crate::menus::slug).filter(|m| !m.is_empty());
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
         .bind(p.id.to_string())
@@ -547,6 +555,7 @@ pub async fn claim_next(
                              where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
              and (cardinality($4::text[]) = 0 or t.labels && $4::text[])
              and ($5::text is null or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
+             and ($7::text is null or cardinality(t.repos) = 0 or $7 = any(t.repos))
              and {scope} and {takeable}
            order by t.priority desc, t.created_at
            for update of t skip locked limit 1)
@@ -563,6 +572,7 @@ pub async fn claim_next(
     .bind(labels)
     .bind(menu)
     .bind(st)
+    .bind(only_repo)
     .fetch_optional(&mut *tx)
     .await?;
     let Some((id, epoch, exp, was_status, was_holder, was_expiry)) = row else {
@@ -1276,7 +1286,7 @@ pub async fn human_transition(
     Ok(out)
 }
 
-pub async fn whoami(db: &PgPool, p: &Principal) -> Result<Value> {
+pub async fn whoami(db: &PgPool, p: &Principal, project: Option<&str>) -> Result<Value> {
     let teams: Vec<Value> = sqlx::query_scalar(
         "select jsonb_build_object('name', t.name, 'role', tm.role) from team_members tm join teams t on t.id = tm.team_id
          where tm.principal_id = $1 order by t.name",
@@ -1299,7 +1309,16 @@ pub async fn whoami(db: &PgPool, p: &Principal) -> Result<Value> {
         .bind(p.id)
         .fetch_all(db)
         .await?;
+    let guide = match project.map(str::trim).filter(|k| !k.is_empty()) {
+        Some(k) => {
+            let mut c = db.acquire().await?;
+            let pr = project_by_key(&mut c, p, &k.to_uppercase()).await?;
+            crate::what_now::guide_excerpt(&mut c, pr.id).await?
+        }
+        None => None,
+    };
     Ok(json!({
+        "guide": guide,
         "name": p.name, "display_name": display_name, "kind": p.kind, "agent_kind": p.agent_kind, "runtime": p.runtime,
         "is_admin": p.is_admin, "max_leases": p.max_leases, "grants": p.grants,
         "teams": teams,

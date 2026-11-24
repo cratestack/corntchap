@@ -75,7 +75,16 @@ repositories, name them in `repos` on create_task / update_task; claim_next resp
 scope (set_cook_repos: you may declare which repositories you handle), so you are given only tasks about \
 those or about none. split_by_repo turns a task naming several repositories into one subtask each. \
 Serving a task (complete) in a repository others depend on (link_repo) tells their cooks, or opens a \
-follow-up task for them; pass noPropagate=true when nothing downstream is affected.";
+follow-up task for them; pass noPropagate=true when nothing downstream is affected. \
+Your folder is where you start, not a fence. Call what_now (with your station) when you start, when \
+you are idle and when someone asks what you are doing: it lists what you hold, what waits on you, \
+ready tasks for your folder, ready tasks in the pot's other repositories (with the url to clone), \
+work that needs no checkout, the pot's guide (how we work here), and `next`, one sentence. A station \
+may take work in another repository of the pot by opening a worktree or clone of it next to its \
+folder (never inside another session's worktree). A session that cannot leave its folder says so: \
+register_station with confined=true. It then does folder-free work: triage and split epics, answer \
+and ask questions, review, keep the pantry, check stale claims. Never answer \"nothing to do\" while \
+what_now lists something.";
 
 pub struct Compat<T> {
     tools: T,

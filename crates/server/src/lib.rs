@@ -28,6 +28,7 @@ pub mod stream;
 pub mod usage;
 pub mod views;
 pub mod web;
+pub mod what_now;
 
 pub mod schema {
     use cratestack::include_server_schema;

@@ -12,6 +12,7 @@ mod station;
 mod tui;
 mod ui;
 mod view;
+mod whatnow;
 
 use anyhow::{Result, anyhow, bail};
 use api::{Api, Credentials, device_login};
@@ -55,6 +56,18 @@ enum Cmd {
     },
     /// Who am I, and what do I hold?
     Whoami {
+        #[arg(long)]
+        json: bool,
+    },
+    /// What should this session do now? Holding, what waits on you, ready tasks for this folder and for the pot's other repositories, work that needs no checkout, the pot's guide.
+    #[command(name = "what-now", alias = "now")]
+    WhatNow {
+        /// The pot; default: the pot with a repository matching this checkout's git `origin`.
+        #[arg(long)]
+        pot: Option<String>,
+        /// Your station id (st_...), as `station ls` shows it.
+        #[arg(long)]
+        station: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -402,6 +415,16 @@ enum ProjectCmd {
     },
     /// Rename a pot's display name (the key stays: it is part of every task id).
     Rename { key: String, name: String },
+    /// The pot's guide, "how we work here" for agents (markdown): print it, or set it (team owner or admin) from a file (`-` is stdin).
+    Guide {
+        key: String,
+        /// Set the guide from this markdown file.
+        #[arg(long)]
+        file: Option<String>,
+        /// Remove the guide.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Delete a pot and everything in it: tasks, comments, pass, pantry, views, files. Asks first; `--yes` skips the question.
     Rm {
         key: String,
@@ -1042,6 +1065,10 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
                 s(&v, "previous")
             ));
         }
+        Cmd::Project(ProjectCmd::Guide { key, file, clear }) => {
+            whatnow::guide(&api, &key, file, clear).await?
+        }
+        Cmd::WhatNow { pot, station, json } => whatnow::what_now(&api, pot, station, json).await?,
         Cmd::Project(ProjectCmd::Rm { key, yes }) => {
             let key = key.to_uppercase();
             let what = format!(
