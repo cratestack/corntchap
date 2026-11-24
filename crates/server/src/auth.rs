@@ -77,6 +77,8 @@ struct PrincipalRow {
     grants: Vec<String>,
     token_id: uuid::Uuid,
     stale: bool,
+    /// The principal was last seen over a minute ago (or never).
+    seen_stale: bool,
     pot_id: Option<uuid::Uuid>,
 }
 
@@ -93,6 +95,7 @@ impl TokenValidator for DbTokenValidator {
         let row: Option<PrincipalRow> = sqlx::query_as(
             "select p.id, p.kind, p.name, p.owner_id, p.is_admin, p.max_leases, p.runtime, p.agent_kind, p.grants,
                     t.id as token_id, (t.last_used_at is null or t.last_used_at < now() - interval '1 minute') as stale,
+                    (p.last_seen_at is null or p.last_seen_at < now() - interval '1 minute') as seen_stale,
                     t.pot_id
              from tokens t join principals p on p.id = t.principal_id
              where t.token_hash = $1 and t.revoked_at is null and (t.expires_at is null or t.expires_at > now())
@@ -112,6 +115,22 @@ impl TokenValidator for DbTokenValidator {
                 .bind(r.token_id)
                 .execute(&self.db)
                 .await;
+        }
+        // Presence, at most once a minute: a principal silent for 30 minutes is back, and an
+        // agent that is back is briefed on a pot before its next claim there (see `service::claim_next`).
+        if r.seen_stale {
+            let _ = sqlx::query(
+                "update principals set
+                   away_since = case when last_seen_at is null or last_seen_at < now() - interval '30 minutes'
+                                     then last_seen_at else away_since end,
+                   back_at = case when last_seen_at is null or last_seen_at < now() - interval '30 minutes'
+                                  then now() else back_at end,
+                   last_seen_at = now()
+                 where id = $1",
+            )
+            .bind(r.id)
+            .execute(&self.db)
+            .await;
         }
         Ok(Some(Principal {
             id: r.id,

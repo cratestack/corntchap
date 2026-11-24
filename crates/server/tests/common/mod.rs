@@ -67,6 +67,11 @@ pub struct TestApp {
     pub http: reqwest::Client,
     pub gh: String,
     pub who: Who,
+    /// Before the first claim of a (token, pot) the helper reads `what_now`, as an agent that
+    /// follows its prompt does, so the return gate (catch_up.rs) does not stand in the way of tests
+    /// about something else. Switch it off with [`TestApp::without_briefing`].
+    briefing: std::sync::atomic::AtomicBool,
+    briefed: std::sync::Mutex<std::collections::HashSet<(String, String)>>,
 }
 
 /// A tiny OpenID provider: discovery, authorize (bounces straight back), token (RS256 ID token), JWKS.
@@ -217,17 +222,59 @@ pub async fn start_with(background: bool, tweak: impl FnOnce(&mut Config)) -> Te
         http,
         gh,
         who,
+        briefing: true.into(),
+        briefed: Default::default(),
     }
 }
 
 impl TestApp {
+    /// The calls this app makes stop reading `what_now` before a first claim.
+    pub fn without_briefing(&self) {
+        self.briefing
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// An agent's first claim in a pot comes after what_now (see `briefing`).
+    async fn brief_before_claim(&self, token: &str, project: &str) {
+        if !self.briefing.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let key = (token.to_string(), project.to_uppercase());
+        if !self.briefed.lock().unwrap().insert(key.clone()) {
+            return;
+        }
+        let _ = self
+            .http
+            .get(format!("{}/api/v1/projects/{}/what-now", self.base, key.1))
+            .bearer_auth(token)
+            .send()
+            .await;
+    }
+
     pub async fn rest(
         &self,
         token: &str,
         method: reqwest::Method,
         path: &str,
-        body: Option<Value>,
+        mut body: Option<Value>,
     ) -> (u16, Value) {
+        if path.ends_with("/complete")
+            && let Some(b) = body.as_mut()
+            && b.is_object()
+            && b.get("learned").is_none()
+        {
+            b["learned"] = json!("nothing new");
+        }
+        let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+        match parts.as_slice() {
+            ["projects", k, "claim-next", ..] => self.brief_before_claim(token, k).await,
+            ["tasks", id, "claim", ..] => {
+                if let Some((k, _)) = id.rsplit_once('-') {
+                    self.brief_before_claim(token, k).await;
+                }
+            }
+            _ => {}
+        }
         let mut r = self
             .http
             .request(method, format!("{}/api/v1{path}", self.base))
@@ -248,7 +295,29 @@ impl TestApp {
     }
 
     /// One MCP tools/call (2026-07-28 stateless revision). Returns the `result` object.
-    pub async fn mcp(&self, token: &str, tool: &str, args: Value) -> Value {
+    pub async fn mcp(&self, token: &str, tool: &str, mut args: Value) -> Value {
+        // complete needs `learned`: tests about something else say "nothing new"
+        if tool == "complete" && args.get("learned").is_none() {
+            args["learned"] = json!("nothing new");
+        }
+        match tool {
+            "claim_next" => {
+                if let Some(k) = args["project"].as_str() {
+                    self.brief_before_claim(token, k).await;
+                }
+            }
+            "claim_task" => {
+                if let Some((k, _)) = args["id"].as_str().and_then(|i| i.rsplit_once('-')) {
+                    self.brief_before_claim(token, k).await;
+                }
+            }
+            _ => {}
+        }
+        self.mcp_exact(token, tool, args).await
+    }
+
+    /// `mcp` without the helpers (no briefing, no `learned` filled in).
+    pub async fn mcp_exact(&self, token: &str, tool: &str, args: Value) -> Value {
         let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}});
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args, "_meta": meta}});
         let r = self

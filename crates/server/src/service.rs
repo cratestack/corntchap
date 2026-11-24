@@ -24,10 +24,54 @@ pub fn release_cooldown_secs() -> u64 {
     RELEASE_COOLDOWN_SECS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// SQL predicate on `t` (tasks): no open pull request is linked to the task. A task with an open
-/// PR and no live lease is not free work: its author is waiting on CI or review, and forge events
-/// wake it. `claim_task` by name still takes it (with a warning).
-pub const NO_OPEN_PR_SQL: &str = "not exists (select 1 from forge_prs fp where fp.task_id = t.id and fp.state = 'open' and not fp.unlinked)";
+/// Seconds a holder may go without progress (a comment, a ticked item, an update, a question, a
+/// review request, a saved memory, a forge event on the task) before its lease ends:
+/// `STALL_MINUTES`, default 120. Bare heartbeats and activity renewals are not progress.
+pub static STALL_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(7_200);
+/// Seconds one holder may keep a task however much it progresses: `MAX_HOLD_HOURS`, default 8.
+pub static MAX_HOLD_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(28_800);
+
+pub fn stall_secs() -> u64 {
+    STALL_SECS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn max_hold_secs() -> u64 {
+    MAX_HOLD_SECS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// SQL expression: the latest a lease on task alias `t` may last, whatever its ttl: the stall
+/// limit after the last progress, or the maximum hold after the claim, whichever comes first.
+pub fn lease_cap_sql(t: &str) -> String {
+    format!(
+        "least(coalesce({t}.progress_at, {t}.updated_at) + make_interval(secs => {stall}),
+               coalesce({t}.held_since, {t}.updated_at) + make_interval(secs => {max}))",
+        stall = stall_secs(),
+        max = max_hold_secs(),
+    )
+}
+
+/// Task events (by the holder, or for `forge.*` by anyone) that count as progress.
+pub const PROGRESS_KINDS: &[&str] = &[
+    "task.commented",
+    "item.checked",
+    "task.updated",
+    "review.requested",
+    "question.asked",
+    "memory.saved",
+];
+
+/// Give-backs by one cook (releases and lapsed leases) after which `claim_next` skips the task for it.
+pub const BOUNCE_LIMIT: i64 = 3;
+/// Give-backs by any cooks, with no person touching the task between, after which the task is
+/// blocked for a person.
+pub const BOUNCE_BLOCK: i64 = 5;
+
+/// SQL predicate on `t` (tasks): no open pull request that is in good shape is linked to the task.
+/// A task with a healthy open PR and no live lease is not free work: its author is waiting on CI or
+/// review, and forge events wake it. A PR that is failing, has changes requested or has conflicts
+/// is parked: the task is work again. `claim_task` by name takes it either way (with a warning).
+pub const NO_OPEN_PR_SQL: &str = "not exists (select 1 from forge_prs fp where fp.task_id = t.id and fp.state = 'open' and not fp.unlinked
+    and not (fp.checks = 'failure' or cardinality(fp.failing) > 0 or fp.review = 'changes_requested' or fp.mergeable = 'false'))";
 
 /// SQL predicate on `t` (tasks): open, every dependency and subtask finished (ready to claim,
 /// before the routing and cooldown rules).
@@ -36,9 +80,37 @@ pub const READY_SQL: &str = "t.status = 'open'
   and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))";
 
 /// SQL predicate on `t` (tasks): what `claim_next`, `wait_for_work` and work wakes hand `agent`
-/// beyond the routing rules: not a task it released a moment ago, not one with an open PR.
+/// beyond the routing rules: not a task it released a moment ago, not one it keeps giving back, not
+/// one with a healthy open PR.
 pub fn takeable_sql(agent: &str) -> String {
-    format!("{} and {NO_OPEN_PR_SQL}", cooldown_sql(agent))
+    format!(
+        "{} and not {} and {NO_OPEN_PR_SQL}",
+        cooldown_sql(agent),
+        bounce_sql(agent, BOUNCE_LIMIT)
+    )
+}
+
+/// The events that count as someone touching a task a cook gave back.
+const TOUCH_KINDS: &str =
+    "'task.updated', 'task.commented', 'task.unblocked', 'task.restored', 'question.answered'";
+
+/// SQL predicate on `t` (tasks): `agent` has given the task back at least `n` times (released it,
+/// or let its lease lapse) with nobody else touching it in between (the touches of
+/// [`given_back_sql`]). A release made while a pull request was open does not count: the cook was
+/// waiting on CI or review, not bouncing. The cook is not handed the task again until someone
+/// touches it: a comment, an edit, an answer, a forge event.
+pub fn bounce_sql(agent: &str, n: i64) -> String {
+    format!(
+        "((select count(*) from events r
+           where r.task_id = t.id
+             and ((r.kind = 'task.released' and r.actor_id = {agent})
+                  or (r.kind = 'task.lease_expired' and r.payload->>'agent_id' = ({agent})::text))
+             and coalesce(r.payload->>'on_pr', 'false') <> 'true'
+             and not exists (select 1 from events x
+               where x.task_id = t.id and x.seq > r.seq
+                 and x.actor_id is distinct from {agent}
+                 and (x.kind in ({TOUCH_KINDS}) or x.kind like 'forge.%'))) >= {n})"
+    )
 }
 
 /// SQL predicate on `t` (tasks): the task is not one `agent` released within the cooldown.
@@ -66,8 +138,7 @@ pub fn given_back_sql(agent: &str) -> String {
              and not exists (select 1 from events x
                where x.task_id = t.id and x.seq > r.seq
                  and x.actor_id is distinct from {agent}
-                 and (x.kind in ('task.updated', 'task.commented', 'task.unblocked', 'task.restored', 'question.answered')
-                      or x.kind like 'forge.%')))"
+                 and (x.kind in ({TOUCH_KINDS}) or x.kind like 'forge.%')))"
     )
 }
 
@@ -218,9 +289,49 @@ pub async fn emit_to(
     .bind(actor)
     .bind(payload)
     .bind(audience)
-    .fetch_one(c)
+    .fetch_one(&mut *c)
     .await?;
+    if let Some(t) = task {
+        note_progress(c, t, kind, actor).await?;
+    }
     Ok(seq)
+}
+
+/// The one place progress is recorded (every event passes through [`emit_to`]): an event on a
+/// claimed task that counts as progress (see [`PROGRESS_KINDS`]: the holder's own; any `forge.*`
+/// event) moves `progress_at` to now. The holder's progress also extends a lease that sits at its
+/// stall limit, so the stall clock and the lease run on together.
+async fn note_progress(
+    c: &mut PgConnection,
+    task: Uuid,
+    kind: &str,
+    actor: Option<Uuid>,
+) -> Result<()> {
+    if kind.starts_with("forge.") {
+        sqlx::query("update tasks set progress_at = now() where id = $1 and status = 'claimed'")
+            .bind(task)
+            .execute(c)
+            .await?;
+    } else if PROGRESS_KINDS.contains(&kind)
+        && let Some(actor) = actor
+    {
+        let sql = format!(
+            "update tasks t set progress_at = now(),
+               lease_expires_at = case when t.lease_expires_at > now()
+                 then greatest(t.lease_expires_at, least(now() + pr.lease_ttl,
+                        now() + make_interval(secs => {stall}), coalesce(t.held_since, now()) + make_interval(secs => {max})))
+                 else t.lease_expires_at end
+             from projects pr where pr.id = t.project_id and t.id = $1 and t.status = 'claimed' and t.claimed_by = $2",
+            stall = stall_secs(),
+            max = max_hold_secs(),
+        );
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(task)
+            .bind(actor)
+            .execute(c)
+            .await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn task_json(c: &mut PgConnection, id: Uuid) -> Result<Value> {
@@ -653,13 +764,130 @@ async fn live_leases(c: &mut PgConnection, agent: Uuid) -> Result<i64> {
     .await?)
 }
 
-/// A lease length asked for (seconds), else the pot's: at least 10 seconds, at most a day.
+/// A lease length asked for (seconds), else the pot's: at least 10 seconds, at most a day, and
+/// never past the stall limit or the maximum hold.
 fn lease_ttl(asked: Option<f64>, pot: f64) -> f64 {
-    asked.unwrap_or(pot).clamp(10.0, MAX_TTL_SECS)
+    asked
+        .unwrap_or(pot)
+        .clamp(10.0, MAX_TTL_SECS)
+        .min(stall_secs() as f64)
+        .min(max_hold_secs() as f64)
 }
 
-fn lease_view(t: Value, epoch: i64, expires: DateTime<Utc>) -> Value {
-    json!({ "task": t, "lease": { "epoch": epoch, "expires_at": expires } })
+/// Less than this much time before a lease must stall, the holder is warned.
+const STALL_WARNING_MINS: i64 = 20;
+
+/// When the lease on a held task stalls: the stall limit after its last progress, or the maximum
+/// hold after the claim, whichever comes first; and, with under 20 minutes left, what to do.
+pub async fn stall_clock(
+    c: &mut PgConnection,
+    task: Uuid,
+) -> Result<(DateTime<Utc>, Option<String>)> {
+    let (progress, held): (DateTime<Utc>, DateTime<Utc>) = sqlx::query_as(
+        "select coalesce(progress_at, updated_at), coalesce(held_since, updated_at) from tasks where id = $1",
+    )
+    .bind(task)
+    .fetch_one(c)
+    .await?;
+    let stall_at = progress + chrono::Duration::seconds(stall_secs() as i64);
+    let max_at = held + chrono::Duration::seconds(max_hold_secs() as i64);
+    let fmt = |t: DateTime<Utc>| t.format("%Y-%m-%d %H:%M UTC").to_string();
+    let (at, by_hold) = if max_at < stall_at {
+        (max_at, true)
+    } else {
+        (stall_at, false)
+    };
+    let warning = (at - Utc::now() < chrono::Duration::minutes(STALL_WARNING_MINS)).then(|| {
+        if by_hold {
+            format!(
+                "held since {}: the lease ends at {} whatever you do (maximum hold {}): finish, or \
+                 release or block it with `learned`, before then.",
+                fmt(held),
+                fmt(at),
+                hours(max_hold_secs())
+            )
+        } else {
+            format!(
+                "no progress since {}: comment or tick a checklist item, or the task is released at {}.",
+                fmt(progress),
+                fmt(at)
+            )
+        }
+    });
+    Ok((at, warning))
+}
+
+pub fn hours_text(secs: u64) -> String {
+    hours(secs)
+}
+
+fn hours(secs: u64) -> String {
+    if secs.is_multiple_of(3600) {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{} min", secs.div_ceil(60))
+    }
+}
+
+fn lease_json(epoch: i64, expires: DateTime<Utc>, clock: (DateTime<Utc>, Option<String>)) -> Value {
+    let mut l = json!({ "epoch": epoch, "expires_at": expires, "stalls_at": clock.0 });
+    if let Some(w) = clock.1 {
+        l["warning"] = json!(w);
+    }
+    l
+}
+
+fn lease_view(
+    t: Value,
+    epoch: i64,
+    expires: DateTime<Utc>,
+    clock: (DateTime<Utc>, Option<String>),
+) -> Value {
+    json!({ "task": t, "lease": lease_json(epoch, expires, clock) })
+}
+
+/// An agent that was away (see `auth`: 30 minutes of silence) takes no lease until it has been
+/// briefed on the pot: its first claim there after the absence returns a `catch_up` instead of a
+/// task (never `none`: loops stop on that), records the briefing, and the next claim goes through.
+/// what_now, get_board, my_work and changes_since with a project brief too. People are never gated.
+async fn catch_up_gate(
+    c: &mut PgConnection,
+    p: &Principal,
+    project: Uuid,
+    key: &str,
+) -> Result<Option<Value>> {
+    if !p.is_agent() {
+        return Ok(None);
+    }
+    let gated: bool = sqlx::query_scalar(
+        "select p.back_at is not null and (b.briefed_at is null or b.briefed_at < p.back_at)
+         from principals p left join pot_briefings b on b.principal_id = p.id and b.project_id = $2
+         where p.id = $1",
+    )
+    .bind(p.id)
+    .bind(project)
+    .fetch_optional(&mut *c)
+    .await?
+    .unwrap_or(false);
+    if !gated {
+        return Ok(None);
+    }
+    let cu = crate::what_now::catch_up(c, p, project, key).await?;
+    crate::what_now::brief(c, p, &[project]).await?;
+    let away = cu["away_for"].as_str().unwrap_or("a while").to_string();
+    let hold = cu["holding"]
+        .as_array()
+        .and_then(|h| h.first())
+        .and_then(|t| t["id"].as_str())
+        .map(|t| format!(" You still hold {t}: finish it first."))
+        .unwrap_or_default();
+    Ok(Some(json!({
+        "catch_up": cu,
+        "next": format!(
+            "You were away {away}: read this (what changed, what you hold, what waits on you, the \
+             memories that matter), then claim again.{hold}"
+        ),
+    })))
 }
 
 pub async fn claim_next(
@@ -673,6 +901,10 @@ pub async fn claim_next(
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let pr = project_by_key(&mut tx, p, project).await?;
+    if let Some(v) = catch_up_gate(&mut tx, p, pr.id, &pr.key).await? {
+        tx.commit().await?;
+        return Ok(v);
+    }
     let ttl = lease_ttl(ttl_s, pr.ttl_secs);
     let st = crate::stations::for_claim(&mut tx, p, station, pr.id).await?;
     let only_repo = crate::stations::confined_repo(&mut tx, st).await?;
@@ -701,7 +933,8 @@ pub async fn claim_next(
            order by t.priority desc, t.created_at
            for update of t skip locked limit 1)
          update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
-            lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $6
+            lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $6,
+            held_since = now(), progress_at = now()
          from next where t.id = next.id
          returning t.id, t.lease_epoch, t.lease_expires_at, next.was_status, next.was_holder, next.was_expiry",
         scope = crate::repos::scope_sql("$2"),
@@ -733,38 +966,62 @@ pub async fn claim_next(
     .await?;
     let t = task_full(&mut tx, id).await?;
     let news = crate::pantry::news(&mut tx, p.id, pr.id).await?;
+    let clock = stall_clock(&mut tx, id).await?;
+    let memories = crate::pantry::relevant(&mut tx, pr.id, Some(id)).await?;
     tx.commit().await?;
-    let mut v = with_news(lease_view(t, epoch, exp), news);
+    let mut v = with_news(lease_view(t, epoch, exp, clock), news);
+    with_memories(&mut v, memories);
     with_lapse(&mut v, lapse);
     Ok(v)
+}
+
+/// The memories most relevant to the task, with the claim: read them before you start.
+fn with_memories(v: &mut Value, memories: Vec<Value>) {
+    if !memories.is_empty() {
+        v["memories"] = Value::Array(memories);
+    }
 }
 
 /// `claim_next` found nothing: say so, and name the open tasks it held back: those this cook
 /// released a moment ago (free for any other cook) and those waiting on an open pull request.
 /// `claim_task` takes either by name.
 async fn held_back(c: &mut PgConnection, p: &Principal, project: Uuid) -> Result<Value> {
-    let rows: Vec<(String, bool, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "select pr.key || '-' || t.number, not {cooldown},
-                (select fp.repo || '#' || fp.number from forge_prs fp
-                  where fp.task_id = t.id and fp.state = 'open' and not fp.unlinked order by fp.updated_at desc limit 1)
+    let rows: Vec<(String, bool, bool, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select pr.key || '-' || t.number, not {cooldown}, {bounce},
+                case when not {NO_OPEN_PR_SQL} then (select fp.repo || '#' || fp.number from forge_prs fp
+                  where fp.task_id = t.id and fp.state = 'open' and not fp.unlinked order by fp.updated_at desc limit 1) end
          from tasks t join projects pr on pr.id = t.project_id
-         where t.project_id = $1 and t.status = 'open' and (not {cooldown} or not {NO_OPEN_PR_SQL})
+         where t.project_id = $1 and t.status = 'open' and (not {cooldown} or {bounce} or not {NO_OPEN_PR_SQL})
          order by t.priority desc, t.created_at",
         cooldown = cooldown_sql("$2"),
+        bounce = bounce_sql("$2", BOUNCE_LIMIT),
     )))
     .bind(project)
     .bind(p.id)
     .fetch_all(&mut *c)
     .await?;
     let released: Vec<&str> = rows.iter().filter(|r| r.1).map(|r| r.0.as_str()).collect();
+    let bounced: Vec<&str> = rows.iter().filter(|r| r.2).map(|r| r.0.as_str()).collect();
     let on_pr: Vec<String> = rows
         .iter()
-        .filter_map(|r| r.2.as_ref().map(|pr| format!("{} ({pr})", r.0)))
+        .filter_map(|r| r.3.as_ref().map(|pr| format!("{} ({pr})", r.0)))
         .collect();
-    if released.is_empty() && on_pr.is_empty() {
+    if released.is_empty() && on_pr.is_empty() && bounced.is_empty() {
         return Ok(json!({"none": true}));
     }
     let mut hint = Vec::new();
+    if !bounced.is_empty() {
+        hint.push(format!(
+            "{} {} you gave back {BOUNCE_LIMIT} times with nobody touching {} since: claim_next skips {} and claim_task refuses {}. \
+             Comment on {} (what stops you) or ask on the pass; a person's comment, edit or answer lifts this.",
+            bounced.join(", "),
+            if bounced.len() == 1 { "is a task" } else { "are tasks" },
+            if bounced.len() == 1 { "it" } else { "them" },
+            if bounced.len() == 1 { "it" } else { "them" },
+            if bounced.len() == 1 { "it" } else { "them" },
+            if bounced.len() == 1 { "it" } else { "them" },
+        ));
+    }
     if !released.is_empty() {
         let mins = release_cooldown_secs().div_ceil(60);
         hint.push(format!(
@@ -786,8 +1043,13 @@ async fn held_back(c: &mut PgConnection, p: &Principal, project: Uuid) -> Result
             },
         ));
     }
-    hint.push("Take one by name with claim_task if you mean to.".into());
+    if !released.is_empty() || !on_pr.is_empty() {
+        hint.push("Take one by name with claim_task if you mean to.".into());
+    }
     let mut v = json!({"none": true, "hint": hint.join(" ")});
+    if !bounced.is_empty() {
+        v["bounced"] = json!(bounced.join(","));
+    }
     if !released.is_empty() {
         v["released_recently"] = json!(released.join(","));
     }
@@ -915,6 +1177,10 @@ pub async fn claim_task(
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
+    if let Some(v) = catch_up_gate(&mut tx, p, t.project_id, &t.key).await? {
+        tx.commit().await?;
+        return Ok(v);
+    }
     let st = crate::stations::for_claim(&mut tx, p, station, t.project_id).await?;
     let ttl = lease_ttl(ttl_s, t.ttl_secs);
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
@@ -931,9 +1197,25 @@ pub async fn claim_task(
         .bind(t.id)
         .fetch_one(&mut *tx)
         .await?;
+    let bounced: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {} from tasks t where t.id = $1",
+        bounce_sql("$2", BOUNCE_LIMIT)
+    )))
+    .bind(t.id)
+    .bind(p.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if bounced {
+        return Err(Error::Conflict(format!(
+            "you have given {r} back {BOUNCE_LIMIT} times and nobody has touched it since: a claim would only \
+             bounce it again. Comment on it (what blocks you), ask on the pass, or leave it to someone else; a \
+             person's comment, an edit or an answer lifts this."
+        )));
+    }
     let row: Option<(i64, DateTime<Utc>)> = sqlx::query_as(
         "update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
-            lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $4
+            lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $4,
+            held_since = now(), progress_at = now()
          where t.id = $1
            and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
            and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
@@ -999,16 +1281,21 @@ pub async fn claim_task(
         });
     }
     let news = crate::pantry::news(&mut tx, p.id, t.project_id).await?;
+    let clock = stall_clock(&mut tx, t.id).await?;
+    let memories = crate::pantry::relevant(&mut tx, t.project_id, Some(t.id)).await?;
     tx.commit().await?;
-    let mut v = with_news(lease_view(out, epoch, exp), news);
+    let mut v = with_news(lease_view(out, epoch, exp, clock), news);
     if let Some(w) = warning {
         v["warning"] = json!(w);
     }
+    with_memories(&mut v, memories);
     with_lapse(&mut v, lapse);
     Ok(v)
 }
 
-/// Fenced lease extension. Returns the new expiry, or lease_lost.
+/// Fenced lease extension. Returns the new expiry, or lease_lost. The expiry never passes the
+/// stall limit (no progress for STALL_MINUTES) or the maximum hold (MAX_HOLD_HOURS); past either,
+/// the lease is lost, and the error says which.
 async fn touch_lease(
     c: &mut PgConnection,
     p: &Principal,
@@ -1017,18 +1304,64 @@ async fn touch_lease(
     ttl_s: Option<f64>,
 ) -> Result<DateTime<Utc>> {
     let ttl = ttl_s.unwrap_or(t.ttl_secs).clamp(1.0, MAX_TTL_SECS);
-    sqlx::query_scalar(
-        "update tasks set lease_expires_at = now() + make_interval(secs => $4::float8), updated_at = now()
+    let cap = lease_cap_sql("tasks");
+    let sql = format!(
+        "update tasks set lease_expires_at = least(now() + make_interval(secs => $4::float8), {cap}), updated_at = now()
          where id = $1 and claimed_by = $2 and lease_epoch = $3 and status = 'claimed' and lease_expires_at > now()
-         returning lease_expires_at",
-    )
-    .bind(t.id)
-    .bind(p.id)
-    .bind(epoch)
-    .bind(ttl)
-    .fetch_optional(c)
-    .await?
-    .ok_or(Error::LeaseLost)
+           and {cap} > now()
+         returning lease_expires_at"
+    );
+    let exp: Option<DateTime<Utc>> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(t.id)
+        .bind(p.id)
+        .bind(epoch)
+        .bind(ttl)
+        .fetch_optional(&mut *c)
+        .await?;
+    match exp {
+        Some(e) => Ok(e),
+        None => Err(lost_reason(c, p, t, epoch).await?),
+    }
+}
+
+/// Why a fenced lease call failed: the stall limit or the maximum hold passed (say so), else the
+/// plain lost lease.
+async fn lost_reason(
+    c: &mut PgConnection,
+    p: &Principal,
+    t: &TaskRef,
+    epoch: i64,
+) -> Result<Error> {
+    let sql = format!(
+        "select coalesce(progress_at, updated_at) + make_interval(secs => {stall}) <= now(),
+                coalesce(held_since, updated_at) + make_interval(secs => {max}) <= now(),
+                coalesce(progress_at, updated_at), coalesce(held_since, updated_at)
+         from tasks where id = $1 and claimed_by = $2 and lease_epoch = $3 and status = 'claimed'",
+        stall = stall_secs(),
+        max = max_hold_secs(),
+    );
+    let row: Option<(bool, bool, DateTime<Utc>, DateTime<Utc>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(t.id)
+            .bind(p.id)
+            .bind(epoch)
+            .fetch_optional(c)
+            .await?;
+    Ok(match row {
+        Some((_, true, _, held)) => Error::LeaseLostFor(format!(
+            "you have held this task since {} (the maximum is {}): the server ends the lease; \
+             stop, and report what is done",
+            held.format("%Y-%m-%d %H:%M UTC"),
+            hours(max_hold_secs())
+        )),
+        Some((true, _, progress, _)) => Error::LeaseLostFor(format!(
+            "no progress since {} (the limit is {} min): the server ends the lease; stop, and \
+             report what is done. Comment or tick a checklist item to show progress",
+            progress.format("%Y-%m-%d %H:%M UTC"),
+            stall_secs().div_ceil(60)
+        )),
+        _ => Error::LeaseLost,
+    })
 }
 
 pub async fn heartbeat(
@@ -1040,9 +1373,21 @@ pub async fn heartbeat(
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
-    let exp = touch_lease(&mut tx, p, &t, epoch, ttl_s).await?;
+    let exp = match touch_lease(&mut tx, p, &t, epoch, ttl_s).await {
+        Ok(e) => e,
+        Err(e) => {
+            // the reason, with the task, outside the failed transaction's rollback
+            tx.commit().await?;
+            return Err(e);
+        }
+    };
+    let (stalls_at, warning) = stall_clock(&mut tx, t.id).await?;
     tx.commit().await?;
-    Ok(json!({"id": r, "epoch": epoch, "expires_at": exp}))
+    let mut v = json!({"id": r, "epoch": epoch, "expires_at": exp, "stalls_at": stalls_at});
+    if let Some(w) = warning {
+        v["warning"] = json!(w);
+    }
+    Ok(v)
 }
 
 pub async fn check_item(
@@ -1251,6 +1596,55 @@ async fn add_comment(c: &mut PgConnection, t: &TaskRef, author: Uuid, body: &str
     Ok(id)
 }
 
+/// What a cook says it learned, as the memory to save: `None` for nothing, or "nothing new".
+fn learned_text(learned: Option<&str>) -> Option<&str> {
+    let l = learned.map(str::trim).filter(|l| !l.is_empty())?;
+    let said = l.trim_end_matches(['.', '!']).trim();
+    (!said.eq_ignore_ascii_case("nothing new")).then_some(l)
+}
+
+/// Save what the holder learned on a task into the memory `learned-<REF>` (appended to on a later
+/// revision): kind note, tagged with the task's labels and repositories, linked to the task, so the
+/// next claim on similar work finds it.
+async fn save_learned(
+    c: &mut PgConnection,
+    p: &Principal,
+    t: &TaskRef,
+    learned: Option<&str>,
+) -> Result<()> {
+    let Some(text) = learned_text(learned) else {
+        return Ok(());
+    };
+    let (title, labels, repos): (String, Vec<String>, Vec<String>) =
+        sqlx::query_as("select title, labels, repos from tasks where id = $1")
+            .bind(t.id)
+            .fetch_one(&mut *c)
+            .await?;
+    let tref = format!("{}-{}", t.key, t.number);
+    let mut tags = labels;
+    tags.extend(repos);
+    let title: String = format!("{tref}: {title}").chars().take(200).collect();
+    crate::pantry::remember_in(
+        c,
+        p,
+        &crate::pantry::Remember {
+            project: t.key.clone(),
+            key: Some(format!("learned-{tref}")),
+            title,
+            body: text.to_string(),
+            kind: Some("note".into()),
+            tags: Some(tags),
+            task: Some(tref),
+            append: true,
+            revision: None,
+            notify: false,
+            station: None,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn complete(
     db: &PgPool,
     p: &Principal,
@@ -1258,7 +1652,14 @@ pub async fn complete(
     epoch: i64,
     result: &str,
     no_propagate: bool,
+    learned: &str,
 ) -> Result<Value> {
+    if learned.trim().is_empty() {
+        return invalid(
+            "learned is required: say what the next agent on similar work must know (a gotcha, a \
+             convention, where the code really is), or \"nothing new\"",
+        );
+    }
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
     let n = sqlx::query(
@@ -1291,6 +1692,7 @@ pub async fn complete(
             Error::LeaseLost
         });
     }
+    save_learned(&mut tx, p, &t, Some(learned)).await?;
     emit(
         &mut tx,
         Some(t.project_id),
@@ -1316,6 +1718,7 @@ async fn end_lease(
     new_status: &str,
     kind: &str,
     reason: &str,
+    learned: Option<&str>,
 ) -> Result<Value> {
     let mut tx = db.begin().await?;
     let t = task_by_ref(&mut tx, p, r).await?;
@@ -1336,18 +1739,27 @@ async fn end_lease(
     if !reason.trim().is_empty() {
         add_comment(&mut tx, &t, p.id, &format!("[{kind}] {reason}")).await?;
     }
+    save_learned(&mut tx, p, &t, learned).await?;
+    // given back while a pull request is open: it waits on CI or review, which is not bouncing
+    let on_pr: bool = sqlx::query_scalar(
+        "select exists (select 1 from forge_prs where task_id = $1 and state = 'open' and not unlinked)",
+    )
+    .bind(t.id)
+    .fetch_one(&mut *tx)
+    .await?;
     emit(
         &mut tx,
         Some(t.project_id),
         Some(t.id),
         kind,
         Some(p.id),
-        json!({"reason": reason}),
+        json!({"reason": reason, "on_pr": on_pr}),
     )
     .await?;
     // its PR merged while it was held: nobody is left to serve it
     if new_status == "open" {
         crate::forge::events::complete_if_merged(&mut tx, t.id, None).await?;
+        block_if_bounced(&mut tx, t.id, t.project_id).await?;
     }
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
@@ -1360,12 +1772,80 @@ pub async fn release(
     r: &str,
     epoch: i64,
     reason: &str,
+    learned: Option<&str>,
 ) -> Result<Value> {
-    end_lease(db, p, r, epoch, "open", "task.released", reason).await
+    end_lease(db, p, r, epoch, "open", "task.released", reason, learned).await
 }
 
-pub async fn block(db: &PgPool, p: &Principal, r: &str, epoch: i64, reason: &str) -> Result<Value> {
-    end_lease(db, p, r, epoch, "blocked", "task.blocked", reason).await
+pub async fn block(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    epoch: i64,
+    reason: &str,
+    learned: Option<&str>,
+) -> Result<Value> {
+    end_lease(db, p, r, epoch, "blocked", "task.blocked", reason, learned).await
+}
+
+/// A task given back this many times by any cooks, with no person touching it in between, is not
+/// work a cook can do: it is blocked for a person, with the reason. Called after a give-back.
+pub async fn block_if_bounced(c: &mut PgConnection, task: Uuid, project: Uuid) -> Result<bool> {
+    let n: i64 = sqlx::query_scalar(
+        "select count(*) from events r
+         where r.task_id = $1 and r.kind in ('task.released', 'task.lease_expired')
+           and coalesce(r.payload->>'on_pr', 'false') <> 'true'
+           and r.seq > coalesce((select max(x.seq) from events x join principals h on h.id = x.actor_id and h.kind = 'user'
+                                   where x.task_id = $1 and x.kind in ('task.updated', 'task.commented', 'task.unblocked',
+                                         'task.restored', 'question.answered')), 0)",
+    )
+    .bind(task)
+    .fetch_one(&mut *c)
+    .await?;
+    if n < BOUNCE_BLOCK {
+        return Ok(false);
+    }
+    let reason = format!("bounced {BOUNCE_BLOCK}×: needs a person");
+    let moved = sqlx::query(
+        "update tasks set status = 'blocked', claimed_by = null, lease_expires_at = null, reserved_for = null
+         where id = $1 and status = 'open'",
+    )
+    .bind(task)
+    .execute(&mut *c)
+    .await?
+    .rows_affected();
+    if moved == 0 {
+        return Ok(false);
+    }
+    system_comment(
+        c,
+        task,
+        &format!(
+            "[blocked by the server] {reason}: cooks gave this task back {n} times and nobody \
+             touched it in between. Look at why (the comments above), then unblock it with a clearer task."
+        ),
+    )
+    .await?;
+    emit(
+        c,
+        Some(project),
+        Some(task),
+        "task.blocked",
+        None,
+        json!({"reason": reason, "bounced": true}),
+    )
+    .await?;
+    Ok(true)
+}
+
+/// A note on a task written by the server itself (no author).
+pub async fn system_comment(c: &mut PgConnection, task: Uuid, body: &str) -> Result<()> {
+    sqlx::query("insert into comments (task_id, author_id, body) values ($1, null, $2)")
+        .bind(task)
+        .bind(body)
+        .execute(c)
+        .await?;
+    Ok(())
 }
 
 /// Human-only transitions: unblock (blocked -> open) and cancel (open/blocked -> cancelled).
@@ -1482,7 +1962,26 @@ pub async fn whoami(db: &PgPool, p: &Principal, project: Option<&str>) -> Result
     }))
 }
 
+/// The feed of events since a cursor, for a project when one is named. For an agent that names a
+/// project, reading it counts as being briefed on that pot (see [`catch_up_gate`]).
 pub async fn changes_since(
+    db: &PgPool,
+    p: &Principal,
+    cursor: i64,
+    project: Option<&str>,
+    limit: i64,
+) -> Result<Value> {
+    let out = changes_feed(db, p, cursor, project, limit).await?;
+    if project.is_some() && p.is_agent() {
+        let mut c = db.acquire().await?;
+        let pr = project_by_key(&mut c, p, project.unwrap_or_default()).await?;
+        crate::what_now::brief(&mut c, p, &[pr.id]).await?;
+    }
+    Ok(out)
+}
+
+/// [`changes_since`] without the briefing: the live feed polls it all day.
+pub async fn changes_feed(
     db: &PgPool,
     p: &Principal,
     cursor: i64,
@@ -1550,6 +2049,9 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
 pub async fn board_markdown(db: &PgPool, p: &Principal, key: &str) -> Result<String> {
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, key).await?;
+    if p.is_agent() {
+        crate::what_now::brief(&mut c, p, &[pr.id]).await?;
+    }
     let tasks = list_tasks_conn(&mut c, pr.id).await?;
     let mut out = format!("# {} — {}\n", pr.key, pr.name);
     for (heading, statuses) in [

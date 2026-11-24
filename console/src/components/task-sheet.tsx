@@ -428,14 +428,14 @@ function TaskDetailBody({ id }: { id: string }) {
         mine={mine}
         open={serving}
         onOpenChange={setServing}
-        serve={async (result) => {
+        serve={async (result, learned) => {
           let epoch = t.lease_epoch;
           if (!mine) {
             const claim = await call("claimTask", { id: t.id });
             if (!claim.lease) throw new Error("Someone else scooped it first");
             epoch = claim.lease.epoch;
           }
-          await call("complete", { id: t.id, epoch, result });
+          await call("complete", { id: t.id, epoch, result, learned });
         }}
       />
     </div>
@@ -651,9 +651,10 @@ function ServeDialog({
   mine: boolean;
   open: boolean;
   onOpenChange: (o: boolean) => void;
-  serve: (result: string) => Promise<void>;
+  serve: (result: string, learned: string) => Promise<void>;
 }) {
   const [result, setResult] = useState("");
+  const [learned, setLearned] = useState("");
   const [busy, setBusy] = useState(false);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -672,10 +673,11 @@ function ServeDialog({
             e.preventDefault();
             setBusy(true);
             try {
-              await serve(result.trim() || "Served from the console");
+              await serve(result.trim() || "Served from the console", learned.trim());
               toast.success(`${t.id} served`);
               onOpenChange(false);
               setResult("");
+              setLearned("");
             } catch (err) {
               toast.error("Could not serve it", { description: errorMessage(err) });
             } finally {
@@ -690,11 +692,20 @@ function ServeDialog({
           )}
           <Label htmlFor="serve-result">What was served? (shown on the task)</Label>
           <Textarea id="serve-result" rows={3} value={result} onChange={(e) => setResult(e.target.value)} placeholder="Merged in #123, deployed to staging." autoFocus />
+          <Label htmlFor="serve-learned">What must the next cook on similar work know? (saved to the pantry)</Label>
+          <Textarea
+            id="serve-learned"
+            rows={2}
+            required
+            value={learned}
+            onChange={(e) => setLearned(e.target.value)}
+            placeholder={'A gotcha, a convention, where the code really is. Or "nothing new".'}
+          />
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Not yet
             </Button>
-            <Button type="submit" disabled={busy}>
+            <Button type="submit" disabled={busy || learned.trim() === ""}>
               {busy ? <Loader2 className="animate-spin" /> : <CheckCheck />} Serve it
             </Button>
           </DialogFooter>

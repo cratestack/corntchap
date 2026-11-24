@@ -1136,13 +1136,17 @@ pub async fn answer(
     if q.wait
         && let (Some(tid), Some(asker)) = (q.task_id, q.asked_by)
     {
-        let row: Option<(i64, i64)> = sqlx::query_as(
+        let row: Option<(i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "update tasks t set status = 'claimed', claimed_by = $2, reserved_for = null, result = null,
                lease_epoch = t.lease_epoch + 1, updated_at = now(),
-               lease_expires_at = now() + (select lease_ttl from projects where id = t.project_id)
+               lease_expires_at = now() + least((select lease_ttl from projects where id = t.project_id),
+                                                make_interval(secs => {stall}), make_interval(secs => {max})),
+               held_since = now(), progress_at = now()
              where t.id = $1 and t.status = 'blocked' and t.reserved_for = $2
              returning t.lease_epoch, t.number",
-        )
+            stall = crate::service::stall_secs(),
+            max = crate::service::max_hold_secs(),
+        )))
         .bind(tid)
         .bind(asker)
         .fetch_optional(&mut *tx)

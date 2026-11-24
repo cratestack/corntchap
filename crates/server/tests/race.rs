@@ -105,7 +105,7 @@ async fn ten_agents_race_over_fifty_tasks() {
                 service::check_item(&pool, &a, &id, Some(epoch), 1, true)
                     .await
                     .unwrap();
-                service::complete(&pool, &a, &id, epoch, "ok", false)
+                service::complete(&pool, &a, &id, epoch, "ok", false, "nothing new")
                     .await
                     .unwrap();
                 done.push(id);
@@ -212,7 +212,7 @@ async fn expired_lease_is_fenced() {
         .unwrap();
     let e2 = second["lease"]["epoch"].as_i64().unwrap();
     assert!(e2 > e1);
-    let err = service::complete(&pool, &ag[0], "PAY-1", e1, "late", false)
+    let err = service::complete(&pool, &ag[0], "PAY-1", e1, "late", false, "nothing new")
         .await
         .unwrap_err();
     assert_eq!(err.code(), "lease_lost");
@@ -220,7 +220,7 @@ async fn expired_lease_is_fenced() {
         .await
         .unwrap_err();
     assert!(matches!(err.code(), "lease_lost" | "not_found"));
-    service::complete(&pool, &ag[1], "PAY-1", e2, "ok", false)
+    service::complete(&pool, &ag[1], "PAY-1", e2, "ok", false, "nothing new")
         .await
         .unwrap();
 }

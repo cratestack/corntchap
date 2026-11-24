@@ -77,6 +77,13 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
         corntchap::service::RELEASE_COOLDOWN_SECS
             .store(m * 60, std::sync::atomic::Ordering::Relaxed);
     }
+    if let Some(m) = env("STALL_MINUTES").and_then(|v| v.parse::<u64>().ok()) {
+        corntchap::service::STALL_SECS.store(m.max(1) * 60, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Some(h) = env("MAX_HOLD_HOURS").and_then(|v| v.parse::<u64>().ok()) {
+        corntchap::service::MAX_HOLD_SECS
+            .store(h.max(1) * 3600, std::sync::atomic::Ordering::Relaxed);
+    }
     if let Some(m) = env("COMMENT_NUDGE_MINUTES").and_then(|v| v.parse::<i64>().ok()) {
         c.comment_nudge_minutes = m.max(1);
     }

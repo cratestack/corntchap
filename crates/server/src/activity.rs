@@ -86,11 +86,13 @@ pub async fn record(db: &PgPool, p: &Principal, r: Record) -> Result<Value> {
     };
     // an agent that is working keeps its leases: each tool use renews the leases this session holds
     // to the pot's lease length (never shortening a longer one it asked for)
-    sqlx::query(
-        "update tasks t set lease_expires_at = greatest(t.lease_expires_at, now() + pr.lease_ttl), updated_at = now()
+    // (never past the stall limit or the maximum hold: activity is not progress)
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "update tasks t set lease_expires_at = least(greatest(t.lease_expires_at, now() + pr.lease_ttl), {cap}), updated_at = now()
          from projects pr where pr.id = t.project_id and t.station_id = $1
            and t.status = 'claimed' and t.lease_expires_at > now()",
-    )
+        cap = crate::service::lease_cap_sql("t"),
+    )))
     .bind(station_id)
     .execute(&mut *tx)
     .await?;

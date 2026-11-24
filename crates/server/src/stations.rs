@@ -305,14 +305,14 @@ pub async fn start(db: &PgPool, p: &Principal, s: Start) -> Result<Value> {
 /// The first prompt of a started session. The wake adds the station hint and pantry news.
 pub fn start_text(who: &str, pot: &str, task: Option<&str>, prompt: Option<&str>) -> String {
     let mut t = format!(
-        "{who} started this session for you in corntchap pot {pot}. Use the corntchap MCP tools."
+        "{who} started this session for you in corntchap pot {pot}. Use the corntchap MCP tools: start with what_now (project {pot}), which briefs you."
     );
     match task {
         Some(r) => t.push_str(&format!(
-            " Your task is {r}: read it (get_task), claim it (claim_task with your station), work it, tick its items and complete it. If it is taken, say so on the pass and take the next ready one (claim_next)."
+            " Your task is {r}: read it (get_task), claim it (claim_task with your station), work it, tick its items and complete it (with `learned`: what the next agent must know, or \"nothing new\"). If it is taken, say so on the pass and take the next ready one (claim_next)."
         )),
         None if prompt.is_none() => t.push_str(
-            " Take the next ready task (claim_next with your station), work it and complete it; when none is ready, stop.",
+            " Take the next ready task (claim_next with your station), work it and complete it (with `learned`); when none is ready, stop.",
         ),
         None => {}
     }

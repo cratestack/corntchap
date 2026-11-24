@@ -164,7 +164,7 @@ pub async fn events_stream(
         loop {
             // drain everything after `last` (pages of 200), then wait for the next NOTIFY
             loop {
-                let page = service::changes_since(&state.db, &p, last, project.as_deref(), 200).await;
+                let page = service::changes_feed(&state.db, &p, last, project.as_deref(), 200).await;
                 let Ok(page) = page else {
                     yield Ok(Event::default().event("error").data(json!({"error": "access lost"}).to_string()));
                     return;

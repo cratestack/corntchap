@@ -31,7 +31,8 @@ const MEMORY_JSON: &str = r#"jsonb_build_object(
   'task', (select tp.key || '-' || t.number from tasks t join projects tp on tp.id = t.project_id where t.id = m.task_id),
   'created_by', (select name from principals where id = m.created_by),
   'updated_by', (select name from principals where id = m.updated_by),
-  'revision', m.revision, 'created_at', m.created_at, 'updated_at', m.updated_at)"#;
+  'revision', m.revision, 'created_at', m.created_at, 'updated_at', m.updated_at,
+  'uses', m.uses, 'last_used_at', m.last_used_at)"#;
 
 /// A memory key: lowercase letters, digits, `.`, `_` and `-`, up to 80 characters, starting with
 /// a letter or digit. Anything else is folded into `-`, so a title makes a usable key.
@@ -163,6 +164,47 @@ pub async fn news(c: &mut PgConnection, principal: Uuid, project: Uuid) -> Resul
 /// Save a memory under `key` (derived from the title when omitted): creates it, or updates it,
 /// keeping the previous version.
 pub async fn remember(db: &PgPool, p: &Principal, r: Remember) -> Result<Value> {
+    let mut tx = db.begin().await?;
+    let (out, created, pr_key) = remember_tx(&mut tx, p, &r).await?;
+    tx.commit().await?;
+    if r.notify {
+        let what = if created { "new" } else { "updated" };
+        let first = crate::questions::short(&body_for_notice(&out));
+        let key = out["key"].as_str().unwrap_or_default().to_string();
+        crate::pass::post(
+            db,
+            p,
+            crate::pass::Post {
+                project: pr_key.clone(),
+                body: format!(
+                    "Pantry, {what} {}: **{}** (`{key}`)\n\n{first}\n\nRead it with `get_memory` (project {pr_key}, key {key}).",
+                    out["kind"].as_str().unwrap_or("note"),
+                    out["title"].as_str().unwrap_or(""),
+                ),
+                to: None,
+                task: None,
+                from_owner: false,
+                broadcast: true,
+                station: r.station.clone(),
+            },
+        )
+        .await?;
+    }
+    Ok(out)
+}
+
+/// [`remember`] inside the caller's transaction (no broadcast): what `complete`, `release` and
+/// `block` use to save what the holder learned together with ending the lease.
+pub async fn remember_in(c: &mut PgConnection, p: &Principal, r: &Remember) -> Result<Value> {
+    Ok(remember_tx(c, p, r).await?.0)
+}
+
+/// The saved memory, whether it was new, and its project's key.
+async fn remember_tx(
+    tx: &mut PgConnection,
+    p: &Principal,
+    r: &Remember,
+) -> Result<(Value, bool, String)> {
     let title = r.title.trim().to_string();
     let body = r.body.trim().to_string();
     if title.is_empty() && r.key.is_none() {
@@ -178,10 +220,9 @@ pub async fn remember(db: &PgPool, p: &Principal, r: Remember) -> Result<Value> 
     let kind = kind_of(r.kind.as_deref())?;
     let tags = r.tags.as_deref().map(clean_tags);
 
-    let mut tx = db.begin().await?;
-    let pr = project_by_key(&mut tx, p, &r.project.to_uppercase()).await?;
+    let pr = project_by_key(tx, p, &r.project.to_uppercase()).await?;
     let task_id = match r.task.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        Some(t) => Some(task_by_ref(&mut tx, p, t).await?.id),
+        Some(t) => Some(task_by_ref(tx, p, t).await?.id),
         None => None,
     };
     let existing: Option<(
@@ -266,9 +307,8 @@ pub async fn remember(db: &PgPool, p: &Principal, r: Remember) -> Result<Value> 
                 && new_kind == old_kind
                 && new_tags == old_tags
             {
-                let out = memory_json(&mut tx, id).await?;
-                tx.commit().await?;
-                return Ok(out);
+                let out = memory_json(tx, id).await?;
+                return Ok((out, false, pr.key));
             }
             sqlx::query(
                 "insert into memory_revisions (memory_id, revision, title, body, kind, tags, updated_by, updated_at)
@@ -301,9 +341,9 @@ pub async fn remember(db: &PgPool, p: &Principal, r: Remember) -> Result<Value> 
             (id, false)
         }
     };
-    let out = memory_json(&mut tx, id).await?;
+    let out = memory_json(tx, id).await?;
     emit(
-        &mut tx,
+        tx,
         Some(pr.id),
         task_id,
         "memory.saved",
@@ -311,35 +351,109 @@ pub async fn remember(db: &PgPool, p: &Principal, r: Remember) -> Result<Value> 
         json!({"key": key, "title": out["title"], "created": created}),
     )
     .await?;
-    tx.commit().await?;
-    if r.notify {
-        let what = if created { "new" } else { "updated" };
-        let first = crate::questions::short(&body_for_notice(&out));
-        crate::pass::post(
-            db,
-            p,
-            crate::pass::Post {
-                project: pr.key.clone(),
-                body: format!(
-                    "Pantry, {what} {}: **{}** (`{key}`)\n\n{first}\n\nRead it with `get_memory` (project {}, key {key}).",
-                    out["kind"].as_str().unwrap_or("note"),
-                    out["title"].as_str().unwrap_or(""),
-                    pr.key
-                ),
-                to: None,
-                task: None,
-                from_owner: false,
-                broadcast: true,
-                station: r.station.clone(),
-            },
-        )
-        .await?;
-    }
-    Ok(out)
+    Ok((out, created, pr.key))
 }
 
 fn body_for_notice(m: &Value) -> String {
     m["body"].as_str().unwrap_or("").to_string()
+}
+
+/// Memories offered with a claim.
+const RELEVANT: i64 = 5;
+/// Characters of a body in a relevant-memory excerpt.
+const RELEVANT_EXCERPT: usize = 240;
+
+/// Words of a title that can stand as search terms: lowercase letters and digits only (so the
+/// text goes safely into a tsquery), no short or filler words.
+fn title_words(title: &str) -> Vec<String> {
+    const FILLER: &[&str] = &[
+        "the", "and", "for", "with", "from", "into", "that", "this", "when", "then", "than", "are",
+        "was", "not", "all", "can", "has", "have", "its", "our", "out", "per", "via", "add",
+        "make",
+    ];
+    let mut out: Vec<String> = vec![];
+    for w in title
+        .split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+    {
+        if w.chars().count() >= 3 && !FILLER.contains(&w.as_str()) && !out.contains(&w) {
+            out.push(w);
+        }
+        if out.len() >= 12 {
+            break;
+        }
+    }
+    out
+}
+
+/// The memories of a pot most relevant to a task, at most five, each `{key, title, kind,
+/// excerpt}`: those learned on the task, its parent or its dependencies; those tagged with one
+/// of its labels or repositories; the pot's conventions and gotchas; and those whose key or
+/// title shares a word with the task's title. Deterministic (no model): ranked by lineage, then
+/// tag, then text match, then kind, then recency. Without a task: conventions and gotchas, the
+/// newest first.
+pub async fn relevant(
+    c: &mut PgConnection,
+    project: Uuid,
+    task: Option<Uuid>,
+) -> Result<Vec<Value>> {
+    let (title, labels): (String, Vec<String>) = match task {
+        Some(t) => {
+            let row: Option<(String, Vec<String>, Vec<String>)> =
+                sqlx::query_as("select title, labels, repos from tasks where id = $1")
+                    .bind(t)
+                    .fetch_optional(&mut *c)
+                    .await?;
+            row.map(|(t, mut l, r)| {
+                l.extend(r);
+                (t, l)
+            })
+            .unwrap_or_default()
+        }
+        None => (String::new(), vec![]),
+    };
+    let tags = clean_tags(&labels);
+    let tsq = title_words(&title).join(" | ");
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "with lineage as (
+           select $2::uuid as id
+           union select parent_id from tasks where id = $2 and parent_id is not null
+           union select depends_on from task_deps where task_id = $2),
+         q as (select case when $4 = '' then ''::tsquery else to_tsquery('simple', $4) end as tq)
+         select m.key, m.title, m.kind, left(m.body, $5 + 1)
+         from memories m, q
+         where m.project_id = $1
+           and (m.task_id in (select id from lineage)
+                or (cardinality($3::text[]) > 0 and m.tags && $3::text[])
+                or m.kind in ('convention', 'gotcha')
+                or m.search @@ q.tq)
+         order by 4 * coalesce(m.task_id in (select id from lineage), false)::int
+                + 2 * (cardinality($3::text[]) > 0 and m.tags && $3::text[])::int
+                + ts_rank(m.search, q.tq)
+                + (case m.kind when 'convention' then 1 when 'gotcha' then 1 else 0 end) desc,
+                  m.updated_at desc
+         limit $6",
+    )
+    .bind(project)
+    .bind(task)
+    .bind(&tags)
+    .bind(&tsq)
+    .bind(RELEVANT_EXCERPT as i32)
+    .bind(RELEVANT)
+    .fetch_all(c)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(key, title, kind, body)| {
+            let excerpt = if body.chars().count() > RELEVANT_EXCERPT {
+                let cut: String = body.chars().take(RELEVANT_EXCERPT).collect();
+                format!("{}…", cut.trim_end())
+            } else {
+                body
+            };
+            json!({"key": key, "title": title, "kind": kind, "excerpt": excerpt})
+        })
+        .collect())
 }
 
 /// One memory, in full.
@@ -348,6 +462,14 @@ pub async fn get(db: &PgPool, p: &Principal, project: &str, key: &str) -> Result
     let pr = project_by_key(&mut c, p, &project.to_uppercase()).await?;
     let key = key_of(key)?;
     mark_read(&mut c, p.id, pr.id).await?;
+    // read for use: which memories earn their place, and which nobody opens (forget candidates)
+    sqlx::query(
+        "update memories set uses = uses + 1, last_used_at = now() where project_id = $1 and key = $2",
+    )
+    .bind(pr.id)
+    .bind(&key)
+    .execute(&mut *c)
+    .await?;
     let sql = format!(
         "select {MEMORY_JSON} from memories m join projects pr on pr.id = m.project_id
          where m.project_id = $1 and m.key = $2"
@@ -546,6 +668,22 @@ pub async fn digest(db: &PgPool, p: &Principal, project: &str) -> Result<String>
     if !skipped.is_empty() {
         md.push_str("## More (read with get_memory)\n\n");
         for (key, title) in skipped {
+            md.push_str(&format!("- `{key}`: {title}\n"));
+        }
+    }
+    let unused: Vec<(String, String)> = sqlx::query_as(
+        "select key, title from memories
+         where project_id = $1 and coalesce(last_used_at, created_at) < now() - interval '90 days'
+         order by coalesce(last_used_at, created_at) limit 20",
+    )
+    .bind(pr.id)
+    .fetch_all(&mut *c)
+    .await?;
+    if !unused.is_empty() {
+        md.push_str(
+            "\n## Forget candidates (not read for 90 days)\n\nIf one is wrong or obsolete, delete it with `forget`; if it still holds, read it with `get_memory` (that keeps it).\n\n",
+        );
+        for (key, title) in unused {
             md.push_str(&format!("- `{key}`: {title}\n"));
         }
     }

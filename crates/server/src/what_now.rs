@@ -124,6 +124,235 @@ async fn rows_repo(
         .await?)
 }
 
+/// Tasks `me` holds with a live lease in the pot, soonest expiry first.
+pub async fn holding(c: &mut PgConnection, project: Uuid, me: Uuid) -> Result<Vec<Value>> {
+    let stall = crate::service::lease_cap_sql("t");
+    rows(
+        c,
+        format!(
+            "select {NOW_TASK} || jsonb_build_object('lease_expires_at', t.lease_expires_at,
+                 'stalls_at', {stall}, 'station', (select ref from stations where id = t.station_id))
+             {FROM} where t.project_id = $1 and t.claimed_by = $2 and t.status = 'claimed' and t.lease_expires_at > now()
+             order by t.lease_expires_at"
+        ),
+        project,
+        me,
+    )
+    .await
+}
+
+/// Blocked tasks parked for `me` (waiting on a question it asked).
+pub async fn parked(c: &mut PgConnection, project: Uuid, me: Uuid) -> Result<Vec<Value>> {
+    rows(
+        c,
+        format!(
+            "select {NOW_TASK} || jsonb_build_object('station', (select ref from stations where id = t.station_id))
+             {FROM} where t.project_id = $1 and t.status = 'blocked' and t.reserved_for = $2
+             order by t.updated_at"
+        ),
+        project,
+        me,
+    )
+    .await
+}
+
+/// What waits on `me` in the pot: questions addressed to it, people's comments it has not
+/// answered, reviews asked of it.
+pub struct Waiting {
+    pub questions: Vec<Value>,
+    pub comments: Vec<Value>,
+    pub reviews: Vec<Value>,
+}
+
+pub async fn waiting_on_you(c: &mut PgConnection, project: Uuid, me: Uuid) -> Result<Waiting> {
+    let questions = rows(
+        c,
+        "select jsonb_build_object('id', pr.key || '-Q' || q.number, 'title', q.title,
+             'task', (select pr.key || '-' || t.number from tasks t where t.id = q.task_id),
+             'from', (select name from principals where id = q.asked_by))
+         from questions q join projects pr on pr.id = q.project_id
+         where q.project_id = $1 and q.status = 'open' and q.to_principal = $2
+         order by q.created_at limit 10"
+            .into(),
+        project,
+        me,
+    )
+    .await?;
+    let comments = rows(
+        c,
+        "select jsonb_build_object('task', pr.key || '-' || t.number,
+             'author', (select name from principals where id = cm.author_id),
+             'excerpt', case when char_length(cm.body) > 160 then left(cm.body, 160) || '…' else cm.body end,
+             'at', cm.created_at)
+         from comment_replies cr join comments cm on cm.id = cr.comment_id
+           join tasks t on t.id = cr.task_id join projects pr on pr.id = t.project_id
+         where cr.project_id = $1 and cr.agent_id = $2 and cr.answered_at is null
+         order by cm.created_at limit 10"
+            .into(),
+        project,
+        me,
+    )
+    .await?;
+    let reviews = rows(
+        c,
+        "select jsonb_build_object('id', pr.key || '-R' || r.number,
+             'task', (select pr.key || '-' || t.number from tasks t where t.id = r.task_id),
+             'from', (select name from principals where id = r.requested_by),
+             'note', r.note, 'round', r.round)
+         from reviews r join projects pr on pr.id = r.project_id
+         where r.project_id = $1 and r.state = 'requested'
+           and (r.reviewer = $2 or (r.reviewer is null and r.requested_by is distinct from $2))
+         order by r.reviewer is null, r.created_at limit 10"
+            .into(),
+        project,
+        me,
+    )
+    .await?;
+    Ok(Waiting {
+        questions,
+        comments,
+        reviews,
+    })
+}
+
+/// Messages on the pass (to the pot or to `me`) that `me` has not read.
+pub async fn unread_pass(c: &mut PgConnection, project: Uuid, me: Uuid) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        "select count(*) from pass_messages m
+         where m.project_id = $1 and m.author_id is distinct from $2 and m.relayed_by is distinct from $2
+           and (m.to_principal is null or m.to_principal = $2)
+           and m.seq > coalesce((select r.last_seq from pass_reads r where r.principal_id = $2 and r.project_id = $1
+               and r.conversation = case when m.to_principal is null then 'pot' else m.author_id::text end), 0)",
+    )
+    .bind(project)
+    .bind(me)
+    .fetch_one(c)
+    .await?)
+}
+
+/// Record that an agent has been briefed on these pots: its next claim there is not held back for
+/// a catch-up (see `service::claim_next`).
+pub async fn brief(c: &mut PgConnection, p: &Principal, projects: &[Uuid]) -> Result<()> {
+    if !p.is_agent() || projects.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "insert into pot_briefings (principal_id, project_id)
+         select $1, x from unnest($2::uuid[]) x
+         on conflict (principal_id, project_id) do update set briefed_at = now()",
+    )
+    .bind(p.id)
+    .bind(projects)
+    .execute(c)
+    .await?;
+    Ok(())
+}
+
+/// [`brief`] for every pot the principal can see.
+pub async fn brief_all(c: &mut PgConnection, p: &Principal) -> Result<()> {
+    if !p.is_agent() {
+        return Ok(());
+    }
+    let sql = format!(
+        "select pr.id from projects pr where {}",
+        crate::service::access_sql("$1", "$2")
+    );
+    let ids: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(p.is_admin)
+        .bind(p.id)
+        .fetch_all(&mut *c)
+        .await?;
+    brief(c, p, &ids).await
+}
+
+/// "2 h 5 min", "35 min".
+fn span(d: chrono::Duration) -> String {
+    let mins = d.num_minutes().max(0);
+    match (mins / 60, mins % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
+}
+
+/// How many events the catch-up lists.
+const CATCH_UP_EVENTS: i64 = 10;
+
+/// What an agent that was away needs before it claims again: what changed in the pot while it was
+/// gone (counts, and the latest events), what it holds and what is parked for it, what waits on it,
+/// unread pass messages, pantry news and the memories that matter. The same sections `what_now`
+/// is made of.
+pub async fn catch_up(
+    c: &mut PgConnection,
+    p: &Principal,
+    project: Uuid,
+    key: &str,
+) -> Result<Value> {
+    let (away_since, back_at): (
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    ) = sqlx::query_as("select away_since, back_at from principals where id = $1")
+        .bind(p.id)
+        .fetch_one(&mut *c)
+        .await?;
+    let since = away_since.unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::hours(24));
+    let away_for = match away_since {
+        Some(a) => span(back_at.unwrap_or_else(chrono::Utc::now) - a),
+        None => "since your first visit (the last 24 hours are listed)".to_string(),
+    };
+    let counts: Vec<(String, i64)> = sqlx::query_as(
+        "select kind, count(*) from events
+         where project_id = $1 and at > $2 and actor_id is distinct from $3
+           and kind not like 'wake%' and kind <> 'activity' and audience is null
+         group by kind order by count(*) desc, kind",
+    )
+    .bind(project)
+    .bind(since)
+    .bind(p.id)
+    .fetch_all(&mut *c)
+    .await?;
+    let total: i64 = counts.iter().map(|c| c.1).sum();
+    let recent: Vec<String> = sqlx::query_scalar(
+        "select to_char(e.at at time zone 'utc', 'MM-DD HH24:MI') || ' ' ||
+                coalesce((select name from principals where id = e.actor_id), e.payload->>'actor_name', 'server') || ' ' || e.kind ||
+                coalesce(' ' || (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id), '')
+         from events e
+         where e.project_id = $1 and e.at > $2 and e.actor_id is distinct from $3
+           and e.kind not like 'wake%' and e.kind <> 'activity' and e.audience is null
+         order by e.seq desc limit $4",
+    )
+    .bind(project)
+    .bind(since)
+    .bind(p.id)
+    .bind(CATCH_UP_EVENTS)
+    .fetch_all(&mut *c)
+    .await?;
+    let holding = holding(c, project, p.id).await?;
+    let parked = parked(c, project, p.id).await?;
+    let waiting = waiting_on_you(c, project, p.id).await?;
+    let unread = unread_pass(c, project, p.id).await?;
+    let pantry_news = crate::pantry::news(c, p.id, project).await?["count"]
+        .as_u64()
+        .unwrap_or(0);
+    let memories = crate::pantry::relevant(c, project, None).await?;
+    Ok(json!({
+        "project": key,
+        "away_for": away_for,
+        "away_since": away_since,
+        "changes": {
+            "total": total,
+            "counts": counts.into_iter().map(|(k, n)| json!({"kind": k, "count": n})).collect::<Vec<_>>(),
+            "recent": recent,
+        },
+        "holding": holding,
+        "parked": parked,
+        "waiting_on_you": {"questions": waiting.questions, "comments": waiting.comments, "reviews": waiting.reviews},
+        "unread_pass": unread,
+        "pantry_news": pantry_news,
+        "memories": memories,
+    }))
+}
+
 /// What a station should do now (see the module text).
 pub async fn what_now(
     db: &PgPool,
@@ -155,29 +384,8 @@ pub async fn what_now(
     let from = FROM;
 
     // what it holds, and what is parked for it
-    let holding = rows(
-        &mut c,
-        format!(
-            "select {NOW_TASK} || jsonb_build_object('lease_expires_at', t.lease_expires_at,
-                 'station', (select ref from stations where id = t.station_id))
-             {from} where t.project_id = $1 and t.claimed_by = $2 and t.status = 'claimed' and t.lease_expires_at > now()
-             order by t.lease_expires_at"
-        ),
-        project_id,
-        me,
-    )
-    .await?;
-    let parked = rows(
-        &mut c,
-        format!(
-            "select {NOW_TASK} || jsonb_build_object('station', (select ref from stations where id = t.station_id))
-             {from} where t.project_id = $1 and t.status = 'blocked' and t.reserved_for = $2
-             order by t.updated_at"
-        ),
-        project_id,
-        me,
-    )
-    .await?;
+    let holding = holding(&mut c, project_id, me).await?;
+    let parked = parked(&mut c, project_id, me).await?;
 
     // ready for this folder
     let ready_here = rows_repo(
@@ -227,49 +435,11 @@ pub async fn what_now(
     };
 
     // what waits on it
-    let questions_to_me = rows(
-        &mut c,
-        "select jsonb_build_object('id', pr.key || '-Q' || q.number, 'title', q.title,
-             'task', (select pr.key || '-' || t.number from tasks t where t.id = q.task_id),
-             'from', (select name from principals where id = q.asked_by))
-         from questions q join projects pr on pr.id = q.project_id
-         where q.project_id = $1 and q.status = 'open' and q.to_principal = $2
-         order by q.created_at limit 10"
-            .into(),
-        project_id,
-        me,
-    )
-    .await?;
-    let comments = rows(
-        &mut c,
-        "select jsonb_build_object('task', pr.key || '-' || t.number,
-             'author', (select name from principals where id = cm.author_id),
-             'excerpt', case when char_length(cm.body) > 160 then left(cm.body, 160) || '…' else cm.body end,
-             'at', cm.created_at)
-         from comment_replies cr join comments cm on cm.id = cr.comment_id
-           join tasks t on t.id = cr.task_id join projects pr on pr.id = t.project_id
-         where cr.project_id = $1 and cr.agent_id = $2 and cr.answered_at is null
-         order by cm.created_at limit 10"
-            .into(),
-        project_id,
-        me,
-    )
-    .await?;
-    let reviews = rows(
-        &mut c,
-        "select jsonb_build_object('id', pr.key || '-R' || r.number,
-             'task', (select pr.key || '-' || t.number from tasks t where t.id = r.task_id),
-             'from', (select name from principals where id = r.requested_by),
-             'note', r.note, 'round', r.round)
-         from reviews r join projects pr on pr.id = r.project_id
-         where r.project_id = $1 and r.state = 'requested'
-           and (r.reviewer = $2 or (r.reviewer is null and r.requested_by is distinct from $2))
-         order by r.reviewer is null, r.created_at limit 10"
-            .into(),
-        project_id,
-        me,
-    )
-    .await?;
+    let Waiting {
+        questions: questions_to_me,
+        comments,
+        reviews,
+    } = waiting_on_you(&mut c, project_id, me).await?;
 
     // work that needs no checkout
     let open_questions = rows(
@@ -357,6 +527,8 @@ pub async fn what_now(
         .as_u64()
         .unwrap_or(0);
     let guide = guide_of(&mut c, project_id).await?;
+    // reading the briefing is being briefed: an agent back from an absence may claim now
+    brief(&mut c, p, &[project_id]).await?;
 
     let next = next_step(&Parts {
         pot: &pr.key,

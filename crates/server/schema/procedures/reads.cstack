@@ -34,7 +34,7 @@ procedure taskDetail(id: String): TaskDetail
 /// @param project Project key, e.g. PAY.
 procedure getBoard(project: String): MarkdownDoc
   @allow(auth() != null)
-  @mcp(tool: "get_board", description: "The project board as markdown with - [ ] checkboxes per task.")
+  @mcp(tool: "get_board", description: "The project board as markdown with - [ ] checkboxes per task. Reading it briefs you on the pot (a claim after 30 minutes away does not stop at catch_up).")
 
 /// One task as markdown.
 /// @param id Task id, e.g. PAY-42.

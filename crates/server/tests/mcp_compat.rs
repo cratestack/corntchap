@@ -135,6 +135,8 @@ async fn legacy_handshake_list_and_call() {
     assert_eq!(get["annotations"]["readOnlyHint"], true);
 
     // tools/call: claim, tick, stale complete, markdown, complete
+    let r = c.call("what_now", json!({"project": "PAY"})).await;
+    assert_eq!(r["isError"], false, "{r}");
     let r = c.call("claim_next", json!({"project": "PAY"})).await;
     assert_eq!(r["isError"], false, "{r}");
     let payload = common::TestApp::payload(&r);
@@ -151,7 +153,7 @@ async fn legacy_handshake_list_and_call() {
     let r = c
         .call(
             "complete",
-            json!({"id": "PAY-1", "epoch": epoch + 5, "result": "x"}),
+            json!({"id": "PAY-1", "epoch": epoch + 5, "result": "x", "learned": "nothing new"}),
         )
         .await;
     assert_eq!(r["isError"], true);
@@ -173,7 +175,7 @@ async fn legacy_handshake_list_and_call() {
     let r = c
         .call(
             "complete",
-            json!({"id": "PAY-1", "epoch": epoch, "result": "done"}),
+            json!({"id": "PAY-1", "epoch": epoch, "result": "done", "learned": "nothing new"}),
         )
         .await;
     assert_eq!(r["isError"], false, "{r}");

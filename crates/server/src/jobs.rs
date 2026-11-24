@@ -126,41 +126,121 @@ async fn run_jobs(state: AppState) {
     }
 }
 
-/// Expired claims go back to `open`, with an event, in one statement.
+/// Expired claims go back to `open`, with an event, in one statement. The event says why: the
+/// lease `lapsed` (no heartbeat), the holder `stalled` (no progress for STALL_MINUTES) or held the
+/// task for `max_hold` (MAX_HOLD_HOURS). For the last two the task gets a note from the server and
+/// the holder is told. A task given back too often is blocked for a person.
 pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
     let mut tx = state.db.begin().await?;
-    let ids: Vec<Uuid> = sqlx::query_scalar(
+    let sql = format!(
         "with old as (
-           select id, claimed_by from tasks where status = 'claimed' and lease_expires_at < now() for update skip locked),
+           select id, claimed_by,
+                  case when coalesce(held_since, updated_at) + make_interval(secs => {max}) <= now() then 'max_hold'
+                       when coalesce(progress_at, updated_at) + make_interval(secs => {stall}) <= now() then 'stalled'
+                       else 'lapsed' end as why
+           from tasks where status = 'claimed' and lease_expires_at < now() for update skip locked),
          expired as (
            update tasks t set status = 'open', claimed_by = null, lease_expires_at = null, updated_at = now()
            from old where t.id = old.id
-           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch, t.station_id),
+           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch, t.station_id, old.why),
          logged as (
            insert into events (project_id, task_id, kind, actor_id, payload)
            select project_id, id, 'task.lease_expired', null,
                   jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
-                                     'agent_id', expired.was,
+                                     'agent_id', expired.was, 'reason', why,
+                                     'on_pr', exists (select 1 from forge_prs fp where fp.task_id = expired.id
+                                                       and fp.state = 'open' and not fp.unlinked),
                                      'station', (select s.ref from stations s where s.id = expired.station_id))
            from expired returning task_id)
-         select id from expired",
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    // a task whose PR merged while it was held is done, not free work
-    for id in &ids {
-        // a savepoint: one task that cannot be completed must not undo the reaping of the rest
+         select id, project_id, was, why from expired",
+        stall = crate::service::stall_secs(),
+        max = crate::service::max_hold_secs(),
+    );
+    let reaped: Vec<(Uuid, Uuid, Option<Uuid>, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .fetch_all(&mut *tx)
+        .await?;
+    for (id, project, was, why) in &reaped {
+        // a savepoint: one task that cannot be settled must not undo the reaping of the rest
         let mut sp = tx.begin().await?;
-        match crate::forge::events::complete_if_merged(&mut sp, *id, None).await {
+        match settle_reaped(&mut sp, *id, *project, *was, why).await {
             Ok(_) => sp.commit().await?,
             Err(e) => {
-                tracing::warn!("reaper: completing {id} on merge: {e}");
+                tracing::warn!("reaper: settling {id}: {e}");
                 sp.rollback().await?;
             }
         }
     }
     tx.commit().await?;
-    Ok(ids.len() as u64)
+    Ok(reaped.len() as u64)
+}
+
+/// After a lease was reaped: say so on the task and tell the holder when the server ended it for
+/// stalling or holding too long; complete the task when its PR merged meanwhile; block it when it
+/// has been given back too often.
+async fn settle_reaped(
+    c: &mut PgConnection,
+    task: Uuid,
+    project: Uuid,
+    was: Option<Uuid>,
+    why: &str,
+) -> Result<(), crate::error::Error> {
+    if why != "lapsed" {
+        let holder: Option<String> = match was {
+            Some(w) => {
+                sqlx::query_scalar("select name from principals where id = $1")
+                    .bind(w)
+                    .fetch_optional(&mut *c)
+                    .await?
+            }
+            None => None,
+        };
+        let (tref, key): (String, String) = sqlx::query_as(
+            "select pr.key || '-' || t.number, pr.key from tasks t join projects pr on pr.id = t.project_id where t.id = $1",
+        )
+        .bind(task)
+        .fetch_one(&mut *c)
+        .await?;
+        let limit = if why == "max_hold" {
+            format!(
+                "it was held for more than {}",
+                crate::service::hours_text(crate::service::max_hold_secs())
+            )
+        } else {
+            format!(
+                "no progress for {}",
+                crate::service::hours_text(crate::service::stall_secs())
+            )
+        };
+        let holder_name = holder.as_deref().unwrap_or("a cook that is gone");
+        crate::service::system_comment(
+            c,
+            task,
+            &format!(
+                "[released by the server] {limit}; holder {holder_name}. The task is open again."
+            ),
+        )
+        .await?;
+        if let Some(agent) = was {
+            let text = format!(
+                "Your lease on {tref} was ended by the server: {limit}. Stop work on it and report \
+                 what is done in a comment; it is open for someone else."
+            );
+            crate::questions::wake(
+                c,
+                project,
+                &key,
+                agent,
+                None,
+                Some(task),
+                &text,
+                "lease-lost",
+            )
+            .await?;
+        }
+    }
+    crate::forge::events::complete_if_merged(c, task, None).await?;
+    crate::service::block_if_bounced(c, task, project).await?;
+    Ok(())
 }
 
 /// People's comments a cook has not answered in time (no comment, completion, release or block
@@ -322,6 +402,11 @@ const TRIGGERS: &[&str] = &[
     "task.cancelled",
     "task.restored",
     "task.updated",
+    // a parked pull request (failing checks, changes requested, conflicts) is work again
+    "forge.checks",
+    "forge.review",
+    "forge.conflict",
+    "forge.pr",
 ];
 
 impl Dispatcher {

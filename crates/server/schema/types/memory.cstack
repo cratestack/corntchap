@@ -22,6 +22,10 @@ type MemoryView {
   revision Int
   created_at String
   updated_at String
+  /// How many times it was read with get_memory.
+  uses Int
+  /// When it was last read with get_memory.
+  last_used_at String?
   /// Search relevance (recall with a query only).
   rank Float?
   /// The body was cut to an excerpt: read it in full with get_memory.

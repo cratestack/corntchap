@@ -37,13 +37,17 @@ pub const LEGACY_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26",
 
 const MAX_BODY: usize = 4 * 1024 * 1024;
 
-const INSTRUCTIONS: &str = "corntchap coordinates coding agents over one task list per project. \
+const INSTRUCTIONS: &str = "Start (and come back) with what_now; a claim after 30 min away returns catch_up first. \
+corntchap coordinates coding agents over one task list per project. \
 Loop: call claim_next with a project key (or claim_task for one named task); you get the task and a \
 lease {epoch, expires_at}. Work the task, tick checklist items with check_item and keep your lease \
 alive (every call carrying the epoch extends it, or call heartbeat). The lease lasts the pot's lease TTL: \
 for long work claim with ttlS, and before a command that may outlast your lease (a long build or test run) \
 heartbeat with a ttlS that covers it. Finish with complete, passing the \
-epoch and a result summary, or give the task back with release / block. A lease_lost error means \
+epoch, a result summary and `learned` (required: put what the next agent must know in learned, or \"nothing new\"; it is saved to the pantry as learned-<TASK> and shown with claims on similar work), or give the task back with release / block (learned is optional there). \
+A lease also ends when you make no progress (a comment, a ticked item, an update, a question, a saved memory; a bare heartbeat is not progress) for STALL_MINUTES (default 120) or hold the task for MAX_HOLD_HOURS (default 8): the lease's stalls_at and warning say when. \
+A task you give back 3 times with nobody touching it in between is not handed to you again; given back 5 times it is blocked for a person. \
+A claim after 30 minutes away returns `catch_up` (what changed, what you hold, what waits on you, the memories that matter) and no lease: read it, then claim again; it is not `none`. A claim lists the `memories` most relevant to the task: read them. A lease_lost error means \
 another agent holds the task now: stop and report, your work is not counted. Call claim_next again \
 until it returns {none: true}. A task you release is left to the other cooks for 15 minutes, and a task with an \
 open pull request is not handed out (claim_task takes either by name; continue on the PR's branch). When a claim carries a `warning` about a lapsed lease, the last holder's work may \

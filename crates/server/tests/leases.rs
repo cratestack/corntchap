@@ -86,7 +86,11 @@ async fn leases_fit_long_work() {
     );
     assert_eq!(n["task"]["id"], "PAY-3");
     let s = seconds_left(&app, 3).await;
-    assert!((86000.0..=86400.0).contains(&s), "at most a day: {s}");
+    // a day was asked for; no lease outlasts the stall limit (STALL_MINUTES, 2 h) without progress
+    assert!(
+        (7100.0..=7200.0).contains(&s),
+        "capped at the stall limit: {s}"
+    );
 
     // the pot's default changes for its team's owner, not for a chef
     let e = app
