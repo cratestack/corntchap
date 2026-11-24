@@ -1,0 +1,115 @@
+part of "../corntchap.cstack"
+
+// my_work: what the signed-in principal owns, holds and is waited on for (src/my_work.rs).
+
+/// A task on the "my work" page.
+type WorkTask {
+  /// Task id, e.g. PAY-42.
+  id String
+  project String
+  title String
+  priority Int
+  /// open, claimed or blocked.
+  status String
+  /// The task's owner (handle).
+  owner String?
+  /// Who holds the lease now (a cook or a person), when somebody does.
+  holder String?
+  lease_live Boolean?
+  lease_expires_at String?
+  /// The task's pull request (the open one first), when it has any.
+  pr PrSummary?
+  /// The latest review round, when there is one.
+  review ReviewSummary?
+  updated_at String
+  /// blocked_on_me only: `question` (a question addressed to you) or `dependency` (a task you own).
+  via String?
+  /// blocked_on_me only: the question (PAY-Q4) or the task you own (PAY-7) that holds it up.
+  because String?
+}
+
+/// The tasks I own in one pot.
+type WorkPot {
+  /// Pot key.
+  project String
+  name String
+  tasks WorkTask[]
+}
+
+/// A question that waits for me.
+type WorkQuestion {
+  /// Question id, e.g. PAY-Q3.
+  id String
+  project String
+  title String
+  /// The task it is about.
+  task String?
+  /// Who asked.
+  from String?
+  at String
+}
+
+/// A review asked of me (or of anyone on the team).
+type WorkReview {
+  /// The review id, e.g. PAY-R3.
+  id String
+  project String
+  /// The task to review, e.g. PAY-12.
+  task String
+  task_title String?
+  from String?
+  /// What to look at: a pull request, a branch.
+  note String
+  round Int
+  at String
+}
+
+/// A people's comment on a task I hold that I have not answered (cooks).
+type WorkComment {
+  task String
+  project String
+  author String?
+  excerpt String
+  at String
+}
+
+type WorkWaiting {
+  /// Open questions addressed to me.
+  questions WorkQuestion[]
+  reviews WorkReview[]
+  /// Cooks: unanswered comments from people on tasks they hold.
+  comments WorkComment[]
+  /// People: open questions in my pots that nobody picked (the first ten).
+  open_pool WorkQuestion[]
+  open_pool_total Int
+}
+
+/// The numbers for a badge.
+type WorkCounts {
+  /// Open, claimed and blocked tasks I own.
+  owned Int
+  /// Tasks I hold with a live lease.
+  holding Int
+  /// Questions to me, reviews asked of me and unanswered comments: what asks for an answer.
+  waiting Int
+  /// Tasks blocked on a question I must answer or on a task I own.
+  blocked Int
+  /// Open questions in my pots that nobody picked (people).
+  open_pool Int
+}
+
+/// What I own, hold and am waited on for, across the pots I can see.
+type MyWorkView {
+  principal String
+  kind String
+  /// The pot asked about, when one was given.
+  project String?
+  /// Tasks I own, by pot.
+  owned WorkPot[]
+  /// Tasks I hold with a live lease.
+  holding WorkTask[]
+  waiting_on_me WorkWaiting
+  /// The top ten.
+  blocked_on_me WorkTask[]
+  counts WorkCounts
+}

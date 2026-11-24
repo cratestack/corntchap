@@ -33,6 +33,16 @@ function MiniLease({ task }: { task: TaskView }) {
   );
 }
 
+/** The owner's small avatar, shown when the owner is not the one holding the task. */
+function OwnerMark({ task, className }: { task: TaskView; className?: string }) {
+  if (!task.owner || task.owner === task.claimed_by) return null;
+  return (
+    <span className="inline-flex shrink-0 items-center" title={`Owner: ${task.owner}`} role="img" aria-label={`Owner: ${task.owner}`}>
+      <Avatar name={task.owner} className={cn("size-4 rounded-full text-[9px] ring-1 ring-card", className)} />
+    </span>
+  );
+}
+
 function PrioTag({ prio }: { prio: string | null }) {
   if (!prio) return null;
   return (
@@ -81,6 +91,7 @@ function PhoneRow({ task, selected, onOpen, menus }: { task: TaskView; selected:
               <span className="max-w-24 truncate">{task.claimed_by}</span>
             </span>
           )}
+          <OwnerMark task={task} />
           {live && <MiniLease task={task} />}
           {task.total_items > 0 && (
             <span className="font-mono text-[11px] tabular-nums">
@@ -156,6 +167,7 @@ export function TaskRow({ task, selected, onOpen, menus }: { task: TaskView; sel
         </div>
       </div>
       <div className="col-span-2 flex items-center gap-3 sm:col-span-1 sm:justify-end">
+        <OwnerMark task={task} className="size-5 text-[10px]" />
         {task.claimed_by && (
           <span className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
             <Avatar name={task.claimed_by} className="size-5 text-[10px]" />
@@ -258,7 +270,7 @@ export function TaskCard({ task, selected, onOpen, menus }: { task: TaskView; se
           ))}
         </div>
       )}
-      {(task.total_items > 0 || task.labels.length > 0 || task.claimed_by || live) && (
+      {(task.total_items > 0 || task.labels.length > 0 || task.claimed_by || task.owner || live) && (
         <div className="mt-2 flex items-center gap-2 overflow-hidden">
           {task.total_items > 0 && <ProgressBar done={done} total={task.total_items} className="shrink-0 [&>div:first-child]:w-12" />}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
@@ -268,6 +280,7 @@ export function TaskCard({ task, selected, onOpen, menus }: { task: TaskView; se
             {extra > 0 && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">+{extra}</span>}
           </div>
           {live && <MiniLease task={task} />}
+          <OwnerMark task={task} className="size-5 text-[10px]" />
           {task.claimed_by && <Avatar name={task.claimed_by} className="size-5 text-[10px]" />}
         </div>
       )}

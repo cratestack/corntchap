@@ -19,9 +19,10 @@ procedure projectOverview(): ProjectSummary[]
 /// @param label Only tasks carrying this label.
 /// @param readyOnly Only tasks you could claim now (open, dependencies and subtasks done).
 /// @param menu Only tasks on this menu (key, e.g. mvp); - for tasks on no menu.
-procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?, menu: String?): TaskView[]
+/// @param owner Only tasks owned by this handle; me for yours; - for tasks nobody owns.
+procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?, menu: String?, owner: String?): TaskView[]
   @allow(auth() != null)
-  @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts, bodies and results cut to 280 characters (get_task has them whole). Optional status/label filters; readyOnly limits to claimable tasks.")
+  @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts, bodies and results cut to 280 characters (get_task has them whole). Optional status/label/owner filters (owner: a handle, me, or - for nobody); readyOnly limits to claimable tasks.")
 
 /// One task in full.
 /// @param id Task id, e.g. PAY-42.

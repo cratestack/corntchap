@@ -91,6 +91,8 @@ type TaskView {
   depends_on String[]
   /// The agent holding the lease.
   claimed_by String?
+  /// The task's owner: the person (or cook) accountable for it, whoever does the work (a handle).
+  owner String?
   /// The station (agent session) that holds the lease or is parked on the task, e.g. st_1a2b3c4d.
   /// A cook with several stations touches only the leases of its own station.
   station String?
@@ -141,6 +143,8 @@ type TaskDetail {
   depends_on String[]
   /// The agent holding the lease.
   claimed_by String?
+  /// The task's owner: the person (or cook) accountable for it, whoever does the work (a handle).
+  owner String?
   /// The station (agent session) that holds the lease or is parked on the task, e.g. st_1a2b3c4d.
   /// A cook with several stations touches only the leases of its own station.
   station String?

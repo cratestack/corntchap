@@ -62,6 +62,7 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
        from task_deps d join tasks dt on dt.id = d.depends_on join projects dp on dp.id = dt.project_id
        where d.task_id = t.id), '[]'::jsonb),
   'claimed_by', (select name from principals where id = t.claimed_by),
+  'owner', (select name from principals where id = t.owner_id),
   'station', case when t.status in ('claimed','blocked') then (select ref from stations where id = t.station_id) end,
   'last_station', case when t.status not in ('claimed','blocked') then (select ref from stations where id = t.station_id) end,
   'lease_epoch', t.lease_epoch, 'lease_expires_at', t.lease_expires_at,
@@ -95,7 +96,7 @@ fn cut_sql(col: &str) -> String {
 }
 
 /// Project visibility predicate; $N = is_admin, $M = principal id.
-fn access_sql(admin: &str, pid: &str) -> String {
+pub(crate) fn access_sql(admin: &str, pid: &str) -> String {
     format!(
         "({admin} or exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = {pid}))"
     )
@@ -316,9 +317,17 @@ pub async fn list_tasks(
     label: Option<&str>,
     ready_only: bool,
     menu: Option<&str>,
+    owner: Option<&str>,
 ) -> Result<Value> {
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, project).await?;
+    // owner: `me`, a handle, or `-` (nobody); empty or `anyone` is no filter
+    let owner = match owner.map(str::trim).filter(|o| !o.is_empty()) {
+        None => None,
+        Some(o) if o.eq_ignore_ascii_case("anyone") => None,
+        Some(o) if o.eq_ignore_ascii_case("me") => Some(p.name.clone()),
+        Some(o) => Some(o.to_string()),
+    };
     // A list is for choosing: bodies and results are cut (get_task has them whole). Agents call this
     // on pots with long histories, where full bodies made one call cost a hundred thousand tokens.
     let sql = format!(
@@ -330,6 +339,8 @@ pub async fn list_tasks(
            and ($3::text is null or $3 = any(t.labels))
            and ($5::text is null or ($5 = '-' and t.menu_id is null)
                 or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
+           and ($6::text is null or ($6 = '-' and t.owner_id is null)
+                or t.owner_id = (select id from principals where name = $6))
            and (not $4 or (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
                  where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))))
          order by t.priority desc, t.number",
@@ -348,6 +359,7 @@ pub async fn list_tasks(
                 crate::menus::slug(m)
             }
         }))
+        .bind(owner)
         .fetch_all(&mut *c)
         .await?;
     Ok(Value::Array(rows))
@@ -366,6 +378,36 @@ pub struct NewTask {
     pub priority: i64,
     /// Menu key (milestone) to put the task on.
     pub menu: Option<String>,
+    /// Handle of the task's owner (a person or cook in the pot's team).
+    pub owner: Option<String>,
+}
+
+/// The principal a task's owner handle names. Empty: nobody. The owner is in the pot's team.
+async fn owner_id(
+    c: &mut PgConnection,
+    project: Uuid,
+    key: &str,
+    handle: &str,
+) -> Result<Option<Uuid>> {
+    let handle = handle.trim().trim_start_matches('@');
+    if handle.is_empty() {
+        return Ok(None);
+    }
+    let id: Option<Uuid> = sqlx::query_scalar(
+        "select p.id from principals p join projects pr on pr.id = $2
+           join team_members tm on tm.principal_id = p.id and tm.team_id = pr.team_id
+         where p.name = $1 and p.kind <> 'relay' and p.disabled_at is null",
+    )
+    .bind(handle)
+    .bind(project)
+    .fetch_optional(&mut *c)
+    .await?;
+    match id {
+        Some(id) => Ok(Some(id)),
+        None => invalid(format!(
+            "{handle} is not in the team of {key}: an owner is a person or a cook of the pot's team (list_team_members)"
+        )),
+    }
 }
 
 pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value> {
@@ -387,6 +429,10 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
         None => None,
     };
     let repos = crate::repos::check_aliases(&mut tx, pr.id, &pr.key, &n.repos).await?;
+    let owner = match n.owner.as_deref() {
+        Some(h) => owner_id(&mut tx, pr.id, &pr.key, h).await?,
+        None => None,
+    };
     let number: i64 = sqlx::query_scalar(
         "update projects set next_number = next_number + 1 where id = $1 returning next_number - 1",
     )
@@ -395,8 +441,8 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     .await?;
     let id = Uuid::new_v4();
     sqlx::query(
-        "insert into tasks (id, project_id, number, title, body, priority, labels, parent_id, status, created_by, menu_id, repos)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11)",
+        "insert into tasks (id, project_id, number, title, body, priority, labels, parent_id, status, created_by, menu_id, repos, owner_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$12)",
     )
     .bind(id)
     .bind(pr.id)
@@ -409,6 +455,7 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
     .bind(p.id)
     .bind(menu)
     .bind(&repos)
+    .bind(owner)
     .execute(&mut *tx)
     .await?;
     for (i, text) in n.items.iter().enumerate() {
@@ -437,9 +484,51 @@ pub async fn create_task(db: &PgPool, p: &Principal, n: NewTask) -> Result<Value
         json!({"title": n.title.trim(), "labels": n.labels, "repos": repos, "menu": n.menu.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(crate::menus::slug)}),
     )
     .await?;
+    if owner.is_some() {
+        emit_owner_changed(&mut tx, pr.id, id, p.id, None, owner).await?;
+    }
     let out = task_full(&mut tx, id).await?;
     tx.commit().await?;
     Ok(out)
+}
+
+/// `task.owner_changed` with the old and the new owner (handles).
+async fn emit_owner_changed(
+    c: &mut PgConnection,
+    project: Uuid,
+    task: Uuid,
+    actor: Uuid,
+    old: Option<Uuid>,
+    new: Option<Uuid>,
+) -> Result<()> {
+    let old_name: Option<String> = match old {
+        Some(id) => {
+            sqlx::query_scalar("select name from principals where id = $1")
+                .bind(id)
+                .fetch_optional(&mut *c)
+                .await?
+        }
+        None => None,
+    };
+    let new_name: Option<String> = match new {
+        Some(id) => {
+            sqlx::query_scalar("select name from principals where id = $1")
+                .bind(id)
+                .fetch_optional(&mut *c)
+                .await?
+        }
+        None => None,
+    };
+    emit(
+        c,
+        Some(project),
+        Some(task),
+        "task.owner_changed",
+        Some(actor),
+        json!({"old_owner": old_name, "new_owner": new_name}),
+    )
+    .await?;
+    Ok(())
 }
 
 pub struct TaskEdit {
@@ -451,6 +540,8 @@ pub struct TaskEdit {
     pub priority: Option<i64>,
     /// Some("") takes the task off its menu.
     pub menu: Option<String>,
+    /// Some(handle) sets the owner (a person or cook of the pot's team); Some("") clears it.
+    pub owner: Option<String>,
 }
 
 pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Result<Value> {
@@ -475,6 +566,17 @@ pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Re
         Some(r) => Some(crate::repos::check_aliases(&mut tx, t.project_id, &t.key, r).await?),
         None => None,
     };
+    let (old_owner, new_owner) = match e.owner.as_deref() {
+        Some(h) => {
+            let new = owner_id(&mut tx, t.project_id, &t.key, h).await?;
+            let old: Option<Uuid> = sqlx::query_scalar("select owner_id from tasks where id = $1")
+                .bind(t.id)
+                .fetch_one(&mut *tx)
+                .await?;
+            (old, Some(new))
+        }
+        None => (None, None),
+    };
     sqlx::query(
         "update tasks set repos = coalesce($6, repos), title = coalesce($2, title), body = coalesce($3, body), labels = coalesce($4, labels),
             priority = coalesce($5, priority), updated_at = now() where id = $1",
@@ -487,6 +589,16 @@ pub async fn update_task(db: &PgPool, p: &Principal, r: &str, e: TaskEdit) -> Re
     .bind(repos.as_deref())
     .execute(&mut *tx)
     .await?;
+    if let Some(new) = new_owner
+        && new != old_owner
+    {
+        sqlx::query("update tasks set owner_id = $2 where id = $1")
+            .bind(t.id)
+            .bind(new)
+            .execute(&mut *tx)
+            .await?;
+        emit_owner_changed(&mut tx, t.project_id, t.id, p.id, old_owner, new).await?;
+    }
     if let Some(m) = e.menu.as_deref().map(str::trim) {
         let menu = if m.is_empty() {
             None

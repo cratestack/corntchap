@@ -14,6 +14,7 @@ pub mod forge;
 pub mod jobs;
 pub mod mcp_compat;
 pub mod menus;
+pub mod my_work;
 pub mod oauth;
 pub mod pages;
 pub mod pantry;

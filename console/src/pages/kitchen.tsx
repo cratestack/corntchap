@@ -6,6 +6,7 @@ import { Check, ChevronDown, GitBranch, Pencil, Plus, Settings2, SlidersHorizont
 import { cn } from "@/lib/utils";
 import { useProc, useProjects, useQuestions } from "@/lib/data";
 import { useLive } from "@/lib/live";
+import { useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { BUCKETS, bucketOf, plural, type Bucket } from "@/lib/format";
 import { forgetView, isBaseView, lastPot, lastView, rememberPot, rememberView, type BaseView, type Filters } from "@/lib/views";
@@ -55,20 +56,21 @@ const TAIL_VIEWS: { id: BaseView; label: string }[] = [
 
 function readFilters(p: URLSearchParams): Filters {
   const f: Filters = {};
-  for (const k of ["status", "label", "repo", "holder", "menu", "q"] as const) {
+  for (const k of ["status", "label", "repo", "holder", "owner", "menu", "q"] as const) {
     const v = p.get(k);
     if (v) f[k] = v;
   }
   return f;
 }
 
-function applyFilters(tasks: TaskView[], f: Filters): TaskView[] {
+function applyFilters(tasks: TaskView[], f: Filters, me: string): TaskView[] {
   const q = f.q?.trim().toLowerCase();
   return tasks.filter((t) => {
     if (f.status && bucketOf(t) !== f.status) return false;
     if (f.label && !t.labels.includes(f.label)) return false;
     if (f.repo && !t.repos.includes(f.repo)) return false;
     if (f.holder && t.claimed_by !== f.holder) return false;
+    if (f.owner && (f.owner === "-" ? !!t.owner : t.owner !== (f.owner === "me" ? me : f.owner))) return false;
     if (f.menu && (f.menu === "-" ? !!t.menu : t.menu !== f.menu)) return false;
     if (q && !`${t.id} ${t.title}`.toLowerCase().includes(q)) return false;
     return true;
@@ -107,6 +109,7 @@ export function KitchenPage() {
   const [deleting, setDeleting] = useState<ViewOut | null>(null);
   const taskView = !!viewKey || base === "board";
   const { events } = useLive();
+  const me = useSession();
   const filters = readFilters(params);
   const selected = params.get("task");
   const [newMemory, setNewMemory] = useState(false);
@@ -145,7 +148,7 @@ export function KitchenPage() {
     setParams(
       (p) => {
         const n = new URLSearchParams(p);
-        for (const k of ["status", "label", "repo", "holder", "menu", "q"]) n.delete(k);
+        for (const k of ["status", "label", "repo", "holder", "owner", "menu", "q"]) n.delete(k);
         return n;
       },
       { replace: true },
@@ -179,7 +182,7 @@ export function KitchenPage() {
   }
 
   const all = tasks.data ?? [];
-  const visible = applyFilters(all, filters);
+  const visible = applyFilters(all, filters, me.name);
   const potEvents = events.filter((e) => e.project === potKey);
   const selectedMenu = filters.menu ? menus.menus.find((m) => m.key === filters.menu) : undefined;
   // while one menu is selected every row is on it, so the chip would only repeat the strip
@@ -475,6 +478,7 @@ function FilterSheet({
   const labels = useMemo(() => [...new Set(tasks.flatMap((t) => t.labels))].sort(), [tasks]);
   const repos = useMemo(() => [...new Set([...project.repos.map((r) => r.name), ...tasks.flatMap((t) => t.repos)])], [tasks, project.repos]);
   const holders = useMemo(() => [...new Set(tasks.map((t) => t.claimed_by).filter((h): h is string => !!h))].sort(), [tasks]);
+  const owners = useMemo(() => [...new Set(tasks.map((t) => t.owner).filter((h): h is string => !!h))].sort(), [tasks]);
   const toggle = (k: keyof Filters, v: string) => setFilter(k, filters[k] === v ? undefined : v);
   const active = Object.values(filters).some(Boolean);
   const section = (title: string, body: React.ReactNode) => (
@@ -524,6 +528,16 @@ function FilterSheet({
           )}
           {labels.length > 0 && section("Label", labels.map((l) => <Pill key={l} on={filters.label === l} onClick={() => toggle("label", l)}>{l}</Pill>))}
           {repos.length > 0 && section("Repository", repos.map((r) => <Pill key={r} on={filters.repo === r} onClick={() => toggle("repo", r)}><GitBranch className="size-3.5 text-primary" aria-hidden="true" /><span className="font-mono text-[13px]">{r}</span></Pill>))}
+          {section(
+            "Owner",
+            <>
+              <Pill on={filters.owner === "me"} onClick={() => toggle("owner", "me")}>Me</Pill>
+              <Pill on={filters.owner === "-"} onClick={() => toggle("owner", "-")}>Nobody</Pill>
+              {owners.map((o) => (
+                <Pill key={o} on={filters.owner === o} onClick={() => toggle("owner", o)}>{o}</Pill>
+              ))}
+            </>,
+          )}
           {holders.length > 0 && section("Cook", holders.map((h) => <Pill key={h} on={filters.holder === h} onClick={() => toggle("holder", h)}>{h}</Pill>))}
         </div>
         <div className="flex gap-2 border-t border-border bg-card px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
@@ -544,6 +558,7 @@ function WideHeader({ project, base, viewKey, saved, taskView, onNewView, filter
   const labels = useMemo(() => [...new Set(tasks.flatMap((t) => t.labels))].sort(), [tasks]);
   const repos = useMemo(() => [...new Set([...project.repos.map((r) => r.name), ...tasks.flatMap((t) => t.repos)])], [tasks, project.repos]);
   const holders = useMemo(() => [...new Set(tasks.map((t) => t.claimed_by).filter((h): h is string => !!h))].sort(), [tasks]);
+  const owners = useMemo(() => [...new Set(tasks.map((t) => t.owner).filter((h): h is string => !!h))].sort(), [tasks]);
   const active = Object.values(filters).some(Boolean);
 
   const tab = (v: { id: BaseView; label: string }) => (
@@ -692,6 +707,21 @@ function WideHeader({ project, base, viewKey, saved, taskView, onNewView, filter
               </DropdownMenuRadioGroup>
             </FilterChip>
           )}
+          <FilterChip
+            label="Owner"
+            value={filters.owner === "me" ? "Me" : filters.owner === "-" ? "Nobody" : filters.owner}
+            onClear={() => setFilter("owner", undefined)}
+          >
+            <DropdownMenuRadioGroup value={filters.owner ?? ""} onValueChange={(v) => setFilter("owner", v || undefined)}>
+              <DropdownMenuRadioItem value="me">Me</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="-">Nobody</DropdownMenuRadioItem>
+              {owners.map((o) => (
+                <DropdownMenuRadioItem key={o} value={o}>
+                  {o}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </FilterChip>
           <FilterChip label="Cook" value={filters.holder} onClear={() => setFilter("holder", undefined)} disabled={holders.length === 0}>
             <DropdownMenuRadioGroup value={filters.holder ?? ""} onValueChange={(v) => setFilter("holder", v || undefined)}>
               {holders.map((h) => (
@@ -822,6 +852,7 @@ function SavedViewBody({
   onClear: () => void;
   menus: Record<string, string>;
 }) {
+  const me = useSession();
   const run = useProc("viewRun", { project: potKey, key: view?.key ?? null }, { enabled: !!view });
   if (loadingViews) return <RowSkeleton rows={4} />;
   if (!view) {
@@ -832,7 +863,7 @@ function SavedViewBody({
     );
   }
   const tasks = run.data ?? [];
-  const visible = applyFilters(tasks, filters);
+  const visible = applyFilters(tasks, filters, me.name);
   if (run.error && !run.isLoading) {
     return (
       <EmptyState band={false} title="This view would not run">

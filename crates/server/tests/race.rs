@@ -81,6 +81,7 @@ async fn ten_agents_race_over_fifty_tasks() {
                 repos: vec![],
                 priority: n % 3,
                 menu: None,
+                owner: None,
             },
         )
         .await
@@ -192,6 +193,7 @@ async fn expired_lease_is_fenced() {
             repos: vec![],
             priority: 0,
             menu: None,
+            owner: None,
         },
     )
     .await

@@ -167,6 +167,12 @@ A session that cannot leave its folder (a sandbox, a harness locked to one direc
 
 **The pot guide** is "how we work here", written by people for agents (markdown, up to 20 000 characters): conventions, what to do first, where the work is. The pot's team owners and admins set it on the pot's About page in the console (editor with preview), with `corntchap-cli pot guide PAY --file guide.md` (`--clear`; without either it prints it), or with the `set_pot_guide` tool. `what_now` returns it whole; `register_station` and `whoami` (with a project, which a pot's MCP URL supplies) carry its first 1 500 characters, and wake prompts say "This pot has a guide: call what_now".
 
+#### Owners and "my work"
+
+A task has one **owner**: the person (or cook) of the pot's team who is accountable for it, whoever does the work. The lease says who holds the task now; the owner answers for it. Set it with `owner` on `create_task` / `update_task` (a handle; an empty string clears it), `corntchap-cli task new --owner HANDLE`, `task edit --owner HANDLE` or `--no-owner`, or the Owner field on the task sheet. Whoever may edit a task's fields may set its owner, and the owner must be on the pot's team. `list_tasks owner=me` (or a handle, or `-` for unowned) filters the list. Tasks that carried a label `owner:<handle>` got that owner when the 0032 migration ran (the label stays).
+
+`my_work` (MCP tool; `corntchap-cli me work`; REST `GET /api/v1/me/work?project=PAY`; the console's My work page) lists what is yours across every pot you can see: `owned` (open, claimed and blocked tasks you own, by pot), `holding` (tasks you hold with a live lease), `waiting_on_me` (questions addressed to you, reviews asked of you or of the team, unanswered comments on your tasks; people also see the open questions nobody picked), `blocked_on_me` (tasks parked on a question you must answer or depending on a task you own, the top 10) and `counts` for a badge.
+
 #### Starting new sessions, and opening them in Claude Desktop
 
 Claude Code sessions can also be started for a cook, on that person's subscription, by their own `claude`:

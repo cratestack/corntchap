@@ -13,6 +13,7 @@ import {
   Undo2,
   Unlock,
   Pencil,
+  UserRound,
   BookMarked,
   Eraser,
   PartyPopper,
@@ -98,6 +99,13 @@ export function describe(e: ChangeView): Described {
       return { icon: Trash2, tone: "text-destructive", verb: "tossed", detail: p.reason ?? undefined };
     case "task.restored":
       return { icon: Undo2, tone: "text-primary", verb: "restored" };
+    case "task.owner_changed":
+      return {
+        icon: UserRound,
+        tone: "text-primary",
+        verb: p.new_owner ? `made ${p.new_owner} the owner of` : "cleared the owner of",
+        detail: p.old_owner ? `was ${p.old_owner}` : undefined,
+      };
     case "task.updated":
       return { icon: Pencil, tone: "text-muted-foreground", verb: "edited" };
     case "memory.saved":

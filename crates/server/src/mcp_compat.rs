@@ -98,7 +98,10 @@ may take work in another repository of the pot by opening a worktree or clone of
 folder (never inside another session's worktree). A session that cannot leave its folder says so: \
 register_station with confined=true. It then does folder-free work: triage and split epics, answer \
 and ask questions, review, keep the pantry, check stale claims. Never answer \"nothing to do\" while \
-what_now lists something.";
+what_now lists something. \
+A task has an owner: the person (or cook) accountable for it, whoever does the work (create_task and \
+update_task take `owner`, a handle of the pot's team; list_tasks filters with owner=me). my_work lists \
+what you own, what you hold and what waits on you (questions, reviews, comments) across your pots.";
 
 pub struct Compat<T> {
     tools: T,

@@ -290,3 +290,13 @@ export function useReviews(pot: string, which: "mine" | "all", enabled = true) {
   });
   return { data: q.data, isLoading: q.isLoading, error: q.error as unknown };
 }
+
+// ---- my work ----
+
+/**
+ * What the signed-in person owns, holds and is waited on for, across every pot (the `my_work` tool).
+ * Under `["data"]`, so the live poller refreshes it; the sidebar badge and the page share one query.
+ */
+export function useMyWork(project?: string) {
+  return useProc("myWork", project ? { project } : {}, { refetchMs: 30_000 });
+}

@@ -31,6 +31,7 @@ import { useIsPhone } from "@/lib/media";
 import { useOpenTask } from "@/lib/nav";
 import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip, SectionLabel } from "./bits";
 import { RepoPicker } from "./repos";
+import { OwnerPicker } from "./owner-picker";
 import { TaskPrs } from "./forge-prs";
 import { TaskReviews } from "./reviews";
 import { RefreshButton } from "./refresh-button";
@@ -232,6 +233,13 @@ function TaskDetailBody({ id }: { id: string }) {
                     {prio}
                   </Prop>
                 )}
+                <OwnerPicker
+                  pot={t.project}
+                  value={t.owner ?? null}
+                  pill
+                  disabled={!!busy}
+                  onChange={(owner) => run("change the owner", () => call("taskEdit", { id: t.id, owner }), owner ? `${owner} owns ${t.id}` : "Owner cleared")}
+                />
                 <MenuPicker
                   taskId={t.id}
                   current={t.menu ?? null}

@@ -14,6 +14,7 @@ import { errorMessage } from "@/lib/api";
 import { lastView } from "@/lib/views";
 import { TagInput } from "./tag-input";
 import { RepoPicker } from "./repos";
+import { OwnerPicker } from "./owner-picker";
 import { useMenus } from "./menus";
 
 export const PRIORITIES = [
@@ -38,6 +39,7 @@ export function NewTaskDialog() {
   const [priority, setPriority] = useState("0");
   const [menu, setMenu] = useState("-");
   const [repos, setRepos] = useState<string[]>([]);
+  const [owner, setOwner] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -49,6 +51,7 @@ export function NewTaskDialog() {
       setLabels([]);
       setDeps([]);
       setRepos([]);
+      setOwner("");
       setPriority("0");
       setMenu(newTask.menu && newTask.menu !== "-" ? newTask.menu : "-");
     }
@@ -85,6 +88,7 @@ export function NewTaskDialog() {
         priority: Number(priority),
         repos: potRepos.length > 0 && repos.length > 0 ? repos.join(",") : null,
         menu: menu !== "-" && menus.open.some((m) => m.key === menu) ? menu : null,
+        owner: owner || null,
       });
       toast.success(`${t.id} is in the pot`, {
         description: t.title,
@@ -127,6 +131,7 @@ export function NewTaskDialog() {
                       setPot(v);
                       setMenu("-");
                       setRepos([]);
+                      setOwner("");
                     }}
                   >
                     <SelectTrigger id="nt-pot" className="w-full">
@@ -156,6 +161,11 @@ export function NewTaskDialog() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="nt-owner">Owner</Label>
+                <OwnerPicker id="nt-owner" pot={pot} value={owner || null} onChange={setOwner} />
+                <p className="text-[12px] text-muted-foreground">Who answers for it, whoever does the work. Optional.</p>
               </div>
               {menus.open.length > 0 && (
                 <div className="space-y-1.5">

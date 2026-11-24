@@ -199,6 +199,7 @@ impl ProcedureRegistry for Procedures {
                 a.label.as_deref(),
                 a.readyOnly.unwrap_or(false),
                 a.menu.as_deref(),
+                a.owner.as_deref(),
             )
             .await,
         )
@@ -268,6 +269,7 @@ impl ProcedureRegistry for Procedures {
                     repos: csv(&a.repos),
                     priority: a.priority.unwrap_or(0),
                     menu: a.menu,
+                    owner: a.owner,
                 },
             )
             .await,
@@ -296,6 +298,7 @@ impl ProcedureRegistry for Procedures {
                     repos,
                     priority: a.priority,
                     menu: a.menu,
+                    owner: a.owner,
                 },
             )
             .await,
@@ -1273,6 +1276,17 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<what_now::Output, CratestackError> {
         let p = principal(ctx)?;
         typed(crate::what_now::what_now(&self.state.db, &p, &a.project, a.station.as_deref()).await)
+    }
+
+    async fn my_work(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: my_work::Args,
+        _z: my_work::Authorized,
+    ) -> Result<my_work::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::my_work::my_work(&self.state.db, &p, a.project.as_deref()).await)
     }
 
     async fn set_pot_guide(
