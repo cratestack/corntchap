@@ -29,3 +29,8 @@ alter table memories add column last_used_at timestamptz;
 drop trigger memories_touch on memories;
 create trigger memories_touch before update of key, title, body, kind, tags, task_id, updated_by, revision on memories
   for each row execute function touch_updated_at();
+-- Memories that existed before use was tracked are not unread: start their clock at their last edit.
+update memories set last_used_at = greatest(updated_at, created_at) where last_used_at is null;
+
+-- The bounce rules read a task's give-backs (releases and lapsed leases) by task, newest first.
+create index if not exists events_giveback on events (task_id, seq) where kind in ('task.released', 'task.lease_expired');

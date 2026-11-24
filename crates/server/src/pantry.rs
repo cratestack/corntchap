@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub const KINDS: &[&str] = &["note", "convention", "gotcha", "decision", "howto", "fact"];
-const MAX_BODY: usize = 20_000;
+pub const MAX_BODY: usize = 20_000;
 const MAX_TITLE: usize = 200;
 /// Bodies longer than this are cut in search results (`truncated: true`); `get_memory` reads all.
 const EXCERPT: usize = 600;
@@ -440,8 +440,10 @@ pub async fn relevant(
     .bind(&tsq)
     .bind(RELEVANT_EXCERPT as i32)
     .bind(RELEVANT)
-    .fetch_all(c)
+    .fetch_all(&mut *c)
     .await?;
+    let keys: Vec<String> = rows.iter().map(|r| r.0.clone()).collect();
+    bump_uses(c, project, &keys).await?;
     Ok(rows
         .into_iter()
         .map(|(key, title, kind, body)| {
@@ -454,6 +456,22 @@ pub async fn relevant(
             json!({"key": key, "title": title, "kind": kind, "excerpt": excerpt})
         })
         .collect())
+}
+
+/// Memories that were handed to a reader (a claim, recall, the digest, get_memory) were used: they
+/// earn their place, and are not forget candidates.
+async fn bump_uses(c: &mut PgConnection, project: Uuid, keys: &[String]) -> Result<()> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "update memories set uses = uses + 1, last_used_at = now() where project_id = $1 and key = any($2)",
+    )
+    .bind(project)
+    .bind(keys)
+    .execute(c)
+    .await?;
+    Ok(())
 }
 
 /// One memory, in full.
@@ -545,6 +563,11 @@ pub async fn recall(db: &PgPool, p: &Principal, r: Recall) -> Result<Value> {
             .fetch_all(&mut *c)
             .await?;
     }
+    let keys: Vec<String> = rows
+        .iter()
+        .filter_map(|m| m["key"].as_str().map(String::from))
+        .collect();
+    bump_uses(&mut c, pr.id, &keys).await?;
     for m in rows.iter_mut() {
         if query.is_none() {
             m.as_object_mut().map(|o| o.remove("rank"));
@@ -646,12 +669,14 @@ pub async fn digest(db: &PgPool, p: &Principal, project: &str) -> Result<String>
     }
     let mut used = 0usize;
     let mut skipped: Vec<(String, String)> = Vec::new();
+    let mut shown: Vec<String> = Vec::new();
     let mut current = "";
     for (key, title, body, kind, tags) in &rows {
         if used > DIGEST_BUDGET {
             skipped.push((key.clone(), title.clone()));
             continue;
         }
+        shown.push(key.clone());
         if kind != current {
             current = kind;
             md.push_str(&format!("## {}\n\n", heading(kind)));
@@ -679,9 +704,11 @@ pub async fn digest(db: &PgPool, p: &Principal, project: &str) -> Result<String>
     .bind(pr.id)
     .fetch_all(&mut *c)
     .await?;
+    // staleness is judged before this read: what the digest showed counts as used from now on
+    bump_uses(&mut c, pr.id, &shown).await?;
     if !unused.is_empty() {
         md.push_str(
-            "\n## Forget candidates (not read for 90 days)\n\nIf one is wrong or obsolete, delete it with `forget`; if it still holds, read it with `get_memory` (that keeps it).\n\n",
+            "\n## Possibly stale (not read for 90 days)\n\nConsider `forget` only if one is obsolete or wrong: not being read does not make a memory wrong. Reading it (`get_memory`) keeps it.\n\n",
         );
         for (key, title) in unused {
             md.push_str(&format!("- `{key}`: {title}\n"));

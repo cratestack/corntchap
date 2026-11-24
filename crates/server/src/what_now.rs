@@ -248,23 +248,6 @@ pub async fn brief(c: &mut PgConnection, p: &Principal, projects: &[Uuid]) -> Re
     Ok(())
 }
 
-/// [`brief`] for every pot the principal can see.
-pub async fn brief_all(c: &mut PgConnection, p: &Principal) -> Result<()> {
-    if !p.is_agent() {
-        return Ok(());
-    }
-    let sql = format!(
-        "select pr.id from projects pr where {}",
-        crate::service::access_sql("$1", "$2")
-    );
-    let ids: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .bind(p.is_admin)
-        .bind(p.id)
-        .fetch_all(&mut *c)
-        .await?;
-    brief(c, p, &ids).await
-}
-
 /// "2 h 5 min", "35 min".
 fn span(d: chrono::Duration) -> String {
     let mins = d.num_minutes().max(0);

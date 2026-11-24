@@ -96,20 +96,21 @@ const TOUCH_KINDS: &str =
 
 /// SQL predicate on `t` (tasks): `agent` has given the task back at least `n` times (released it,
 /// or let its lease lapse) with nobody else touching it in between (the touches of
-/// [`given_back_sql`]). A release made while a pull request was open does not count: the cook was
+/// [`given_back_sql`]). A release made while a healthy pull request was open does not count: the cook was
 /// waiting on CI or review, not bouncing. The cook is not handed the task again until someone
 /// touches it: a comment, an edit, an answer, a forge event.
 pub fn bounce_sql(agent: &str, n: i64) -> String {
     format!(
-        "((select count(*) from events r
-           where r.task_id = t.id
+        "((select count(*) from (select 1 from events r
+           where r.task_id = t.id and r.kind in ('task.released', 'task.lease_expired')
              and ((r.kind = 'task.released' and r.actor_id = {agent})
                   or (r.kind = 'task.lease_expired' and r.payload->>'agent_id' = ({agent})::text))
              and coalesce(r.payload->>'on_pr', 'false') <> 'true'
              and not exists (select 1 from events x
                where x.task_id = t.id and x.seq > r.seq
                  and x.actor_id is distinct from {agent}
-                 and (x.kind in ({TOUCH_KINDS}) or x.kind like 'forge.%'))) >= {n})"
+                 and (x.kind in ({TOUCH_KINDS}) or x.kind like 'forge.%'))
+           limit {n}) capped) >= {n})"
     )
 }
 
@@ -308,7 +309,7 @@ async fn note_progress(
     actor: Option<Uuid>,
 ) -> Result<()> {
     if kind.starts_with("forge.") {
-        sqlx::query("update tasks set progress_at = now() where id = $1 and status = 'claimed'")
+        sqlx::query("update tasks set progress_at = now() where id = $1 and status = 'claimed' and lease_expires_at > now()")
             .bind(task)
             .execute(c)
             .await?;
@@ -321,7 +322,8 @@ async fn note_progress(
                  then greatest(t.lease_expires_at, least(now() + pr.lease_ttl,
                         now() + make_interval(secs => {stall}), coalesce(t.held_since, now()) + make_interval(secs => {max})))
                  else t.lease_expires_at end
-             from projects pr where pr.id = t.project_id and t.id = $1 and t.status = 'claimed' and t.claimed_by = $2",
+             from projects pr where pr.id = t.project_id and t.id = $1 and t.status = 'claimed' and t.claimed_by = $2
+               and t.lease_expires_at > now()",
             stall = stall_secs(),
             max = max_hold_secs(),
         );
@@ -1013,10 +1015,9 @@ async fn held_back(c: &mut PgConnection, p: &Principal, project: Uuid) -> Result
     if !bounced.is_empty() {
         hint.push(format!(
             "{} {} you gave back {BOUNCE_LIMIT} times with nobody touching {} since: claim_next skips {} and claim_task refuses {}. \
-             Comment on {} (what stops you) or ask on the pass; a person's comment, edit or answer lifts this.",
+             Ask a person (comment @owner, or block the task): your own comment does not lift this, one from someone else does, as does an edit or an answer.",
             bounced.join(", "),
             if bounced.len() == 1 { "is a task" } else { "are tasks" },
-            if bounced.len() == 1 { "it" } else { "them" },
             if bounced.len() == 1 { "it" } else { "them" },
             if bounced.len() == 1 { "it" } else { "them" },
             if bounced.len() == 1 { "it" } else { "them" },
@@ -1197,19 +1198,21 @@ pub async fn claim_task(
         .bind(t.id)
         .fetch_one(&mut *tx)
         .await?;
-    let bounced: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select {} from tasks t where t.id = $1",
-        bounce_sql("$2", BOUNCE_LIMIT)
-    )))
-    .bind(t.id)
-    .bind(p.id)
-    .fetch_one(&mut *tx)
-    .await?;
+    // people may take a task cooks keep giving back
+    let bounced: bool = p.is_agent()
+        && sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "select {} from tasks t where t.id = $1",
+            bounce_sql("$2", BOUNCE_LIMIT)
+        )))
+        .bind(t.id)
+        .bind(p.id)
+        .fetch_one(&mut *tx)
+        .await?;
     if bounced {
         return Err(Error::Conflict(format!(
             "you have given {r} back {BOUNCE_LIMIT} times and nobody has touched it since: a claim would only \
-             bounce it again. Comment on it (what blocks you), ask on the pass, or leave it to someone else; a \
-             person's comment, an edit or an answer lifts this."
+             bounce it again. Ask a person (comment @owner, or block it), or leave it to someone else; a \
+             comment from someone else, an edit or an answer lifts this."
         )));
     }
     let row: Option<(i64, DateTime<Utc>)> = sqlx::query_as(
@@ -1624,15 +1627,35 @@ async fn save_learned(
     let mut tags = labels;
     tags.extend(repos);
     let title: String = format!("{tref}: {title}").chars().take(200).collect();
+    // a later revision appends to `learned-<REF>`; when that memory is full, to `-2`, `-3`, ...
+    // (completing must never fail on what was learned)
+    let text: String = text.chars().take(crate::pantry::MAX_BODY).collect();
+    let mut key = format!("learned-{tref}").to_lowercase();
+    for n in 2.. {
+        let used: Option<i64> = sqlx::query_scalar(
+            "select char_length(body)::bigint from memories where project_id = $1 and key = $2",
+        )
+        .bind(t.project_id)
+        .bind(&key)
+        .fetch_optional(&mut *c)
+        .await?;
+        match used {
+            Some(u) if u as usize + 2 + text.chars().count() > crate::pantry::MAX_BODY => {
+                key = format!("learned-{tref}-{n}").to_lowercase();
+            }
+            _ => break,
+        }
+    }
     crate::pantry::remember_in(
         c,
         p,
         &crate::pantry::Remember {
             project: t.key.clone(),
-            key: Some(format!("learned-{tref}")),
+            key: Some(key),
             title,
-            body: text.to_string(),
-            kind: Some("note".into()),
+            body: text,
+            // None: a new memory is a note, and one that was promoted keeps its kind
+            kind: None,
             tags: Some(tags),
             task: Some(tref),
             append: true,
@@ -1740,10 +1763,11 @@ async fn end_lease(
         add_comment(&mut tx, &t, p.id, &format!("[{kind}] {reason}")).await?;
     }
     save_learned(&mut tx, p, &t, learned).await?;
-    // given back while a pull request is open: it waits on CI or review, which is not bouncing
-    let on_pr: bool = sqlx::query_scalar(
-        "select exists (select 1 from forge_prs where task_id = $1 and state = 'open' and not unlinked)",
-    )
+    // given back while a healthy pull request is open: it waits on CI or review, which is not
+    // bouncing. A failing, conflicting or changes-requested PR is work: giving that back counts.
+    let on_pr: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select not ({NO_OPEN_PR_SQL}) from tasks t where t.id = $1"
+    )))
     .bind(t.id)
     .fetch_one(&mut *tx)
     .await?;
@@ -1792,14 +1816,16 @@ pub async fn block(
 /// work a cook can do: it is blocked for a person, with the reason. Called after a give-back.
 pub async fn block_if_bounced(c: &mut PgConnection, task: Uuid, project: Uuid) -> Result<bool> {
     let n: i64 = sqlx::query_scalar(
-        "select count(*) from events r
+        "select count(*) from (select 1 from events r
          where r.task_id = $1 and r.kind in ('task.released', 'task.lease_expired')
            and coalesce(r.payload->>'on_pr', 'false') <> 'true'
            and r.seq > coalesce((select max(x.seq) from events x join principals h on h.id = x.actor_id and h.kind = 'user'
                                    where x.task_id = $1 and x.kind in ('task.updated', 'task.commented', 'task.unblocked',
-                                         'task.restored', 'question.answered')), 0)",
+                                         'task.restored', 'question.answered')), 0)
+         limit $2) capped",
     )
     .bind(task)
+    .bind(BOUNCE_BLOCK)
     .fetch_one(&mut *c)
     .await?;
     if n < BOUNCE_BLOCK {
@@ -1817,15 +1843,50 @@ pub async fn block_if_bounced(c: &mut PgConnection, task: Uuid, project: Uuid) -
     if moved == 0 {
         return Ok(false);
     }
+    // the owner is who must look: named in the note, shown under "owned" in my_work, and a cook
+    // that owns it is woken
+    let owner: Option<(Uuid, String, String)> = sqlx::query_as(
+        "select o.id, o.name, o.kind from tasks t join principals o on o.id = t.owner_id where t.id = $1",
+    )
+    .bind(task)
+    .fetch_optional(&mut *c)
+    .await?;
+    let who = match &owner {
+        Some((_, name, _)) => format!(" @{name}, this is yours."),
+        None => " The task has no owner: a chef of the pot should take it.".into(),
+    };
     system_comment(
         c,
         task,
         &format!(
             "[blocked by the server] {reason}: cooks gave this task back {n} times and nobody \
-             touched it in between. Look at why (the comments above), then unblock it with a clearer task."
+             touched it in between.{who} Look at why (the comments above), then unblock it with a clearer task."
         ),
     )
     .await?;
+    if let Some((id, _, kind)) = owner
+        && kind == "agent"
+    {
+        let (tref, key): (String, String) = sqlx::query_as(
+            "select pr.key || '-' || t.number, pr.key from tasks t join projects pr on pr.id = t.project_id where t.id = $1",
+        )
+        .bind(task)
+        .fetch_one(&mut *c)
+        .await?;
+        crate::questions::wake(
+            c,
+            project,
+            &key,
+            id,
+            None,
+            Some(task),
+            &format!(
+                "{tref} was given back {n} times and is blocked for a person; you own it. Read its comments and unblock it with a clearer task, or say why it cannot be done."
+            ),
+            "needs-person",
+        )
+        .await?;
+    }
     emit(
         c,
         Some(project),

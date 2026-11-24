@@ -148,13 +148,13 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
            select project_id, id, 'task.lease_expired', null,
                   jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
                                      'agent_id', expired.was, 'reason', why,
-                                     'on_pr', exists (select 1 from forge_prs fp where fp.task_id = expired.id
-                                                       and fp.state = 'open' and not fp.unlinked),
+                                     'on_pr', (select not ({np}) from tasks t where t.id = expired.id),
                                      'station', (select s.ref from stations s where s.id = expired.station_id))
            from expired returning task_id)
          select id, project_id, was, why from expired",
         stall = crate::service::stall_secs(),
         max = crate::service::max_hold_secs(),
+        np = crate::service::NO_OPEN_PR_SQL,
     );
     let reaped: Vec<(Uuid, Uuid, Option<Uuid>, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .fetch_all(&mut *tx)

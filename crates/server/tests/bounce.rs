@@ -319,3 +319,52 @@ async fn changes_requested_and_conflicts_park_a_pr_too() {
         assert_eq!(c["task"]["id"], "PAY-1", "{what}: {c}");
     }
 }
+
+#[tokio::test]
+async fn giving_back_a_task_with_a_failing_pr_is_bouncing() {
+    let w = world().await;
+    open_pr(&w, "failure").await;
+    sqlx::query("update forge_prs set failing = array['build']")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    // the PR is parked: the task is work, and releasing it is a give-back, not "waiting on CI"
+    for _ in 0..3 {
+        w.bounce(0).await;
+    }
+    let flagged: i64 = sqlx::query_scalar(
+        "select count(*) from events where kind = 'task.released' and payload->>'on_pr' = 'true'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(flagged, 0);
+    let none = ok(
+        &w.app
+            .mcp(&w.cooks[0], "claim_next", json!({"project": "PAY"}))
+            .await,
+        "claim_next",
+    );
+    assert_eq!(none["none"], true, "{none}");
+    assert_eq!(none["bounced"], "PAY-1", "{none}");
+    // the other cook is still offered it; two more give-backs by it block it for a person
+    w.bounce(1).await;
+    assert_eq!(w.status().await, "open");
+    w.bounce(1).await;
+    assert_eq!(w.status().await, "blocked");
+    let note: String = sqlx::query_scalar("select body from comments where author_id is null")
+        .fetch_one(&w.app.state.db)
+        .await
+        .unwrap();
+    assert!(note.contains("bounced 5"), "{note}");
+}
+
+#[tokio::test]
+async fn a_person_may_claim_a_task_a_cook_keeps_giving_back() {
+    let w = world().await;
+    for _ in 0..3 {
+        w.bounce(0).await;
+    }
+    let (s, v) = w.app.post(&w.root, "/tasks/PAY-1/claim", json!({})).await;
+    assert_eq!(s, 200, "{v}");
+}

@@ -294,9 +294,13 @@ fn pr_word(r: &Pr) -> String {
     format!("{}#{}", r.repo, r.number)
 }
 
-/// A new head: its checks start over.
+/// A new head: its checks start over, and a "changes requested" review was about the old code (the
+/// author answered it by pushing): it no longer parks the task. Approvals stay, as on a forge.
 fn new_head(row: &mut Pr, sha: &str) {
     row.head_sha = sha.to_string();
+    if row.review == "changes_requested" {
+        row.review = "none".into();
+    }
     row.checks = "pending".into();
     row.failing = vec![];
     row.failing_sha = sha.to_string();
@@ -911,11 +915,12 @@ async fn push(
             .await?;
         new_head(&mut row, sha);
         sqlx::query(
-            "update forge_prs set head_sha=$2, checks=$3, failing='{}', failing_sha=$2, checks_url=null, mergeable='unknown', updated_at=now() where id=$1",
+            "update forge_prs set head_sha=$2, checks=$3, failing='{}', failing_sha=$2, checks_url=null, mergeable='unknown', review=$4, updated_at=now() where id=$1",
         )
         .bind(id)
         .bind(sha)
         .bind(&row.checks)
+        .bind(&row.review)
         .execute(&mut *c)
         .await?;
         if let Some(t) = row.task_id

@@ -372,14 +372,63 @@ async fn reading_a_memory_counts_as_a_use_and_unused_ones_are_forget_candidates(
     );
     let md = md["markdown"].as_str().unwrap();
     assert!(
-        md.contains("Forget candidates") && md.contains("`fresh-one`"),
+        md.contains("Possibly stale") && md.contains("`fresh-one`"),
         "{md}"
     );
     assert!(
-        !md.split("Forget candidates")
+        !md.split("Possibly stale")
             .nth(1)
             .unwrap()
             .contains("old-build-trick"),
         "{md}"
+    );
+}
+
+#[tokio::test]
+async fn learned_never_fails_a_completion_and_keeps_a_promoted_kind() {
+    let w = world().await;
+    w.task("Hard one", &["backend"]).await;
+    let c = w.claim().await;
+    // a promoted, nearly full memory under the key learned-PAY-1
+    ok(
+        &w.app
+            .mcp(
+                &w.c1,
+                "release",
+                json!({"id": "PAY-1", "epoch": c["lease"]["epoch"], "reason": "stuck", "learned": "First note."}),
+            )
+            .await,
+        "release",
+    );
+    sqlx::query("update memories set kind = 'gotcha', body = repeat('x', 19990) where key = 'learned-pay-1'")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    let c = ok(
+        &w.app.mcp(&w.c1, "claim_task", json!({"id": "PAY-1"})).await,
+        "claim again",
+    );
+    ok(
+        &w.app
+            .mcp(
+                &w.c1,
+                "complete",
+                json!({"id": "PAY-1", "epoch": c["lease"]["epoch"], "result": "done", "learned": "Second note, which no longer fits."}),
+            )
+            .await,
+        "complete",
+    );
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "select key, kind from memories where key like 'learned-pay-1%' order by key",
+    )
+    .fetch_all(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("learned-pay-1".to_string(), "gotcha".to_string()),
+            ("learned-pay-1-2".to_string(), "note".to_string())
+        ]
     );
 }

@@ -188,7 +188,7 @@ async fn what_now_first_is_the_briefing() {
     // the other reads brief too: get_board, my_work, changes_since with a project
     for (i, (tool, args)) in [
         ("get_board", json!({"project": "PAY"})),
-        ("my_work", json!({})),
+        ("my_work", json!({"project": "PAY"})),
         ("changes_since", json!({"cursor": 0, "project": "PAY"})),
     ]
     .into_iter()
@@ -208,6 +208,18 @@ async fn what_now_first_is_the_briefing() {
             "{tool}: {got}"
         );
     }
+}
+
+#[tokio::test]
+async fn my_work_without_a_pot_is_not_a_briefing() {
+    let w = world().await;
+    let c1 = w.cook("c1").await;
+    ok(&w.app.mcp(&c1, "my_work", json!({})).await, "my_work");
+    let got = ok(
+        &w.app.mcp(&c1, "claim_task", json!({"id": "PAY-1"})).await,
+        "claim",
+    );
+    assert!(got["catch_up"].is_object(), "{got}");
 }
 
 #[tokio::test]

@@ -400,3 +400,31 @@ async fn held_too_long_is_released_whatever_the_progress() {
     let left = w.secs("lease_expires_at", 2).await;
     assert!(left <= 10.0 * 60.0 + 5.0, "{left}");
 }
+
+#[tokio::test]
+async fn a_late_comment_does_not_turn_a_stall_into_a_lapse() {
+    let w = world().await;
+    w.claim("PAY-1", json!({})).await;
+    // the cap passed (stalled for 3 h, lease over); the holder comments only now
+    w.sql(
+        "update tasks set progress_at = now() - interval '3 hours', lease_expires_at = now() - interval '1 second' where number = 1",
+    )
+    .await;
+    let _ = w
+        .app
+        .mcp(
+            &w.c1,
+            "comment",
+            json!({"id": "PAY-1", "body": "still here"}),
+        )
+        .await;
+    assert_eq!(corntchap::jobs::reap(&w.app.state).await.unwrap(), 1);
+    let reason: String = sqlx::query_scalar(
+        "select e.payload->>'reason' from events e join tasks t on t.id = e.task_id
+          where t.number = 1 and e.kind = 'task.lease_expired'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(reason, "stalled");
+}

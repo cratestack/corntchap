@@ -1798,3 +1798,40 @@ async fn connecting_github_through_the_manifest_flow() {
         .unwrap();
     assert_eq!(n, 0);
 }
+
+#[tokio::test]
+async fn a_push_answers_changes_requested_and_parks_the_task_again() {
+    let w = world(false).await;
+    w.task("Cart").await;
+    let p = pr("shop", 1, "shop-1-cart", "aaa", "Cart");
+    w.send("pull_request", pr_event("opened", "shop", p.clone()))
+        .await;
+    let takeable = |w: &World| {
+        let db = w.app.state.db.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(format!(
+                "select {} from tasks t where t.number = 1",
+                corntchap::service::NO_OPEN_PR_SQL
+            )))
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    // a healthy open PR: not free work
+    assert!(!takeable(&w).await);
+    // changes requested: the PR is parked, the task is work
+    w.send(
+        "pull_request_review",
+        review("shop", p.clone(), "changes_requested", "bob", "rename it"),
+    )
+    .await;
+    assert_eq!(w.pr_row("shop", 1).await.unwrap().2, "changes_requested");
+    assert!(takeable(&w).await);
+    // the author pushes: that review was about the old head, the task is parked again
+    let push = json!({"ref": "refs/heads/shop-1-cart", "after": "ccc", "repository": repo("shop")});
+    w.send("push", push).await;
+    let row = w.pr_row("shop", 1).await.unwrap();
+    assert_eq!((row.5.as_str(), row.2.as_str()), ("ccc", "none"));
+    assert!(!takeable(&w).await);
+}
