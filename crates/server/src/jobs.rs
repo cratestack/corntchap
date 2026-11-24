@@ -413,11 +413,11 @@ impl Dispatcher {
                       and (wt.labels is null or cardinality(wt.labels) = 0 or t.labels && wt.labels)
                       -- a cook scoped to some repositories is woken only for tasks about them (or about none)
                       and {scope}
-                      -- not the task this cook just gave back
-                      and {cooldown})
+                      -- not the task this cook just gave back, nor one waiting on an open PR
+                      and {takeable})
                and (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) < a.max_leases",
             scope = crate::repos::scope_sql("a.id"),
-            cooldown = crate::service::cooldown_sql("a.id"),
+            takeable = crate::service::takeable_sql("a.id"),
         )))
         .bind(project)
         .bind(except)

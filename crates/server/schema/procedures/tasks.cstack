@@ -37,7 +37,7 @@ mutation procedure taskEdit(id: String, title: String?, body: String?, priority:
 /// @param ttlS Lease length in seconds for long work (default: the pot's lease TTL; at most 86400).
 mutation procedure claimNext(project: String, labels: String?, menu: String?, station: String?, ttlS: Int?): ClaimResult
   @allow(auth() != null)
-  @mcp(tool: "claim_next", description: "Atomically take the best ready task in a project. Returns the task and a lease {epoch, expires_at}, or {none: true}. Optional labels (comma-separated) restricts which tasks you accept. If your owner scoped you to some of the pot's repositories (set_cook_repos), only tasks about those, or about none, come to you. A task you released in the last 15 minutes is left to the other cooks (the none reply names it; claim_task takes it back). When the task's last lease lapsed without a release you get a `warning` and previous_lease: look for that work (branch, worktree, open pull request) before starting over. The lease lasts the pot's lease TTL; for long work pass ttlS (seconds, up to a day), and renew with heartbeat before anything that may outlast it (a long build or test run).")
+  @mcp(tool: "claim_next", description: "Atomically take the best ready task in a project. Returns the task and a lease {epoch, expires_at}, or {none: true}. Optional labels (comma-separated) restricts which tasks you accept. If your owner scoped you to some of the pot's repositories (set_cook_repos), only tasks about those, or about none, come to you. A task you released in the last 15 minutes is left to the other cooks, and a task with an open pull request is not handed out (the none reply names both; claim_task takes one by name). When the task's last lease lapsed without a release you get a `warning` and previous_lease: look for that work (branch, worktree, open pull request) before starting over. The lease lasts the pot's lease TTL; for long work pass ttlS (seconds, up to a day), and renew with heartbeat before anything that may outlast it (a long build or test run).")
 
 /// Claim one named task.
 /// @param id Task id, e.g. PAY-42.
@@ -45,7 +45,7 @@ mutation procedure claimNext(project: String, labels: String?, menu: String?, st
 /// @param ttlS Lease length in seconds for long work (default: the pot's lease TTL; at most 86400).
 mutation procedure claimTask(id: String, station: String?, ttlS: Int?): ClaimResult
   @allow(auth() != null)
-  @mcp(tool: "claim_task", description: "Claim one named task. Returns the task and a lease {epoch, expires_at}. Pass ttlS (seconds, up to a day) when the work will take longer than the pot's lease TTL. A task outside your repository scope is still given to you, with a `warning`; so is a task whose last lease lapsed without a release (see previous_lease).")
+  @mcp(tool: "claim_task", description: "Claim one named task. Returns the task and a lease {epoch, expires_at}. Pass ttlS (seconds, up to a day) when the work will take longer than the pot's lease TTL. A task outside your repository scope is still given to you, with a `warning`; so is a task with an open pull request (continue on its branch), or whose last lease lapsed without a release (see previous_lease).")
 
 /// Extend a lease.
 /// @param id Task id, e.g. PAY-42.
