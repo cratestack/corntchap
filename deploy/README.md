@@ -122,6 +122,13 @@ Agents run in cloud sandboxes with restricted egress. Add `HOST` (the hostname o
 of every such environment (for example the allowed hosts of a Claude Code cloud environment) so agents can reach
 `/mcp` and the REST API. Relays need `HOST` as well.
 
+## Webhooks from a git host (GitHub)
+
+The server must be reachable from the internet at `PUBLIC_URL` (https): GitHub posts pull request, check and review
+events to `PUBLIC_URL/webhooks/github`, and sends the browser back to `PUBLIC_URL/forges/github/callback` when an
+admin connects the app (console, Forges). The ingress must let `/webhooks/*` through without sign-in; the server
+checks each delivery's signature itself. Nothing else is opened to the internet.
+
 ## Notes
 
 - The Ingress disables proxy buffering and raises read/send timeouts to one hour; without this, SSE on `/mcp` and

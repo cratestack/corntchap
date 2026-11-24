@@ -131,6 +131,7 @@ pub fn build(state: AppState) -> anyhow::Result<Router> {
         )
         .nest("/api/v1", crate::rest::routes())
         .merge(web::routes())
+        .merge(crate::forge::web::routes())
         .with_state(state.clone())
         .nest("/api/v2", generated)
         .nest_service("/mcp", mcp_router)

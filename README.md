@@ -342,6 +342,23 @@ All of this is optional: a pot with no repository, a task that names none and a 
 - **Stations.** `station scan` and `station start` match a checkout's `origin` against any repository of any pot and record its name on the station (shown in `list_stations` and the console). Stations do not scope claims; the cook's scope does.
 - **Dependencies between repositories.** `project repo link PAY app --on backend [--mode notify|task]` says `app` depends on `backend` (`unlink` removes it; MCP `link_repo`, `unlink_repo`). When a task naming `backend` is served (`complete`), for each dependent repository not named by the task itself: with `notify` (default) the cooks scoped to `app` are woken with the result (unscoped cooks are not) and a comment on the served task and a `task.propagated` event in the activity say who was told; with `task` a follow-up task `[app] Follow up on PAY-12: ...` for `app` is opened on the same menu. One hop: a follow-up does not propagate when served, so cycles never loop. Pass `noPropagate` (`task complete --no-propagate`) when nothing downstream is affected. A cloud cook is started by an upstream wake only if its wake target takes work.
 
+### GitHub (and other forges)
+
+A git host can tell corntchap about pull requests, checks and reviews. GitHub is built (through a GitHub App); GitLab and Gitea come next on the same interface (`crates/server/src/forge/mod.rs` says how each maps onto it).
+
+**What the app sees.** Read-only permissions (pull requests, checks, statuses, contents, issues, metadata, and actions for workflow runs) and these events: pull requests, reviews, review comments, PR conversation comments, check suites and runs, workflow runs, pushes, and the app being installed or removed. It can write nothing on GitHub.
+
+**What it does.**
+- A pull request is followed only when its repository belongs to a pot (`project repo add`). Everything else is ignored.
+- It is linked to a task when its branch, title or body names the task (`SHOP-12`, any case, e.g. `feat/shop-12-fix`), or when you link it: `task link-pr SHOP-12 <url>` (also `task unlink-pr`, MCP `link_pr` and `unlink_pr`, the task sheet's "Link a PR"). A link you make wins; an unlinked PR stays unlinked.
+- The task sheet shows each PR with its state, checks (and the failing ones), review and conflicts; boards and lists show a small indicator; the activity feed shows `forge.*` events.
+- The task's holder (its claimer, else the cook that held it last; never a person) is woken for: CI that failed (once per commit), changes requested, a review or comment by someone other than the cook, and merge conflicts. A merge only notifies it ("SHOP-12's status is unchanged, serve it if the work is done"); it also tells the cooks of repositories that depend on this one, as serving a task does (`link_repo`).
+- A cloud cook is started by a CI failure, requested changes or a comment on its task (someone talking to it about its task), but by a merge notice only if its wake target takes work.
+
+**What it does not do.** No automatic import: no issue becomes a task, no task is created from GitHub (the one exception is a repository link in mode `task`, which opens its follow-up when a PR merges, as it does when a task is served). **A merge or a close never changes a task's status**; serve the task yourself.
+
+**Connect GitHub** (admins). The server needs a public https `PUBLIC_URL`, since GitHub has to reach `PUBLIC_URL/webhooks/github`. Open the console's **Forges** page (admin menu), choose **Connect GitHub** (an organization name if the app should belong to one; a GitHub Enterprise host if you use one), and approve the app on GitHub's screen. corntchap stores the app's id, keys and webhook secret (never shown again by any API), then **Install on an org** opens GitHub's install page: pick the account and the repositories. Each delivery is checked against the webhook secret (`X-Hub-Signature-256`), deduplicated by `X-GitHub-Delivery` and logged for a week; the Forges page shows the last one with its status. Removing the connection stops corntchap listening; delete the app on GitHub too if you do not need it.
+
 ### The pass: chefs talk
 
 Every pot has a pass where its chefs (people and cooks) talk:

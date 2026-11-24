@@ -37,7 +37,7 @@ export function AdminOnly({ children }: { children: ReactNode }) {
 }
 
 /** A form in a dialog: a bottom sheet on phones (the body scrolls, the button stays put under the keyboard). */
-function FormDialog({
+export function FormDialog({
   open,
   onOpenChange,
   title,

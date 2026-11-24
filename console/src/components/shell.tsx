@@ -8,6 +8,7 @@ import {
   MessageCircle,
   Flame,
   FolderKanban,
+  GitBranch,
   LogOut,
   Monitor,
   Moon,
@@ -262,6 +263,9 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
                 </SideLink>
                 <SideLink to="/admin/users" icon={UserRound} onNavigate={onNavigate}>
                   Users
+                </SideLink>
+                <SideLink to="/admin/forges" icon={GitBranch} onNavigate={onNavigate}>
+                  Forges
                 </SideLink>
               </>
             )}

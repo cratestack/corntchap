@@ -1064,6 +1064,28 @@ impl ProcedureRegistry for Procedures {
         typed(crate::repos::split_by_repo(&self.state.db, &p, &a.id).await)
     }
 
+    async fn task_link_pr(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: task_link_pr::Args,
+        _z: task_link_pr::Authorized,
+    ) -> Result<task_link_pr::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::forge::link::link_pr(&self.state.db, &p, &a.id, &a.url).await)
+    }
+
+    async fn task_unlink_pr(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: task_unlink_pr::Args,
+        _z: task_unlink_pr::Authorized,
+    ) -> Result<task_unlink_pr::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::forge::link::unlink_pr(&self.state.db, &p, &a.id, a.url.as_deref()).await)
+    }
+
     async fn repo_add(
         &self,
         _db: &Db,

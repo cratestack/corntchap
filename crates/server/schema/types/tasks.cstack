@@ -28,6 +28,48 @@ type TaskLinkView {
   status String
 }
 
+/// A pull request attached to a task (forge events: README, "GitHub (and other forges)").
+type PrView {
+  provider String
+  /// owner/name
+  repo String
+  number Int
+  url String
+  title String
+  author String?
+  /// open, closed or merged. A merge never changes the task's status.
+  state String
+  draft Boolean
+  head_branch String
+  /// pending, success, failure or none
+  checks String
+  /// Names of the failing checks.
+  failing String[]
+  checks_url String?
+  /// approved, changes_requested, commented or none
+  review String
+  /// true, false (it has conflicts) or unknown
+  mergeable String
+  /// A person linked it by hand (not found from the branch or title).
+  explicit Boolean
+  updated_at String
+}
+
+/// The compact PR summary on a board card or list row.
+type PrSummary {
+  repo String
+  number Int
+  url String
+  state String
+  draft Boolean
+  checks String
+  review String
+  /// The pull request has merge conflicts.
+  conflict Boolean
+  /// How many pull requests the task has.
+  count Int
+}
+
 /// A task as lists show it.
 type TaskView {
   /// Task id, e.g. PAY-42.
@@ -72,6 +114,8 @@ type TaskView {
   result String?
   created_at String
   updated_at String
+  /// The task's pull request (the open one first), when it has any.
+  pr PrSummary?
 }
 
 /// A task with its checklist, comments, dependencies and subtasks.
@@ -118,6 +162,10 @@ type TaskDetail {
   result String?
   created_at String
   updated_at String
+  /// The task's pull request (the open one first), when it has any.
+  pr PrSummary?
+  /// Every pull request linked to the task, the open ones first.
+  prs PrView[]
   items TaskItemView[]
   comments TaskCommentView[]
   dependencies TaskLinkView[]

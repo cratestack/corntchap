@@ -25,6 +25,9 @@ import {
   FileWarning,
   MessagesSquare,
   GitBranch,
+  GitMerge,
+  GitPullRequest,
+  AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
@@ -40,6 +43,11 @@ interface Described {
   tone: string;
   verb: string;
   detail?: string | undefined;
+}
+
+/** `acme/shop#12` from a forge event's payload. */
+function forgeWord(p: { repo?: string | null | undefined; number?: number | null | undefined }): string {
+  return p.repo && p.number ? `${p.repo}#${p.number}` : "";
 }
 
 export function describe(e: ChangeView): Described {
@@ -120,6 +128,44 @@ export function describe(e: ChangeView): Described {
       return { icon: GitBranch, tone: "text-destructive", verb: "removed the repository", detail: p.name ?? undefined };
     case "project.repo_linked":
       return { icon: GitBranch, tone: "text-muted-foreground", verb: "linked repositories", detail: p.repo && p.depends_on ? `${p.repo} depends on ${p.depends_on}` : undefined };
+    case "forge.linked":
+      return { icon: GitPullRequest, tone: "text-primary", verb: p.via === "explicit" ? "linked a pull request to" : "found the pull request of", detail: forgeWord(p) };
+    case "forge.unlinked":
+      return { icon: GitPullRequest, tone: "text-muted-foreground", verb: "unlinked a pull request from" };
+    case "forge.pr":
+      return {
+        icon: GitPullRequest,
+        tone: "text-primary",
+        verb: p.action === "opened" ? "opened a pull request on" : p.action === "reopened" ? "reopened the pull request of" : p.action === "closed" ? "closed the pull request of" : "pushed to the pull request of",
+        detail: forgeWord(p),
+      };
+    case "forge.merged":
+      return { icon: GitMerge, tone: "text-success", verb: "merged the pull request of", detail: `${forgeWord(p)} · status unchanged` };
+    case "forge.checks":
+      return {
+        icon: p.conclusion === "success" ? CircleCheck : CircleX,
+        tone: p.conclusion === "success" ? "text-success" : "text-destructive",
+        verb: p.conclusion === "success" ? "checks passed on" : `checks ${String(p.conclusion ?? "failed").replace("_", " ")} on`,
+        detail: [forgeWord(p), p.failing].filter(Boolean).join(" · "),
+      };
+    case "forge.review": {
+      const who = p.author ?? "someone";
+      return {
+        icon: p.review === "approved" ? CircleCheck : p.review === "changes_requested" ? CircleX : MessageSquare,
+        tone: p.review === "approved" ? "text-success" : p.review === "changes_requested" ? "text-destructive" : "text-muted-foreground",
+        verb: p.review === "approved" ? `${who} approved` : p.review === "changes_requested" ? `${who} asked for changes on` : `${who} reviewed`,
+        detail: [forgeWord(p), p.excerpt].filter(Boolean).join(" · "),
+      };
+    }
+    case "forge.comment":
+      return {
+        icon: MessageSquare,
+        tone: "text-muted-foreground",
+        verb: `${p.author ?? "someone"} commented on`,
+        detail: [forgeWord(p), p.path ? `${p.path}${p.line ? `:${p.line}` : ""}` : "", p.excerpt].filter(Boolean).join(" · "),
+      };
+    case "forge.conflict":
+      return { icon: AlertTriangle, tone: "text-destructive", verb: "found merge conflicts on", detail: forgeWord(p) };
     case "task.lease_expired":
       return { icon: Hourglass, tone: "text-corn-text", verb: "lease ran out on" };
     default:
@@ -157,7 +203,7 @@ const Item = memo(function Item({ e, compact, now, last }: { e: ChangeView; comp
   const openMemory = useOpenMemory();
   const d = describe(e);
   const Icon = d.icon;
-  const actor = e.actor ?? "the kitchen";
+  const actor = e.actor ?? (e.kind.startsWith("forge.") ? "GitHub" : "the kitchen");
   return (
     <li className={cn("relative flex gap-3", compact ? "py-2.5" : "py-3")}>
       {!compact && !last && <span aria-hidden="true" className="absolute top-11 -bottom-1 left-3 w-px bg-border" />}

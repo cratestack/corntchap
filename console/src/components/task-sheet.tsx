@@ -31,6 +31,7 @@ import { useIsPhone } from "@/lib/media";
 import { useOpenTask } from "@/lib/nav";
 import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip, SectionLabel } from "./bits";
 import { RepoPicker } from "./repos";
+import { TaskPrs } from "./forge-prs";
 import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
@@ -286,6 +287,8 @@ function TaskDetailBody({ id }: { id: string }) {
                   <p className="mt-1">{t.result}</p>
                 </section>
               )}
+
+              <TaskPrs task={t} />
 
               <section aria-labelledby="ck">
                 <div className="mb-2 flex items-center justify-between">
