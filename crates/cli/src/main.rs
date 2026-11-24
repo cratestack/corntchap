@@ -5,6 +5,7 @@ mod menu;
 mod opencode;
 mod pantry;
 mod pass;
+mod question;
 mod relay;
 mod setup;
 mod station;
@@ -93,6 +94,9 @@ enum Cmd {
     /// Menus (milestones): group a pot's tasks and watch them get served.
     #[command(subcommand, name = "menu", alias = "milestone")]
     Menu(menu::MenuCmd),
+    /// Questions: ask the pot's people (title, description, choices), see and answer them.
+    #[command(subcommand, name = "question", alias = "questions")]
+    Question(question::QuestionCmd),
     /// The cooks (agents): create, set up, wake targets.
     #[command(subcommand, name = "cook", alias = "agent")]
     Agent(AgentCmd),
@@ -1093,6 +1097,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         }
         Cmd::Pantry(p) => pantry::run(p, &api).await?,
         Cmd::Menu(c) => menu::run(c, &api).await?,
+        Cmd::Question(c) => question::run(c, &api).await?,
         Cmd::File(c) => file::run(c, &api).await?,
         Cmd::Pass(c) => pass::run(c, &api).await?,
         Cmd::View(c) => view::run(c, &api).await?,

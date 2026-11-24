@@ -3,16 +3,23 @@ part of "../corntchap.cstack"
 // The question pool (src/questions.rs).
 
 /// Ask the people of a pot (or one person or cook) a question.
-/// @param question The question, with the context needed to answer it without reading the code.
+/// @param title The question in one short line (a title, not a paragraph). Required unless you pass question.
+/// @param description Context needed to answer without reading the code, markdown. Optional.
+/// @param kind single (radio list), multiple (checkboxes), free (free-form text) or cards (large radio cards for quick choices of 2 to 4 options with short labels and no description). Default: single when you give choices, else free.
+/// @param choices The answer proposals, in order: one per line as "Label" or "Label: one line of description", or a JSON array of {label, description?, id?}. The older options string still works.
+/// @param allowOther single, multiple and cards: let the answerer type their own answer as well.
+/// @param min multiple: the fewest choices an answer needs.
+/// @param max multiple: the most choices an answer may have.
+/// @param question Older form: title and description in one text (the first line becomes the title). Use title and description instead.
 /// @param project Pot key, e.g. PAY (or give task).
 /// @param task The task it is about, e.g. PAY-42.
-/// @param options Suggested answers, one per line, so the answer can be one click.
+/// @param options Older form of choices: suggested answers, one per line.
 /// @param to Address it to one person (login) or cook; default the pot's people.
 /// @param wait Park the task you hold until the answer: it stays yours (and your station's), the answer wakes you with a fresh lease. Stop working on it after asking.
 /// @param station Your station id (from the wake prompt), so the answer wakes this very session.
-mutation procedure questionAsk(question: String, project: String?, task: String?, options: String?, to: String?, wait: Boolean?, station: String?): QuestionView
+mutation procedure questionAsk(title: String?, description: String?, kind: String?, choices: String?, allowOther: Boolean?, min: Int?, max: Int?, question: String?, project: String?, task: String?, options: String?, to: String?, wait: Boolean?, station: String?): QuestionView
   @allow(auth() != null)
-  @mcp(tool: "ask", description: "Ask a question you cannot answer yourself (a product decision, a missing credential, an ambiguity) into the pot's question pool. People answer in the console, or your owner answers in a chat through their own agent. With wait=true on the task you hold, the task is parked for you and the answer wakes you with a fresh lease; stop working on it until then.")
+  @mcp(tool: "ask", description: "Ask a question you cannot answer yourself (a product decision, a missing credential, an ambiguity) into the pot's question pool. Write it well: a short title (one line, the question itself), the context in the description (markdown: what you found, what each option means, what you would pick), and answer proposals so a person can answer in one tap. kind: cards for a quick choice of 2 to 4 options with short labels and no descriptions (yes/no, A or B); single for options that need a sentence each (give each choice a description); multiple for several that may apply (checkboxes, optional min/max); free for an open question. allowOther lets the answerer type their own answer next to the choices. People answer in the console, or your owner answers in a chat through their own agent. With wait=true on the task you hold, the task is parked for you and the answer wakes you with a fresh lease; stop working on it until then.")
 
 /// A pot's question pool.
 /// @param project Pot key, e.g. PAY.
@@ -41,10 +48,12 @@ mutation procedure questionPick(project: String?): PickedQuestion
 
 /// Record the answer.
 /// @param id Question id, e.g. PAY-Q3.
-/// @param answer The answer. When you relay it from your owner's chat, write their answer, not yours: it is recorded in their name, via you.
-mutation procedure questionAnswer(id: String, answer: String): QuestionView
+/// @param choices The chosen choices: their ids or labels, one per line or a JSON array of them (one for single and cards, several for multiple).
+/// @param text The typed answer: the whole answer of a free question, or the other answer when the question allows it.
+/// @param answer Older form: the answer as plain text. It is matched to a choice label when it equals one, else taken as text. When you relay it from your owner's chat, write their answer, not yours: it is recorded in their name, via you.
+mutation procedure questionAnswer(id: String, choices: String?, text: String?, answer: String?): QuestionView
   @allow(auth() != null)
-  @mcp(tool: "answer_question", description: "Answer a question: as a person; as a cook for a question addressed to you; or relaying your owner's answer from your chat (recorded as answered by them, via you). The asker is woken with the answer and gets its parked task back; a cloud cook is not started for it (it reads the answer with my_questions on its next run).")
+  @mcp(tool: "answer_question", description: "Answer a question: as a person; as a cook for a question addressed to you; or relaying your owner's answer from your chat (recorded as answered by them, via you). Pass choices (ids or labels from the question) and/or text, as the question's kind asks: single and cards take exactly one choice, multiple takes several (within min and max), free takes text; text next to choices is only allowed when the question allows other. The plain answer string still works. The asker is woken with the answer and gets its parked task back; a cloud cook is not started for it (it reads the answer with my_questions on its next run).")
 
 /// Put a picked question back in the pool.
 /// @param id Question id, e.g. PAY-Q3.

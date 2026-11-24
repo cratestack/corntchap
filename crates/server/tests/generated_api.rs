@@ -643,7 +643,7 @@ async fn files_and_questions_models_follow_the_pot() {
         .await
         .unwrap();
     }
-    sqlx::query("insert into questions (project_id, number, body) values ($1, 1, 'which logo?')")
+    sqlx::query("insert into questions (project_id, number, body, title) values ($1, 1, 'which logo?', 'which logo?')")
         .bind(pid)
         .execute(db)
         .await

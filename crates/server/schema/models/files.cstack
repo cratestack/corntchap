@@ -37,6 +37,8 @@ model Question {
   projectId Uuid @readonly @map("project_id")
   number BigInt @readonly
   body String @readonly
+  title String @readonly
+  kind String @readonly
   status String @readonly
   createdAt DateTime @readonly @map("created_at")
   project Project @relation(fields:[projectId],references:[id])
