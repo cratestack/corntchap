@@ -3,6 +3,13 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  # Release without pushing a tag yourself: the github-release job creates the tag on the dispatched
+  # commit (run it on main). The tag must match crates/cli/Cargo.toml's version, as for a pushed tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release tag, e.g. v0.2.1 (must match crates/cli/Cargo.toml)"
+        required: true
 env:
   IMAGE: ghcr.io/cratestack/corntchap
 permissions:
@@ -74,8 +81,8 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ inputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.tag }}
       - name: create the multi-arch manifest
         working-directory: ${{ runner.temp }}/digests
         run: |
@@ -87,13 +94,13 @@ jobs:
 
   # the tag names the release: refuse one that disagrees with the version the binary reports
   version:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: tag matches crates/cli/Cargo.toml
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           cargo_version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' crates/cli/Cargo.toml | head -n1)
           if [ "$TAG" != "v$cargo_version" ]; then
@@ -103,7 +110,6 @@ jobs:
 
   cli:
     needs: version
-    if: startsWith(github.ref, 'refs/tags/v')
     # the matrix lives in cli-build.yml so pull requests can build exactly the same thing (cli-build-pr.yml)
     uses: ./.github/workflows/cli-build.yml
     permissions:
@@ -125,6 +131,9 @@ jobs:
           path: dist
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          # a pushed tag names itself; a dispatch names it and the release creates it on this commit
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
             dist/*
