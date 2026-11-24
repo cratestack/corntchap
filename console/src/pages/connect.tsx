@@ -19,6 +19,7 @@ const KIND_TITLE: Record<string, string> = {
   "claude-routine": "a Claude Code routine",
   "github-comment": "GitHub comments",
   webhook: "a webhook",
+  coder: "a Coder agent",
 };
 
 const randomSecret = () => {
@@ -126,6 +127,11 @@ export function ConnectPage() {
         repo: v("repo"),
         issue: issueRaw === null ? null : Number(issueRaw),
         mention: v("mention"),
+        template: v("template"),
+        preset: v("preset"),
+        owner: v("owner"),
+        organization: v("organization"),
+        workspace: v("workspace"),
         takesWork,
       });
       setValues({});

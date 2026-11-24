@@ -517,8 +517,16 @@ impl Dispatcher {
                     keep.extend(wakes.iter().map(|w| (agent, project, w.clone())));
                     continue;
                 }
-                let res =
-                    crate::cloud::deliver(&self.state, &typ, &config, &name, &key, &text).await;
+                let res = crate::cloud::deliver(
+                    &self.state,
+                    Some(target),
+                    &typ,
+                    &config,
+                    &name,
+                    &key,
+                    &text,
+                )
+                .await;
                 if let Err(f) = &res
                     && let Some(wait) = f.retry_after
                 {
@@ -588,10 +596,15 @@ impl Dispatcher {
                 )
                 .await;
             }
-            "webhook" | "github-comment" | "claude-routine" => {
+            "webhook" | "github-comment" | "claude-routine" | "coder" => {
                 let state = self.state.clone();
-                let (typ, config, agent, agent_id) =
-                    (c.typ.clone(), c.config.clone(), c.agent.clone(), c.agent_id);
+                let (typ, config, agent, agent_id, target) = (
+                    c.typ.clone(),
+                    c.config.clone(),
+                    c.agent.clone(),
+                    c.agent_id,
+                    c.target_id,
+                );
                 let key2 = key.clone();
                 tokio::spawn(async move {
                     let Ok(mut conn) = state.db.acquire().await else {
@@ -599,8 +612,16 @@ impl Dispatcher {
                     };
                     let text =
                         crate::cloud::work_text(&mut conn, agent_id, &agent, project, &key2).await;
-                    let res =
-                        crate::cloud::deliver(&state, &typ, &config, &agent, &key2, &text).await;
+                    let res = crate::cloud::deliver(
+                        &state,
+                        Some(target),
+                        &typ,
+                        &config,
+                        &agent,
+                        &key2,
+                        &text,
+                    )
+                    .await;
                     record_delivery(&mut conn, agent_id, project, &agent, &key2, &typ, 0, res)
                         .await;
                 });

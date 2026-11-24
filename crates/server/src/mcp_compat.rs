@@ -1034,9 +1034,9 @@ fn prompts_list() -> Value {
     json!({"prompts": [{
         "name": "connect-cloud",
         "title": "Connect a cloud cook",
-        "description": "Connect a cook to a Claude Code routine, mentions in GitHub comments (Codex cloud, Copilot, …) or a webhook, so corntchap wakes it in the cloud.",
+        "description": "Connect a cook to a Claude Code routine, mentions in GitHub comments (Codex cloud, Copilot, …), a webhook or a Coder agent, so corntchap wakes it in the cloud.",
         "arguments": [
-            {"name": "kind", "description": "claude-routine, github-comment or webhook (default claude-routine)", "required": false},
+            {"name": "kind", "description": "claude-routine, github-comment, webhook or coder (default claude-routine)", "required": false},
             {"name": "cook", "description": "The cook to connect (default: this one)", "required": false},
         ],
     }]})

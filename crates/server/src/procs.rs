@@ -907,6 +907,17 @@ impl ProcedureRegistry for Procedures {
             if let Some(m) = a.mention {
                 config.insert("mention".into(), serde_json::json!(m));
             }
+            for (k, v) in [
+                ("template", a.template),
+                ("preset", a.preset),
+                ("owner", a.owner),
+                ("organization", a.organization),
+                ("workspace", a.workspace),
+            ] {
+                if let Some(v) = v {
+                    config.insert(k.into(), serde_json::json!(v));
+                }
+            }
             if a.takesWork == Some(true) {
                 config.insert("takes_work".into(), serde_json::json!(true));
             }
@@ -1675,7 +1686,7 @@ impl ProcedureRegistry for Procedures {
             (None, _) => match a.kind.as_deref() {
                 Some(k) => connect::open(st, &p, a.cook.as_deref(), k, a.projects.as_deref()).await,
                 None => Err(Error::Invalid(
-                    "kind is required to open a setup: claude-routine, github-comment or webhook"
+                    "kind is required to open a setup: claude-routine, github-comment, webhook or coder"
                         .into(),
                 )),
             },
@@ -1704,6 +1715,11 @@ impl ProcedureRegistry for Procedures {
                     issue: a.issue,
                     mention: a.mention,
                     takes_work: a.takesWork,
+                    template: a.template,
+                    preset: a.preset,
+                    owner: a.owner,
+                    organization: a.organization,
+                    workspace: a.workspace,
                 },
             )
             .await,

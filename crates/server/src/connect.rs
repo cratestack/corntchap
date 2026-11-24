@@ -18,7 +18,7 @@ use crate::{
     stations,
 };
 
-pub const KINDS: &[&str] = &["claude-routine", "github-comment", "webhook"];
+pub const KINDS: &[&str] = &["claude-routine", "github-comment", "webhook", "coder"];
 /// The MCP App that renders a setup (served by the MCP front door).
 pub const UI_URI: &str = "ui://corntchap/connect-cloud";
 pub const UI_HTML: &str = include_str!("connect.html");
@@ -186,6 +186,25 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 field("token", "GitHub token", true, true, "github_pat_…", "Allowed to comment on that repository."),
             ],
         ),
+        "coder" => (
+            vec![
+                "Coder (coder.com) runs the cook as an AI agent in an environment you control. Current Coder (v2.36 and later) uses Coder Agents: a chat per run. Coder Tasks, which older deployments use, was removed upstream: for those give a template instead of an organization.".into(),
+                "In Coder, create a session token for the user the agent runs as (a service account is best). corntchap sends it as Coder-Session-Token and keeps it: it is never shown again.".into(),
+                "Make the corntchap MCP server reachable from the agent, signed in with the cook's token: add it as an MCP server in Coder Agents (or, for Tasks, in the template's agent module). corntchap sends no credential in the prompt.".into(),
+                "Enter the deployment URL and the organization id (coder organizations list). To run in a known environment, give a workspace id too: the agent then works in that workspace instead of picking a template itself.".into(),
+                "Older Coder with Tasks: leave the organization empty and give the template (its name or version id), and optionally its preset id and the owner (default me).".into(),
+                "The first wake starts a run; later wakes for the same pot are follow-up messages to it. It is on call: a direct message, an @mention or a comment on its task wakes it; broadcasts and answers do not. Tick 'new work' only if it should also start for every ready task. An admin connects Coder.".into(),
+            ],
+            vec![
+                field("url", "Coder URL", false, true, "https://coder.example.com", "The deployment."),
+                field("token", "Session token", true, true, "", "A Coder API token (Coder-Session-Token) of the user the agent runs as."),
+                field("organization", "Organization id", false, false, "", "Coder Agents: the organization the chats belong to."),
+                field("workspace", "Workspace id", false, false, "", "Coder Agents: run in this workspace (optional; else the agent picks a template)."),
+                field("template", "Template", false, false, "", "Coder Tasks (older Coder): template name or version id."),
+                field("preset", "Preset id", false, false, "", "Coder Tasks: the template version preset (optional)."),
+                field("owner", "Owner", false, false, "me", "Coder Tasks: the user the task belongs to (default me)."),
+            ],
+        ),
         _ => (
             vec![
                 format!("Your endpoint receives one POST per wake for {cook}, with the wake's text and context as JSON."),
@@ -268,7 +287,8 @@ pub async fn test(state: &AppState, p: &Principal, code: &str) -> Result<Value> 
         pointer: text.clone(),
         meta: json!({"reasons": ["test"], "test": true}),
     };
-    let result = match cloud::deliver(state, &typ, &config, &s.cook, &project, &wt).await {
+    let result = match cloud::deliver(state, s.target, &typ, &config, &s.cook, &project, &wt).await
+    {
         Ok(d) => json!({"ok": true, "status": d.status, "session_url": d.session_url}),
         Err(f) => json!({"ok": false, "error": f.error}),
     };
@@ -290,6 +310,11 @@ pub struct Save {
     pub issue: Option<i64>,
     pub mention: Option<String>,
     pub takes_work: Option<bool>,
+    pub template: Option<String>,
+    pub preset: Option<String>,
+    pub owner: Option<String>,
+    pub organization: Option<String>,
+    pub workspace: Option<String>,
 }
 
 fn opt(s: &Option<String>) -> Option<&str> {
@@ -372,6 +397,55 @@ fn kind_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
             }
             Ok(out)
         }
+        "coder" => {
+            // the URL is any host the admin names (a self-hosted deployment): not a cook owner's call
+            if !is_admin {
+                return Err(Error::Forbidden(
+                    "only an admin can connect Coder: its URL can point anywhere".into(),
+                ));
+            }
+            let url = get("url")
+                .ok_or_else(|| Error::Invalid("url is required: the Coder deployment".into()))?;
+            if !(url.starts_with("https://") || url.starts_with("http://")) {
+                return invalid("url must be http(s)");
+            }
+            let token = get("token")
+                .ok_or_else(|| Error::Invalid("token is required: a Coder session token".into()))?;
+            let mut out = json!({"url": url.trim_end_matches('/'), "token": token});
+            match (get("organization"), get("template")) {
+                (Some(_), Some(_)) => {
+                    return invalid(
+                        "give an organization (Coder Agents) or a template (Coder Tasks), not both",
+                    );
+                }
+                (Some(org), None) => {
+                    out["api"] = json!("chats");
+                    out["organization"] = json!(org);
+                    if let Some(w) = get("workspace") {
+                        out["workspace"] = json!(w);
+                    }
+                }
+                (None, Some(t)) => {
+                    out["api"] = json!("tasks");
+                    out["template"] = json!(t);
+                    if let Some(p) = get("preset") {
+                        out["preset"] = json!(p);
+                    }
+                    if let Some(o) = get("owner") {
+                        if o.contains(['/', ' ', '?', '#']) {
+                            return invalid("owner is a Coder username, or me");
+                        }
+                        out["owner"] = json!(o);
+                    }
+                }
+                (None, None) => {
+                    return invalid(
+                        "organization is required (Coder Agents, current Coder), or template (Coder Tasks, older Coder)",
+                    );
+                }
+            }
+            Ok(out)
+        }
         "webhook" => {
             if !is_admin {
                 return Err(Error::Forbidden(
@@ -390,7 +464,7 @@ fn kind_config(kind: &str, c: &Value, is_admin: bool) -> Result<Value> {
             }
             Ok(out)
         }
-        _ => invalid("type must be relay, webhook, claude-routine or github-comment"),
+        _ => invalid("type must be relay, webhook, claude-routine, github-comment or coder"),
     }
 }
 
@@ -414,6 +488,11 @@ pub async fn save(state: &AppState, p: &Principal, code: &str, a: Save) -> Resul
         ("secret", &a.secret),
         ("repo", &a.repo),
         ("mention", &a.mention),
+        ("template", &a.template),
+        ("preset", &a.preset),
+        ("owner", &a.owner),
+        ("organization", &a.organization),
+        ("workspace", &a.workspace),
     ] {
         if let Some(x) = opt(v) {
             raw[k] = json!(x);
