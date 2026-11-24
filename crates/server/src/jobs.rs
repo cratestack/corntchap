@@ -129,10 +129,11 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
          expired as (
            update tasks t set status = 'open', claimed_by = null, lease_expires_at = null, updated_at = now()
            from old where t.id = old.id
-           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch)
+           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch, t.station_id)
          insert into events (project_id, task_id, kind, actor_id, payload)
          select project_id, id, 'task.lease_expired', null,
-                jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was))
+                jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
+                                   'station', (select s.ref from stations s where s.id = expired.station_id))
          from expired",
     )
     .execute(&state.db)
@@ -402,9 +403,12 @@ impl Dispatcher {
                       and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
                       and (wt.labels is null or cardinality(wt.labels) = 0 or t.labels && wt.labels)
                       -- a cook scoped to some repositories is woken only for tasks about them (or about none)
-                      and {scope})
+                      and {scope}
+                      -- not the task this cook just gave back
+                      and {cooldown})
                and (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()) < a.max_leases",
             scope = crate::repos::scope_sql("a.id"),
+            cooldown = crate::service::cooldown_sql("a.id"),
         )))
         .bind(project)
         .bind(except)

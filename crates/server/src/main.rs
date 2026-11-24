@@ -73,6 +73,10 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
                 .unwrap_or_else(|| corntchap::state::DEFAULT_ADMIN_ROLE.to_string()),
         });
     }
+    if let Some(m) = env("RELEASE_COOLDOWN_MINUTES").and_then(|v| v.parse::<u64>().ok()) {
+        corntchap::service::RELEASE_COOLDOWN_SECS
+            .store(m * 60, std::sync::atomic::Ordering::Relaxed);
+    }
     if let Some(m) = env("COMMENT_NUDGE_MINUTES").and_then(|v| v.parse::<i64>().ok()) {
         c.comment_nudge_minutes = m.max(1);
     }

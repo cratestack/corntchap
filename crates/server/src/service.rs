@@ -13,6 +13,28 @@ use crate::{
 
 pub const MAX_TTL_SECS: f64 = 86_400.0;
 
+/// Seconds a cook's own release keeps a task out of its `claim_next` (and `wait_for_work`, and
+/// the dispatcher's wakes for it): a cook that gives a task back means someone else should take
+/// it, so it must not get the same card straight back. `RELEASE_COOLDOWN_MINUTES` sets it; 0 turns
+/// it off. `claim_task` by name is never held back.
+pub static RELEASE_COOLDOWN_SECS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(900);
+
+pub fn release_cooldown_secs() -> u64 {
+    RELEASE_COOLDOWN_SECS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// SQL predicate on `t` (tasks): the task is not one `agent` released within the cooldown.
+/// Uncorrelated on the task, so it runs once per query over the recent events (`events_at`).
+pub fn cooldown_sql(agent: &str) -> String {
+    format!(
+        "not (t.id = any(array(select e.task_id from events e
+            where e.at > now() - make_interval(secs => {secs}) and e.kind = 'task.released'
+              and e.actor_id = {agent} and e.task_id is not null)))",
+        secs = release_cooldown_secs(),
+    )
+}
+
 /// SQL expression producing the JSON shape of a task. Needs aliases `t` (tasks) and `pr` (projects).
 pub const TASK_JSON: &str = r#"jsonb_build_object(
   'id', pr.key || '-' || t.number, 'project', pr.key, 'number', t.number,
@@ -23,7 +45,8 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
        from task_deps d join tasks dt on dt.id = d.depends_on join projects dp on dp.id = dt.project_id
        where d.task_id = t.id), '[]'::jsonb),
   'claimed_by', (select name from principals where id = t.claimed_by),
-  'station', (select ref from stations where id = t.station_id),
+  'station', case when t.status in ('claimed','blocked') then (select ref from stations where id = t.station_id) end,
+  'last_station', case when t.status not in ('claimed','blocked') then (select ref from stations where id = t.station_id) end,
   'lease_epoch', t.lease_epoch, 'lease_expires_at', t.lease_expires_at,
   'lease_live', (t.status = 'claimed' and t.lease_expires_at > now()),
   'ready', (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
@@ -496,23 +519,27 @@ pub async fn claim_next(
     if live_leases(&mut tx, p.id).await? >= p.max_leases {
         return Err(Error::MaxLeases);
     }
-    let row: Option<(Uuid, i64, DateTime<Utc>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    #[allow(clippy::type_complexity)]
+    let row: Option<(Uuid, i64, DateTime<Utc>, String, Option<Uuid>, Option<DateTime<Utc>>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "with next as (
-           select t.id from tasks t
+           select t.id, t.status as was_status, t.claimed_by as was_holder, t.lease_expires_at as was_expiry
+           from tasks t
            where t.project_id = $1
              and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
              and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
                              where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
              and (cardinality($4::text[]) = 0 or t.labels && $4::text[])
              and ($5::text is null or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
-             and {scope}
+             and {scope} and {cooldown}
            order by t.priority desc, t.created_at
-           for update skip locked limit 1)
+           for update of t skip locked limit 1)
          update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
             lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $6
          from next where t.id = next.id
-         returning t.id, t.lease_epoch, t.lease_expires_at",
+         returning t.id, t.lease_epoch, t.lease_expires_at, next.was_status, next.was_holder, next.was_expiry",
         scope = crate::repos::scope_sql("$2"),
+        cooldown = cooldown_sql("$2"),
     )))
     .bind(pr.id)
     .bind(p.id)
@@ -522,9 +549,12 @@ pub async fn claim_next(
     .bind(st)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((id, epoch, exp)) = row else {
-        return Ok(json!({"none": true}));
+    let Some((id, epoch, exp, was_status, was_holder, was_expiry)) = row else {
+        let none = held_back(&mut tx, p, pr.id).await?;
+        tx.commit().await?;
+        return Ok(none);
     };
+    let lapse = lapsed_before(&mut tx, p, id, &was_status, was_holder, was_expiry).await?;
     emit(
         &mut tx,
         Some(pr.id),
@@ -537,7 +567,140 @@ pub async fn claim_next(
     let t = task_full(&mut tx, id).await?;
     let news = crate::pantry::news(&mut tx, p.id, pr.id).await?;
     tx.commit().await?;
-    Ok(with_news(lease_view(t, epoch, exp), news))
+    let mut v = with_news(lease_view(t, epoch, exp), news);
+    with_lapse(&mut v, lapse);
+    Ok(v)
+}
+
+/// `claim_next` found nothing: say so, and name the tasks it held back because this cook
+/// released them a moment ago (they are free for any other cook, and `claim_task` takes them back).
+async fn held_back(c: &mut PgConnection, p: &Principal, project: Uuid) -> Result<Value> {
+    let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select pr.key || '-' || t.number from tasks t join projects pr on pr.id = t.project_id
+         where t.project_id = $1 and t.status = 'open' and not {cooldown}
+         order by t.priority desc, t.created_at",
+        cooldown = cooldown_sql("$2"),
+    )))
+    .bind(project)
+    .bind(p.id)
+    .fetch_all(&mut *c)
+    .await?;
+    if ids.is_empty() {
+        return Ok(json!({"none": true}));
+    }
+    let mins = release_cooldown_secs().div_ceil(60);
+    Ok(json!({
+        "none": true,
+        "released_recently": ids.join(","),
+        "hint": format!(
+            "{} {} you released in the last {mins} minutes: claim_next leaves {} to the other cooks for now. \
+             Take one back by name with claim_task if you meant to.",
+            ids.join(", "),
+            if ids.len() == 1 { "is a task" } else { "are tasks" },
+            if ids.len() == 1 { "it" } else { "them" },
+        ),
+    }))
+}
+
+/// A lease that ran out without a release: who held it, from which station, and when it lapsed.
+struct Lapse {
+    holder: Option<String>,
+    station: Option<String>,
+    at: DateTime<Utc>,
+    mine: bool,
+}
+
+/// Was the task's last lease one that lapsed (expired, reaped or not) rather than ended by a
+/// release, block or completion? Read before the new claim is recorded.
+async fn lapsed_before(
+    c: &mut PgConnection,
+    p: &Principal,
+    task: Uuid,
+    was_status: &str,
+    was_holder: Option<Uuid>,
+    was_expiry: Option<DateTime<Utc>>,
+) -> Result<Option<Lapse>> {
+    let station: Option<String> = sqlx::query_scalar(
+        "select s.ref from tasks t join stations s on s.id = t.station_id where t.id = $1",
+    )
+    .bind(task)
+    .fetch_optional(&mut *c)
+    .await?;
+    // expired but not reaped yet: the row still names the holder
+    if was_status == "claimed" {
+        let holder: Option<String> =
+            sqlx::query_scalar("select name from principals where id = $1")
+                .bind(was_holder)
+                .fetch_optional(&mut *c)
+                .await?;
+        return Ok(Some(Lapse {
+            holder,
+            station,
+            at: was_expiry.unwrap_or_else(Utc::now),
+            mine: was_holder == Some(p.id),
+        }));
+    }
+    // reaped: the last lease event says how it ended
+    let last: Option<(String, Value, DateTime<Utc>)> = sqlx::query_as(
+        "select kind, payload, at from events where task_id = $1
+           and kind in ('task.claimed','task.released','task.blocked','task.completed','task.lease_expired',
+                        'task.cancelled','task.unblocked','task.restored')
+         order by seq desc limit 1",
+    )
+    .bind(task)
+    .fetch_optional(&mut *c)
+    .await?;
+    let Some((kind, payload, at)) = last else {
+        return Ok(None);
+    };
+    if kind != "task.lease_expired" {
+        return Ok(None);
+    }
+    let holder = payload["agent"].as_str().map(String::from);
+    Ok(Some(Lapse {
+        mine: holder.as_deref() == Some(p.name.as_str()),
+        station: payload["station"].as_str().map(String::from).or(station),
+        holder,
+        at,
+    }))
+}
+
+/// Tell the new holder that the last lease lapsed: that work may still sit, uncommitted, in the
+/// old holder's branch or worktree.
+fn with_lapse(v: &mut Value, lapse: Option<Lapse>) {
+    let Some(l) = lapse else { return };
+    let id = v["task"]["id"].as_str().unwrap_or("this task").to_string();
+    let mins = (Utc::now() - l.at).num_minutes().max(0);
+    let ago = if mins < 1 {
+        "just now".to_string()
+    } else {
+        format!("{mins} min ago")
+    };
+    let at = l
+        .station
+        .as_deref()
+        .map(|s| format!(" (station {s})"))
+        .unwrap_or_default();
+    let text = if l.mine {
+        format!(
+            "Your last lease on {id}{at} lapsed {ago} without a release. Look in your own branch \
+             or worktree for that work before you start again."
+        )
+    } else {
+        format!(
+            "The last lease on {id}, held by {}{at}, lapsed {ago} without a release. Its work may \
+             still sit uncommitted in that cook's branch or worktree, or in an open pull request: \
+             look for it (or ask that cook on the pass) before you start again.",
+            l.holder.as_deref().unwrap_or("a cook that is gone"),
+        )
+    };
+    v["previous_lease"] = json!({
+        "holder": l.holder, "station": l.station, "lapsed_at": l.at, "yours": l.mine,
+    });
+    v["warning"] = match v["warning"].as_str() {
+        Some(w) => json!(format!("{w} {text}")),
+        None => json!(text),
+    };
 }
 
 /// The pantry news a cook gets with each claim: read it before starting.
@@ -566,6 +729,13 @@ pub async fn claim_task(
     if live_leases(&mut tx, p.id).await? >= p.max_leases {
         return Err(Error::MaxLeases);
     }
+    let (was_status, was_holder, was_expiry): (String, Option<Uuid>, Option<DateTime<Utc>>) =
+        sqlx::query_as(
+            "select status, claimed_by, lease_expires_at from tasks where id = $1 for update",
+        )
+        .bind(t.id)
+        .fetch_one(&mut *tx)
+        .await?;
     let row: Option<(i64, DateTime<Utc>)> = sqlx::query_as(
         "update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
             lease_expires_at = now() + make_interval(secs => $3::float8), updated_at = now(), station_id = $4
@@ -595,6 +765,7 @@ pub async fn claim_task(
             format!("{r} is not claimable (status {status})")
         }));
     };
+    let lapse = lapsed_before(&mut tx, p, t.id, &was_status, was_holder, was_expiry).await?;
     emit(
         &mut tx,
         Some(t.project_id),
@@ -620,6 +791,7 @@ pub async fn claim_task(
     if let Some(w) = warning {
         v["warning"] = json!(w);
     }
+    with_lapse(&mut v, lapse);
     Ok(v)
 }
 
@@ -1122,12 +1294,13 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
         "select jsonb_build_object('id', pr.key || '-' || t.number, 'project', pr.key, 'title', t.title,
             'priority', t.priority, 'labels', to_jsonb(t.labels), 'repos', to_jsonb(t.repos))
          from tasks t join projects pr on pr.id = t.project_id
-         where ($1::uuid is null or pr.id = $1) and {} and {}
+         where ($1::uuid is null or pr.id = $1) and {} and {} and {}
            and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
            and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
          order by t.priority desc, t.created_at limit 20",
         access_sql("$2", "$3"),
         crate::repos::scope_sql("$3"),
+        cooldown_sql("$3"),
     );
     Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(pid)
