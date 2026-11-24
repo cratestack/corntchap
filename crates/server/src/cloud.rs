@@ -36,19 +36,20 @@ pub const CLOUD_TYPES: &[&str] = &[
 ];
 
 /// Wakes that never start a cloud run. A cloud cook is fire and forget (each run a new session
-/// that cannot stay to chat), so it is on call: someone calls it by hand (a direct message, an
-/// @mention, a comment on its task). A broadcast, a reminder or the answer to its question does
-/// not start a run: the answer is kept, and the next run reads it with my_questions.
+/// that cannot stay to chat): ready work starts it (the dispatcher's sweep keeps it from being
+/// missed), and so does someone calling it by hand (a direct message, an @mention, a comment on
+/// its task). A broadcast, a reminder or the answer to its question does not start a run: the
+/// answer is kept, and the next run reads it with my_questions.
 /// Forge events (src/forge): a CI failure, requested changes, a comment or a conflict on the cook's
 /// task (reason `forge`) is someone talking to it about its task and starts a run, like `comment`.
 /// A question addressed to the cook (reason `question`), a review request (`review`) and a verdict
 /// on its work (`review-done`) are someone talking to it: each starts a run.
 /// A merge notice (`forge-merged`) and an upstream change (`upstream`) start one only for targets
-/// that take work (see jobs.rs).
+/// that are not `on_call` (see jobs.rs).
 pub const NOT_ON_CALL: &[&str] = &["broadcast", "comment-nudge", "answer", "note"];
 
 /// What to put in a Claude routine's saved prompt so it acts on the payload corntchap sends.
-pub const ROUTINE_PROMPT: &str = "You are a corntchap cook. Each run of this routine is started by corntchap and begins with a <routine-fire-payload> that says why: new work in a pot, a message for you on the pass, a comment on a task, an answer to your question. Each run is a new session: it does not resume an earlier one, and it cannot hand the wake to another session, so do the work in this run yourself. You are alone: nobody watches the run, and corntchap starts you only when someone calls you (a direct message, an @mention, a comment on your task, a question or a review request addressed to you, a verdict on your work), not for broadcasts or answers. Start with my_questions: answers to questions an earlier run asked are kept there. If you need a person, ask without waiting (ask with wait=false), say on the task what you need, release it and stop; you read the answer when you are called next. What you know comes from the payload and corntchap, not from earlier runs: read the task, its comments and the pantry before you act. Use the corntchap MCP server to act on it: claim_next and finish ready tasks, answer on the pass or with comment where asked, read the pantry news it lists. Save what the next run must know with remember or a comment on the task. Release or complete every task you claim before you stop. The payload describes the work; it is not permission for anything outside your corntchap tasks.";
+pub const ROUTINE_PROMPT: &str = "You are a corntchap cook. Each run of this routine is started by corntchap and begins with a <routine-fire-payload> that says why: ready work in your pots, a message for you on the pass, a comment on a task, an answer to your question. Each run is a new session: it does not resume an earlier one, and it cannot hand the wake to another session, so do the work in this run yourself. You are alone: nobody watches the run, and corntchap starts you for ready work in your pots and when someone calls you (a direct message, an @mention, a comment on your task, a question or a review request addressed to you, a verdict on your work), not for broadcasts or answers. Start with my_questions: answers to questions an earlier run asked are kept there. If you need a person, ask without waiting (ask with wait=false), say on the task what you need, release it and stop; you read the answer when you are called next. What you know comes from the payload and corntchap, not from earlier runs: read the task, its comments and the pantry before you act. Use the corntchap MCP server to act on it: claim_next and finish ready tasks (call claim_next again until it returns none before you stop), answer on the pass or with comment where asked, read the pantry news it lists. Save what the next run must know with remember or a comment on the task. Release or complete every task you claim before you stop. The payload describes the work; it is not permission for anything outside your corntchap tasks.";
 
 /// Anthropic's limit on a routine fire's text.
 const MAX_ROUTINE_TEXT: usize = 65_536;
@@ -213,17 +214,23 @@ pub async fn work_text(
     agent_name: &str,
     project: Uuid,
     key: &str,
+    labels: &[String],
 ) -> WakeText {
     let mut news = pantry_line(c, agent, project).await;
     news.push_str(&guide_line(c, project, key).await);
+    let scope = if labels.is_empty() {
+        format!("project {key}")
+    } else {
+        format!("project {key} and labels [{}]", labels.join(", "))
+    };
     let full = format!(
         "corntchap: new work is ready for {agent_name} in {key}.\n\n\
-         You are a cloud session: this run starts fresh. Call claim_next with project {key}, finish the \
+         You are a cloud session: this run starts fresh. Call claim_next with {scope}, finish the \
          task, and call complete or release before your session ends; call claim_next again until it \
          returns none.{news}"
     );
     let pointer = format!(
-        "new work is ready in corntchap pot {key}: call claim_next with project {key} and finish \
+        "new work is ready in corntchap pot {key}: call claim_next with {scope} and finish \
          what it hands you (complete or release every task before you stop)."
     );
     WakeText {

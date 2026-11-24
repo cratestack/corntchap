@@ -21,6 +21,10 @@ pub struct Config {
     pub pass_retention_days: i64,
     /// Minutes a cook has to answer a person's comment before its main station is woken again.
     pub comment_nudge_minutes: i64,
+    /// How often cloud cooks are checked for ready work they have not been woken for (`CLOUD_SWEEP_SECONDS`).
+    pub cloud_sweep: Duration,
+    /// The wait between work wakes of one cloud cook.
+    pub cloud_coalesce: Duration,
     /// Who a github-comment wake mentions when its target names nobody (`GITHUB_MENTION`).
     pub github_mention: String,
 }
@@ -79,6 +83,8 @@ impl Config {
             storage: None,
             pass_retention_days: 7,
             comment_nudge_minutes: 10,
+            cloud_sweep: Duration::from_secs(60),
+            cloud_coalesce: Duration::from_secs(300),
             github_mention: DEFAULT_GITHUB_MENTION.into(),
         }
     }

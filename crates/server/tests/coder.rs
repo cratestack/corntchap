@@ -1,6 +1,6 @@
 //! Coder as a cloud wake target: a wake starts a Coder run (a chat, or a task on older Coder), a
 //! later wake for the same pot is a follow-up message to it, the session token is never shown
-//! back, and `takes_work = false` keeps new work from starting it while a message still does.
+//! back, and `on_call = true` keeps new work from starting it while a message still does.
 //! Runs against a fake Coder (axum).
 mod common;
 use std::{
@@ -191,13 +191,13 @@ async fn a_wake_starts_a_chat_and_the_next_one_follows_up() {
             &root,
             "/agents/coder-cook/wake-targets",
             json!({"type": "coder", "config": {"url": format!("{base}/"), "token": TOKEN,
-                   "organization": ORG, "workspace": "ws-1", "takes_work": true}}),
+                   "organization": ORG, "workspace": "ws-1"}}),
         )
         .await;
     assert_eq!(code, 200, "{added}");
     assert!(!added.to_string().contains(TOKEN), "{added}");
 
-    // new work: the target opted in, so it starts a chat in the pinned workspace
+    // new work: the target takes work, so it starts a chat in the pinned workspace
     app.post(
         &root,
         "/projects/PAY/tasks",
@@ -283,7 +283,7 @@ async fn a_wake_starts_a_chat_and_the_next_one_follows_up() {
         "list",
     );
     assert_eq!(mcp[0]["type"], "coder");
-    assert_eq!(mcp[0]["takesWork"], true);
+    assert_eq!(mcp[0]["onCall"], false);
     let (_, cook_page) = app.get(&root, "/agents/coder-cook").await;
     let (_, cooks) = app.get(&root, "/agents").await;
     let events: Vec<Value> = sqlx::query_scalar("select payload from events")
@@ -311,7 +311,7 @@ async fn a_task_on_older_coder_resolves_the_template_and_follows_up() {
             "add_wake_target",
             json!({"cook": "tasker", "type": "coder", "url": base, "token": TOKEN,
                    "template": "agent-box", "preset": "bbbbbbbb-0000-0000-0000-000000000002",
-                   "owner": "svc-agent", "takesWork": true}),
+                   "owner": "svc-agent"}),
         )
         .await,
         "add",
@@ -344,14 +344,14 @@ async fn a_task_on_older_coder_resolves_the_template_and_follows_up() {
 }
 
 #[tokio::test]
-async fn on_call_by_default_and_failures_are_recorded() {
+async fn on_call_targets_get_no_work_and_failures_are_recorded() {
     let (base, fake) = fake_coder().await;
     let (app, root) = world("onduty").await;
-    // not takes_work: new work starts nothing, a direct message does
+    // on_call: new work starts nothing, a direct message does
     app.post(
         &root,
         "/agents/onduty/wake-targets",
-        json!({"type": "coder", "config": {"url": base, "token": TOKEN, "organization": ORG}}),
+        json!({"type": "coder", "config": {"url": base, "token": TOKEN, "organization": ORG, "on_call": true}}),
     )
     .await;
     app.post(

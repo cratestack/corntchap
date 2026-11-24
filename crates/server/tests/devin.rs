@@ -1,6 +1,6 @@
 //! Devin as a cloud wake target: a wake starts a Devin session, a later wake for the same pot is a
 //! message to it, a gone session starts a new one, the API key is never shown back, and
-//! `takes_work = false` keeps new work from starting it while a message still does.
+//! `on_call = true` keeps new work from starting it while a message still does.
 //! Runs against a fake Devin (axum).
 mod common;
 use std::{
@@ -195,13 +195,13 @@ async fn a_wake_starts_a_session_and_the_next_one_follows_up() {
             &root,
             "/agents/devin-cook/wake-targets",
             json!({"type": "devin", "config": {"url": format!("{base}/"), "token": TOKEN,
-                   "organization": ORG, "takes_work": true}}),
+                   "organization": ORG}}),
         )
         .await;
     assert_eq!(code, 200, "{added}");
     assert!(!added.to_string().contains(TOKEN), "{added}");
 
-    // new work: the target opted in, so it starts a session
+    // new work: the target takes work, so it starts a session
     app.post(
         &root,
         "/projects/PAY/tasks",
@@ -295,7 +295,7 @@ async fn a_wake_starts_a_session_and_the_next_one_follows_up() {
         "list",
     );
     assert_eq!(mcp[0]["type"], "devin");
-    assert_eq!(mcp[0]["takesWork"], true);
+    assert_eq!(mcp[0]["onCall"], false);
     let (_, cook_page) = app.get(&root, "/agents/devin-cook").await;
     let (_, cooks) = app.get(&root, "/agents").await;
     let events: Vec<Value> = sqlx::query_scalar("select payload from events")
@@ -314,14 +314,14 @@ async fn a_wake_starts_a_session_and_the_next_one_follows_up() {
 }
 
 #[tokio::test]
-async fn on_call_by_default_and_failures_are_recorded() {
+async fn on_call_targets_get_no_work_and_failures_are_recorded() {
     let (base, fake) = fake_devin().await;
     let (app, root) = world("onduty").await;
-    // not takes_work: new work starts nothing, a direct message does
+    // on_call: new work starts nothing, a direct message does
     app.post(
         &root,
         "/agents/onduty/wake-targets",
-        json!({"type": "devin", "config": {"url": base, "token": TOKEN, "organization": ORG}}),
+        json!({"type": "devin", "config": {"url": base, "token": TOKEN, "organization": ORG, "on_call": true}}),
     )
     .await;
     app.post(

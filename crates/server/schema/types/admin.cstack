@@ -105,9 +105,9 @@ type WakeTargetView {
   labels String[]
   /// Where it goes: the webhook URL or owner/repo#issue (secrets are never shown).
   target String?
-  /// Woken for new ready work. Relays always are; cloud targets only when they opted in, otherwise
-  /// they are on call: a direct message, an @mention or an answer to their question starts them.
-  takesWork Boolean
+  /// Only started when called (a direct message, an @mention or a comment on its task), never for
+  /// new ready work. Cloud targets only; relays always take work.
+  onCall Boolean
 }
 
 type WakeTargetAdded {

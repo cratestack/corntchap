@@ -160,6 +160,11 @@ pub async fn mock_oidc(who: Who) -> String {
 }
 
 pub async fn start(background: bool) -> TestApp {
+    start_with(background, |_| {}).await
+}
+
+/// `start`, with a chance to change the server's config first.
+pub async fn start_with(background: bool, tweak: impl FnOnce(&mut Config)) -> TestApp {
     let (pool, url) = fresh_db().await;
     let who: Who = Default::default();
     let gh = mock_oidc(who.clone()).await;
@@ -174,6 +179,7 @@ pub async fn start(background: bool) -> TestApp {
         admin_role: "corntchap-admin".into(),
     });
     cfg.run_background = background;
+    tweak(&mut cfg);
     // File storage when an S3 endpoint is configured (RustFS from `just infra`, a service in CI):
     // one throwaway bucket per test app, keys under a prefix as in a shared bucket.
     if let (Ok(endpoint), Ok(key), Ok(secret)) = (

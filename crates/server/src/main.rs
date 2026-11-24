@@ -80,6 +80,9 @@ fn config(cli: &Cli) -> anyhow::Result<Config> {
     if let Some(m) = env("COMMENT_NUDGE_MINUTES").and_then(|v| v.parse::<i64>().ok()) {
         c.comment_nudge_minutes = m.max(1);
     }
+    if let Some(s) = env("CLOUD_SWEEP_SECONDS").and_then(|v| v.parse::<u64>().ok()) {
+        c.cloud_sweep = std::time::Duration::from_secs(s.max(1));
+    }
     if let Some(m) = env("GITHUB_MENTION").filter(|m| !m.trim().is_empty()) {
         c.github_mention = corntchap::state::mention(&m);
     }

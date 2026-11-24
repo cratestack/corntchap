@@ -1,0 +1,307 @@
+//! Cloud cooks are fire and forget, so ready work must find them without an event: a failed
+//! delivery is retried by the dispatcher's sweep, a cook that finishes one of two tasks is woken for
+//! the other, a target added later hears of work already there, a 429's `Retry-After` is honoured,
+//! a task the cook gave back is not offered again until someone touches it, a cook that never
+//! claims is woken at most three times, and an `on_call` target gets no work wake.
+mod common;
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use axum::{
+    Router,
+    body::Bytes,
+    extract::State,
+    http::{HeaderMap, HeaderValue, StatusCode},
+    response::IntoResponse,
+};
+use corntchap::admin;
+use serde_json::{Value, json};
+
+#[derive(Default)]
+struct Fake {
+    /// answers for the next requests: (status, Retry-After seconds); then 200
+    plan: VecDeque<(u16, Option<u64>)>,
+    hits: Vec<(Instant, String)>,
+}
+type Shared = Arc<Mutex<Fake>>;
+
+async fn handle(State(fake): State<Shared>, body: Bytes) -> impl IntoResponse {
+    let mut f = fake.lock().unwrap();
+    let text = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v["text"].as_str().map(String::from))
+        .unwrap_or_default();
+    f.hits.push((Instant::now(), text));
+    let (status, wait) = f.plan.pop_front().unwrap_or((200, None));
+    let mut headers = HeaderMap::new();
+    if let Some(w) = wait {
+        headers.insert(
+            "retry-after",
+            HeaderValue::from_str(&w.to_string()).unwrap(),
+        );
+    }
+    (StatusCode::from_u16(status).unwrap(), headers, "{}")
+}
+
+async fn fake_endpoint(plan: &[(u16, Option<u64>)]) -> (String, Shared) {
+    let fake: Shared = Arc::new(Mutex::new(Fake {
+        plan: plan.iter().copied().collect(),
+        hits: vec![],
+    }));
+    let app = Router::new().fallback(handle).with_state(fake.clone());
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/hook", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    (base, fake)
+}
+
+fn hits(f: &Shared) -> Vec<(Instant, String)> {
+    f.lock().unwrap().hits.clone()
+}
+
+async fn wait_hits(f: &Shared, n: usize, secs: u64) -> Vec<(Instant, String)> {
+    for _ in 0..secs * 10 {
+        let h = hits(f);
+        if h.len() >= n {
+            return h;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("expected {n} deliveries, got {:?}", hits(f));
+}
+
+struct World {
+    app: common::TestApp,
+    root: String,
+    cook: String,
+}
+
+/// A fast sweep and a short coalescing window; one project (PAY) and one cloud cook.
+async fn world() -> World {
+    // a release must not be held back by the cooldown here: it is the given-back rule under test
+    corntchap::service::RELEASE_COOLDOWN_SECS.store(0, std::sync::atomic::Ordering::Relaxed);
+    let app = common::start_with(true, |c| {
+        c.cloud_sweep = Duration::from_secs(1);
+        c.cloud_coalesce = Duration::from_millis(200);
+    })
+    .await;
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
+    let root = tok.unwrap();
+    app.post(&root, "/teams", json!({"name": "acme"})).await;
+    app.post(
+        &root,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "Payments"}),
+    )
+    .await;
+    let (_, v) = app
+        .post(
+            &root,
+            "/agents",
+            json!({"name": "chef", "kind": "other", "runtime": "cloud"}),
+        )
+        .await;
+    let cook = v["token"].as_str().unwrap().to_string();
+    app.post(&root, "/teams/acme/members", json!({"principal": "chef"}))
+        .await;
+    World { app, root, cook }
+}
+
+impl World {
+    async fn target(&self, url: &str, labels: &[&str], on_call: bool) {
+        let (code, r) = self
+            .app
+            .post(
+                &self.root,
+                "/agents/chef/wake-targets",
+                json!({"type": "webhook", "labels": labels, "config": {"url": url, "on_call": on_call}}),
+            )
+            .await;
+        assert_eq!(code, 200, "{r}");
+    }
+
+    async fn task(&self, title: &str, labels: &[&str]) {
+        let (code, r) = self
+            .app
+            .post(
+                &self.root,
+                "/projects/PAY/tasks",
+                json!({"title": title, "labels": labels}),
+            )
+            .await;
+        assert_eq!(code, 200, "{r}");
+    }
+
+    async fn claim(&self) -> Value {
+        let r = self
+            .app
+            .mcp(&self.cook, "claim_next", json!({"project": "PAY"}))
+            .await;
+        assert_ne!(r["isError"], true, "{r}");
+        common::TestApp::payload(&r)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_delivery_is_retried_by_the_sweep() {
+    let (url, fake) = fake_endpoint(&[(500, None)]).await;
+    let w = world().await;
+    w.target(&url, &[], false).await;
+    w.task("Refund screen", &[]).await;
+    let h = wait_hits(&fake, 2, 15).await;
+    assert!(
+        h[1].1.contains("new work is ready for chef in PAY"),
+        "{h:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_cook_that_finishes_one_of_two_tasks_is_woken_for_the_other() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world().await;
+    w.target(&url, &[], false).await;
+    w.task("One", &[]).await;
+    w.task("Two", &[]).await;
+    wait_hits(&fake, 1, 10).await;
+    let c = w.claim().await;
+    let id = c["task"]["id"].as_str().unwrap().to_string();
+    let epoch = c["lease"]["epoch"].as_i64().unwrap();
+    let done = w
+        .app
+        .mcp(
+            &w.cook,
+            "complete",
+            json!({"id": id, "epoch": epoch, "result": "done"}),
+        )
+        .await;
+    assert_ne!(done["isError"], true, "{done}");
+    let before = hits(&fake).len();
+    // its own completion sends no event to it; the sweep finds the second task
+    wait_hits(&fake, before + 1, 10).await;
+    let last = hits(&fake).pop().unwrap().1;
+    assert!(last.contains("new work is ready"), "{last}");
+}
+
+#[tokio::test]
+async fn a_released_task_is_not_offered_again_until_someone_touches_it() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world().await;
+    w.target(&url, &[], false).await;
+    w.task("Too big", &[]).await;
+    wait_hits(&fake, 1, 10).await;
+    let c = w.claim().await;
+    let epoch = c["lease"]["epoch"].as_i64().unwrap();
+    let r = w
+        .app
+        .mcp(
+            &w.cook,
+            "release",
+            json!({"id": "PAY-1", "epoch": epoch, "reason": "needs a person"}),
+        )
+        .await;
+    assert_ne!(r["isError"], true, "{r}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let before = hits(&fake).len();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(hits(&fake).len(), before, "{:?}", hits(&fake));
+    // someone comments: it is worth another look
+    let r = w
+        .app
+        .mcp(
+            &w.root,
+            "comment",
+            json!({"id": "PAY-1", "body": "split it in two"}),
+        )
+        .await;
+    assert_ne!(r["isError"], true, "{r}");
+    for _ in 0..100 {
+        if hits(&fake)[before..]
+            .iter()
+            .any(|h| h.1.contains("new work is ready"))
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("not offered again: {:?}", hits(&fake));
+}
+
+#[tokio::test]
+async fn the_wake_names_the_targets_labels() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world().await;
+    w.target(&url, &["backend", "api"], false).await;
+    w.task("Endpoint", &["backend"]).await;
+    let h = wait_hits(&fake, 1, 10).await;
+    assert!(
+        h[0].1
+            .contains("claim_next with project PAY and labels [backend, api]"),
+        "{}",
+        h[0].1
+    );
+}
+
+#[tokio::test]
+async fn a_429_waits_for_retry_after() {
+    let (url, fake) = fake_endpoint(&[(429, Some(3))]).await;
+    let w = world().await;
+    w.target(&url, &[], false).await;
+    w.task("Refund screen", &[]).await;
+    let first = wait_hits(&fake, 1, 10).await[0].0;
+    tokio::time::sleep(Duration::from_millis(2300)).await;
+    assert_eq!(hits(&fake).len(), 1, "delivered before Retry-After");
+    let h = wait_hits(&fake, 2, 10).await;
+    assert!(
+        h[1].0.duration_since(first) >= Duration::from_secs(3),
+        "second delivery after {:?}",
+        h[1].0.duration_since(first)
+    );
+}
+
+#[tokio::test]
+async fn a_target_added_after_the_task_is_woken_by_the_sweep() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world().await;
+    w.task("Waiting already", &[]).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(hits(&fake).is_empty());
+    w.target(&url, &[], false).await;
+    wait_hits(&fake, 1, 10).await;
+}
+
+#[tokio::test]
+async fn a_cook_that_never_claims_is_woken_three_times() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world().await;
+    w.target(&url, &[], false).await;
+    w.task("Nobody takes it", &[]).await;
+    wait_hits(&fake, 3, 15).await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(hits(&fake).len(), 3, "{:?}", hits(&fake));
+}
+
+#[tokio::test]
+async fn an_on_call_target_gets_no_work_wake() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world().await;
+    w.target(&url, &[], true).await;
+    w.task("Refund screen", &[]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(hits(&fake).is_empty(), "{:?}", hits(&fake));
+    // a call still starts it
+    let r = w
+        .app
+        .mcp(
+            &w.root,
+            "pass",
+            json!({"project": "PAY", "message": "ping", "to": "chef"}),
+        )
+        .await;
+    assert_ne!(r["isError"], true, "{r}");
+    wait_hits(&fake, 1, 10).await;
+}
