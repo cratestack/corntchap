@@ -116,6 +116,8 @@ type TaskView {
   updated_at String
   /// The task's pull request (the open one first), when it has any.
   pr PrSummary?
+  /// The latest review round (a cook or person looked at the work), when there is one. GitHub's own reviews are in `pr`.
+  review ReviewSummary?
 }
 
 /// A task with its checklist, comments, dependencies and subtasks.
@@ -164,8 +166,12 @@ type TaskDetail {
   updated_at String
   /// The task's pull request (the open one first), when it has any.
   pr PrSummary?
+  /// The latest review round (a cook or person looked at the work), when there is one. GitHub's own reviews are in `pr`.
+  review ReviewSummary?
   /// Every pull request linked to the task, the open ones first.
   prs PrView[]
+  /// Every review round of the task, oldest first.
+  reviews ReviewView[]
   items TaskItemView[]
   comments TaskCommentView[]
   dependencies TaskLinkView[]

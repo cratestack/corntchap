@@ -6,6 +6,7 @@ import { BUCKETS, bucketOf, fmtLease, leaseLeftMs, taskNote, useNow, type Bucket
 import { useIsPhone } from "@/lib/media";
 import { MenuChip } from "./menus";
 import { PrChip } from "./forge-prs";
+import { ReviewChip } from "./reviews";
 import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip } from "./bits";
 
 function priorityTag(p: number) {
@@ -88,6 +89,7 @@ function PhoneRow({ task, selected, onOpen, menus }: { task: TaskView; selected:
           )}
           {menuName && <MenuChip name={menuName} />}
           <PrChip pr={task.pr} />
+          <ReviewChip review={task.review} />
           {task.repos.map((r) => (
             <RepoChip key={r}>{r}</RepoChip>
           ))}
@@ -143,6 +145,7 @@ export function TaskRow({ task, selected, onOpen, menus }: { task: TaskView; sel
           {task.total_items > 0 && <ProgressBar done={done} total={task.total_items} />}
           {menuName && <MenuChip name={menuName} />}
           <PrChip pr={task.pr} />
+          <ReviewChip review={task.review} />
           {task.repos.map((r) => (
             <RepoChip key={r}>{r}</RepoChip>
           ))}
@@ -246,9 +249,10 @@ export function TaskCard({ task, selected, onOpen, menus }: { task: TaskView; se
       </div>
       <p className={cn("mt-1 line-clamp-3 text-[14px] leading-snug font-medium", task.status === "cancelled" && "line-through")}>{task.title}</p>
       {note && <p className="mt-1 line-clamp-1 text-[12px] text-muted-foreground">{note}</p>}
-      {(task.repos.length > 0 || task.pr) && (
+      {(task.repos.length > 0 || task.pr || task.review) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           <PrChip pr={task.pr} />
+          <ReviewChip review={task.review} />
           {task.repos.map((r) => (
             <RepoChip key={r}>{r}</RepoChip>
           ))}

@@ -291,12 +291,21 @@ A comment on a task reaches the cook responsible for it, without anyone having t
 - **Never:** the commenter itself, or anyone on a tossed task.
 - **Unanswered:** a person's comment that gets no answer on the task (a comment, or completing, releasing or blocking it) within `COMMENT_NUDGE_MINUTES` (default 10) wakes the cook's **main station** once more. That's the orchestrating session, not the one that stayed silent.
 
+### Questions to a cook, and reviews
+
+**Ask a cook.** `ask` with `to` naming a cook wakes it (reason `question`): the session holding the task in question, else its main station. The prompt carries the title, description and choices and the `answer_question` call to make; a cloud cook is started for it too (someone is talking to it). Asking a person works as before: it waits in the pot's question pool.
+
+**Ask for a review.** When the work on a task is ready for a second pair of eyes, the cook that holds or held it (or a person, or a cook granted `plan`) calls `request_review` with the task, a reviewer from the pot's team (a cook or a person, never itself; leave it out for anyone on the team) and a note saying what to look at (the PR address, the branch). CLI: `review request PAY-42 --reviewer bob --note <url>`.
+- **A review is not a lane.** The task keeps its status. It carries `review` (the latest round: state, reviewer, requested by, when), which boards and the task sheet show as a chip. GitHub's own reviews arrive through forge events and stay in the task's `pr`.
+- **The reviewer** is woken (reason `review`) with the task, the note and the `review` call to make; a person reviewer finds it under **Questions > Reviews** (waiting on them) and in the activity feed. They answer with `review` (CLI `review approve|changes|comment PAY-R3 --body ...`, or the task sheet's buttons): `approve`, `changes` (the body says what to fix) or `comment` (not a decision). Nobody reviews its own request, and one open review per task and reviewer.
+- **The verdict** wakes the cook that holds or last held the task (reason `review-done`) with the verdict, the body and the next step. After `changes`, it fixes them and calls `request_review` again: that is the next round. `list_reviews` (`review ls PAY --mine`) lists the reviews of a pot; `cancel_review` withdraws one. Events: `review.requested`, `review.done`, `review.cancelled`.
+
 ### Cloud cooks
 
 A cook with `runtime: cloud` runs as one-shot cloud sessions: each wake starts a fresh session that remembers nothing.
 
 **On call.** A cloud cook isn't present: every wake is a new, paid run that can't stay to chat. So it starts only when someone calls it by name (a cook's owner adds a Claude routine or GitHub comments; webhooks, which can point anywhere, are an admin's call):
-- **Starts a run:** a direct message, an `@mention`, a comment on a task it holds.
+- **Starts a run:** a direct message, an `@mention`, a comment on a task it holds, a question addressed to it (`ask` with `to`), a review request for it and a verdict on its work.
 - **Never starts a run:** broadcasts and `@all` (they skip it and don't list it as reached), pantry notifications, unanswered-comment nudges, and answers or notes to its questions. An answer is kept: the routine prompt tells each run to start with `my_questions`, and to ask without `wait` and release the task when it needs a person.
 - **New ready work:** only if the target opted in (`takesWork` on `add_wake_target` / `connect_cloud_save`, `--takes-work` on `cook wake add`, "Also start it for new work" in the setup form). Narrow it with labels, e.g. only tasks labelled `cloud`. `list_wake_targets` shows `takesWork`.
 

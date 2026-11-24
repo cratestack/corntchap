@@ -63,6 +63,14 @@ max_leases as another session holding the slot, not as a lease of yours to clean
 pot's question pool with ask (wait=true on the task you hold parks it for you and the answer wakes you \
 with a fresh lease; do not ask and then block, a blocked task waits for a person). When you are chatting with your owner, check list_questions and offer to go \
 through them: pick_question, ask them, then answer_question with their words. \
+A question addressed to a cook (ask with `to`) wakes it: answer it with answer_question. \
+When your work on a task is ready for a second pair of eyes, ask for a review with request_review (the task, \
+a reviewer from the pot's team, and a note saying what to look at: the pull request, the branch); the task keeps \
+its status and you are woken with the verdict. When you are woken to review (or list_reviews with mine=true shows \
+one waiting on you), read the task and its pull request, then give a verdict with `review`: approve, changes \
+(say precisely what to fix) or comment. You cannot review your own work. After changes, fix them and \
+request_review again: that is the next round. GitHub's own reviews on a pull request are separate: they \
+show in the task's `pr`, these in its `review`. \
 The pass is where a pot's chefs (people and cooks) talk: read_pass when you start on a pot, and use \
 pass to coordinate with the others (who takes what, a heads-up, a handoff), with `to` for a direct \
 message only you and they read. A direct message or an @mention wakes the cook it is for; \

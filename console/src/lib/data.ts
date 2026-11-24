@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
-import type { CorntchapApiClient, FileView, ProjectSummary, QuestionView, TaskView, ViewOut } from "@corntchap/api";
+import type { CorntchapApiClient, FileView, ProjectSummary, QuestionView, ReviewView, TaskView, ViewOut } from "@corntchap/api";
 import { client, v1 } from "./api";
 
 type Procs = CorntchapApiClient["procedures"];
@@ -268,4 +268,25 @@ export function useOpenQuestionCounts(projects: ProjectSummary[] | undefined): R
   const out: Record<string, number> = {};
   for (const p of projects ?? []) if (p.open_questions > 0) out[p.key] = p.open_questions;
   return out;
+}
+
+// ---- reviews ----
+
+/**
+ * A pot's reviews: the ones waiting on you (`mine`), or all of them (open ones first).
+ * Under `["data"]` like the rest, so the live poller refreshes it on review.* events.
+ */
+export function useReviews(pot: string, which: "mine" | "all", enabled = true) {
+  const dp = useDataProvider();
+  const q = useQuery({
+    queryKey: ["data", "reviews", pot, which],
+    queryFn: async () => {
+      const payload = which === "mine" ? { project: pot, mine: true, state: "requested" } : { project: pot, state: "all" };
+      const res = await dp().custom!({ url: "", method: "get", meta: { procedure: "reviewList" }, payload });
+      return (res as { data: ReviewView[] }).data;
+    },
+    enabled: enabled && !!pot,
+    staleTime: 1500,
+  });
+  return { data: q.data, isLoading: q.isLoading, error: q.error as unknown };
 }

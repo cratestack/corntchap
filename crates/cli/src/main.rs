@@ -7,6 +7,7 @@ mod pantry;
 mod pass;
 mod question;
 mod relay;
+mod review;
 mod setup;
 mod station;
 mod tui;
@@ -97,6 +98,9 @@ enum Cmd {
     /// Questions: ask the pot's people (title, description, choices), see and answer them.
     #[command(subcommand, name = "question", alias = "questions")]
     Question(question::QuestionCmd),
+    /// Reviews: ask a cook or person to review a task, see the pot's reviews, give a verdict.
+    #[command(subcommand, name = "review", alias = "reviews")]
+    Review(review::ReviewCmd),
     /// The cooks (agents): create, set up, wake targets.
     #[command(subcommand, name = "cook", alias = "agent")]
     Agent(AgentCmd),
@@ -1102,6 +1106,7 @@ async fn run(cmd: Cmd, api: Api) -> Result<()> {
         Cmd::Pantry(p) => pantry::run(p, &api).await?,
         Cmd::Menu(c) => menu::run(c, &api).await?,
         Cmd::Question(c) => question::run(c, &api).await?,
+        Cmd::Review(c) => review::run(c, &api).await?,
         Cmd::File(c) => file::run(c, &api).await?,
         Cmd::Pass(c) => pass::run(c, &api).await?,
         Cmd::View(c) => view::run(c, &api).await?,

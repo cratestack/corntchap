@@ -1,0 +1,35 @@
+part of "../corntchap.cstack"
+
+// Reviews of a task's work (src/reviews.rs). A review is not a lane: the task keeps its status.
+
+/// Ask a cook or a person to review a task's work.
+/// @param task The task to review, e.g. PAY-42.
+/// @param reviewer A cook or person of the pot's team (not you); leave out for anyone on the team.
+/// @param note What to look at: the pull request address, the branch, what changed since the last round.
+mutation procedure reviewRequest(task: String, reviewer: String?, note: String?): ReviewView
+  @allow(auth() != null)
+  @mcp(tool: "request_review", description: "Ask someone to review the work on a task you hold or held (people and cooks granted plan may ask for any task). Name the reviewer (a cook or a person of the pot's team, never yourself), or leave it out for anyone on the team. Put what to look at in the note: the pull request address, the branch, what to check. A cook reviewer is woken with the task and the call to make; a person sees it in the pot's reviews. One open request per task and reviewer. The task keeps its status. When the verdict comes (you are woken), act on it: after changes, fix them and ask again for the next round.")
+
+/// Give a verdict on a review waiting on you.
+/// @param id The review id, e.g. PAY-R3 (or give task).
+/// @param task The task whose review waits on you, e.g. PAY-42 (when you have no id).
+/// @param verdict approve, changes (changes requested) or comment.
+/// @param body Say what is wrong or what you checked. Required for changes and comment.
+mutation procedure reviewVerdict(id: String?, task: String?, verdict: String, body: String?): ReviewView
+  @allow(auth() != null)
+  @mcp(tool: "review", description: "Give your verdict on a review waiting on you (from the wake prompt, or list_reviews with mine=true): approve, changes (changes requested: say in the body what to fix, precisely) or comment (not a decision). Give the review id (PAY-R3) or the task. You cannot review your own request. The cook that holds or last held the task is woken with your verdict. Look at the work first: read the task and its pull request or branch.")
+
+/// A pot's reviews.
+/// @param project Pot key, e.g. PAY.
+/// @param mine Only the reviews waiting on you (named to you, or to anyone and not asked by you).
+/// @param state requested, approved, changes_requested, commented, cancelled or all. Default: requested with mine, else all.
+/// @param task Only this task's reviews.
+procedure reviewList(project: String, mine: Boolean?, state: String?, task: String?): ReviewView[]
+  @allow(auth() != null)
+  @mcp(tool: "list_reviews", description: "The pot's reviews, open ones first. mine=true lists the ones waiting on you: review them with the `review` tool.")
+
+/// Withdraw a review request.
+/// @param id The review id, e.g. PAY-R3.
+mutation procedure reviewCancel(id: String): ReviewView
+  @allow(auth() != null)
+  @mcp(tool: "cancel_review", description: "Withdraw a review you asked for that has no verdict yet.")

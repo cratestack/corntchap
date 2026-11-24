@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useProc, useProcCall, useQuestions } from "@/lib/data";
+import { useProc, useProcCall, useQuestions, useReviews } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { useIsPhone } from "@/lib/media";
@@ -38,6 +38,7 @@ import { Avatar, EmptyState, IdChip, RowSkeleton, SectionLabel } from "./bits";
 import { Markdown } from "./markdown";
 import { Attachments } from "./files";
 import { AnswerControls, AnswerSummary, kindHint, kindOf } from "./question-answer";
+import { ReviewsList } from "./reviews";
 
 export { AnswerControls } from "./question-answer";
 
@@ -456,11 +457,13 @@ function ClosedCard({ q, highlight }: { q: QuestionView; highlight: boolean }) {
 
 // ---------------------------------------------------------------- the view
 
-type Filter = "open" | "answered" | "dismissed";
+type Filter = "open" | "answered" | "dismissed" | "reviews";
 
 export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => void }) {
   const open = useQuestions(potKey, "open");
   const all = useQuestions(potKey, "all");
+  const waitingReviews = useReviews(potKey, "mine");
+  const allReviews = useReviews(potKey, "all");
   const [params] = useSearchParams();
   const focus = params.get("question");
   const [filter, setFilter] = useState<Filter>("open");
@@ -493,13 +496,15 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
     { id: "open", label: "Open", n: openList.length },
     { id: "answered", label: "Answered", n: answered.length },
     { id: "dismissed", label: "Dismissed", n: dismissed.length },
+    { id: "reviews", label: "Reviews", n: (allReviews.data ?? []).length },
   ];
+  const waiting = waitingReviews.data ?? [];
   const shown = filter === "answered" ? answered : dismissed;
 
   return (
     <div className="mx-auto max-w-3xl">
       <div className="flex items-center gap-2">
-        <div role="tablist" aria-label="Question status" className="grid flex-1 grid-cols-3 gap-1 rounded-xl bg-muted p-1 sm:flex-none sm:grid-cols-[repeat(3,8rem)]">
+        <div role="tablist" aria-label="Question status" className="grid flex-1 grid-cols-4 gap-1 rounded-xl bg-muted p-1 sm:flex-none sm:grid-cols-[repeat(4,7.5rem)]">
           {tabs.map((t) => (
             <button
               key={t.id}
@@ -516,18 +521,20 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
               <span
                 className={cn(
                   "font-mono text-[11px]",
-                  t.id === "open" && t.n > 0 ? "rounded-full bg-primary px-1.5 leading-4 text-primary-foreground" : "text-muted-foreground",
+                  (t.id === "open" && t.n > 0) || (t.id === "reviews" && waiting.length > 0) ? "rounded-full bg-primary px-1.5 leading-4 text-primary-foreground" : "text-muted-foreground",
                 )}
               >
-                {t.n}
+                {t.id === "reviews" && waiting.length > 0 ? waiting.length : t.n}
               </span>
             </button>
           ))}
         </div>
       </div>
 
-      {filter === "open" ? (
-        openList.length === 0 ? (
+      {filter === "reviews" ? (
+        <ReviewsList reviews={allReviews.data ?? []} loading={allReviews.isLoading} />
+      ) : filter === "open" ? (
+        openList.length === 0 && waiting.length === 0 ? (
           <EmptyState
             className="mt-4"
             title="Nothing waiting on you"
@@ -541,12 +548,22 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
           </EmptyState>
         ) : (
           <>
-            <p className="label-caps mt-4 mb-2 px-0.5">{plural(openList.length, "question")} waiting · oldest first</p>
-            <ul className="space-y-3" aria-label="Open questions">
-              {openList.map((q) => (
-                <QuestionCard key={q.id} q={q} highlight={focus === q.id} onOpen={(id, mode, option) => setSheet({ id, mode, option })} />
-              ))}
-            </ul>
+            {waiting.length > 0 && (
+              <>
+                <p className="label-caps mt-4 mb-2 px-0.5">{plural(waiting.length, "review")} waiting on you</p>
+                <ReviewsList reviews={waiting} loading={false} />
+              </>
+            )}
+            {openList.length > 0 && (
+              <>
+                <p className="label-caps mt-4 mb-2 px-0.5">{plural(openList.length, "question")} waiting · oldest first</p>
+                <ul className="space-y-3" aria-label="Open questions">
+                  {openList.map((q) => (
+                    <QuestionCard key={q.id} q={q} highlight={focus === q.id} onOpen={(id, mode, option) => setSheet({ id, mode, option })} />
+                  ))}
+                </ul>
+              </>
+            )}
           </>
         )
       ) : shown.length === 0 ? (

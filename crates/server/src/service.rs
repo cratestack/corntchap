@@ -69,7 +69,14 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
   'pr', (select jsonb_build_object('repo', x.repo, 'number', x.number, 'url', x.url, 'state', x.state,
       'draft', x.draft, 'checks', x.checks, 'review', x.review, 'conflict', x.mergeable = 'false',
       'count', (select count(*) from forge_prs y where y.task_id = t.id))
-    from forge_prs x where x.task_id = t.id order by (x.state = 'open') desc, x.updated_at desc limit 1))"#;
+    from forge_prs x where x.task_id = t.id order by (x.state = 'open') desc, x.updated_at desc limit 1),
+  'review', (select jsonb_build_object('id', pr.key || '-R' || rv.number, 'round', rv.round,
+      'state', rv.state, 'reviewer', (select name from principals where id = rv.reviewer),
+      'reviewed_by', (select name from principals where id = rv.reviewed_by),
+      'requested_by', (select name from principals where id = rv.requested_by),
+      'at', coalesce(rv.decided_at, rv.created_at))
+    from reviews rv where rv.task_id = t.id and rv.state <> 'cancelled'
+    order by rv.round desc, (rv.state = 'requested') desc, rv.created_at desc limit 1))"#;
 
 /// Characters of a task's body or result kept in a list (`list_tasks`); `get_task` has the whole text.
 pub const LIST_CUT: usize = 280;
@@ -251,6 +258,7 @@ pub(crate) async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
     o.insert("subtasks".into(), subtasks);
     o.insert("files".into(), files);
     o.insert("prs".into(), crate::forge::link::prs_of(c, id).await?);
+    o.insert("reviews".into(), crate::reviews::of_task(c, id).await?);
     Ok(t)
 }
 
@@ -274,6 +282,8 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
             'done', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'done'),
             'tossed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'cancelled'),
             'open_questions', (select count(*) from questions q where q.project_id = pr.id and q.status = 'open'),
+            'waiting_reviews', (select count(*) from reviews rv where rv.project_id = pr.id and rv.state = 'requested'
+                and (rv.reviewer = $2 or (rv.reviewer is null and rv.requested_by is distinct from $2))),
             'unread_pass', (select count(*) from pass_messages m
                 where m.project_id = pr.id and m.author_id is distinct from $2 and m.relayed_by is distinct from $2
                   and (m.to_principal is null or m.to_principal = $2)

@@ -32,6 +32,7 @@ import { useOpenTask } from "@/lib/nav";
 import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip, SectionLabel } from "./bits";
 import { RepoPicker } from "./repos";
 import { TaskPrs } from "./forge-prs";
+import { TaskReviews } from "./reviews";
 import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
@@ -289,6 +290,8 @@ function TaskDetailBody({ id }: { id: string }) {
               )}
 
               <TaskPrs task={t} />
+
+              <TaskReviews task={t} />
 
               <section aria-labelledby="ck">
                 <div className="mb-2 flex items-center justify-between">
