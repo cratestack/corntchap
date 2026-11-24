@@ -52,16 +52,19 @@ pub fn cooldown_sql(agent: &str) -> String {
     )
 }
 
-/// SQL predicate on `t` (tasks): `agent` released the task and nobody else has touched it since
-/// (an update, a comment, an unblock or restore, an answer, a forge event by anyone else). A cloud
-/// cook is not woken for such a task again: it gave it back, so it would only release it again.
+/// SQL predicate on `t` (tasks): `agent` gave the task back (released it, or let its lease lapse)
+/// and nobody else has touched it since (an update, a comment, an unblock or restore, an answer, a
+/// forge event by anyone else). A cloud cook is not woken for such a task again: it gave it back,
+/// so it would only give it back again. Any give-back with no later touch counts, so an older one
+/// that someone has touched since does not hide a newer one.
 pub fn given_back_sql(agent: &str) -> String {
     format!(
         "exists (select 1 from events r
-           where r.project_id = t.project_id and r.task_id = t.id and r.kind = 'task.released'
-             and r.actor_id = {agent}
+           where r.task_id = t.id
+             and ((r.kind = 'task.released' and r.actor_id = {agent})
+                  or (r.kind = 'task.lease_expired' and r.payload->>'agent_id' = ({agent})::text))
              and not exists (select 1 from events x
-               where x.project_id = t.project_id and x.task_id = t.id and x.seq > r.seq
+               where x.task_id = t.id and x.seq > r.seq
                  and x.actor_id is distinct from {agent}
                  and (x.kind in ('task.updated', 'task.commented', 'task.unblocked', 'task.restored', 'question.answered')
                       or x.kind like 'forge.%')))"

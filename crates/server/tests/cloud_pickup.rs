@@ -81,11 +81,15 @@ struct World {
 
 /// A fast sweep and a short coalescing window; one project (PAY) and one cloud cook.
 async fn world() -> World {
+    world_with(Duration::from_millis(200)).await
+}
+
+async fn world_with(coalesce: Duration) -> World {
     // a release must not be held back by the cooldown here: it is the given-back rule under test
     corntchap::service::RELEASE_COOLDOWN_SECS.store(0, std::sync::atomic::Ordering::Relaxed);
     let app = common::start_with(true, |c| {
         c.cloud_sweep = Duration::from_secs(1);
-        c.cloud_coalesce = Duration::from_millis(200);
+        c.cloud_coalesce = coalesce;
     })
     .await;
     let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
@@ -304,4 +308,94 @@ async fn an_on_call_target_gets_no_work_wake() {
         .await;
     assert_ne!(r["isError"], true, "{r}");
     wait_hits(&fake, 1, 10).await;
+}
+
+#[tokio::test]
+async fn a_lapsed_lease_is_not_offered_again_until_someone_touches_it() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world().await;
+    w.target(&url, &[], false).await;
+    w.task("Run dies", &[]).await;
+    wait_hits(&fake, 1, 10).await;
+    w.claim().await;
+    // the run dies: the lease runs out and the reaper gives the task back
+    sqlx::query(
+        "update tasks set lease_expires_at = now() - interval '1 second' where status = 'claimed'",
+    )
+    .execute(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(corntchap::jobs::reap(&w.app.state).await.unwrap(), 1);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let before = hits(&fake).len();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(hits(&fake).len(), before, "{:?}", hits(&fake));
+    let r = w
+        .app
+        .mcp(
+            &w.root,
+            "comment",
+            json!({"id": "PAY-1", "body": "try again"}),
+        )
+        .await;
+    assert_ne!(r["isError"], true, "{r}");
+    for _ in 0..100 {
+        if hits(&fake)[before..]
+            .iter()
+            .any(|h| h.1.contains("new work is ready"))
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("not offered again: {:?}", hits(&fake));
+}
+
+#[tokio::test]
+async fn a_cook_holding_a_live_lease_is_not_swept() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world().await;
+    w.target(&url, &[], false).await;
+    w.task("One", &[]).await;
+    w.task("Two", &[]).await;
+    wait_hits(&fake, 1, 10).await;
+    w.claim().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let before = hits(&fake).len();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(hits(&fake).len(), before, "{:?}", hits(&fake));
+}
+
+#[tokio::test]
+async fn a_message_wake_is_not_followed_by_a_sweep_run() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world_with(Duration::from_secs(10)).await;
+    w.target(&url, &[], false).await;
+    let r = w
+        .app
+        .mcp(
+            &w.root,
+            "pass",
+            json!({"project": "PAY", "message": "ping", "to": "chef"}),
+        )
+        .await;
+    assert_ne!(r["isError"], true, "{r}");
+    wait_hits(&fake, 1, 10).await;
+    // ready work appears right after: the run just started is the wake, the sweep adds none
+    w.task("Refund screen", &[]).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let h = hits(&fake);
+    assert_eq!(h.len(), 1, "{h:?}");
+}
+
+#[tokio::test]
+async fn a_failing_target_gets_at_most_three_work_deliveries() {
+    let plan: Vec<(u16, Option<u64>)> = vec![(500, None); 50];
+    let (url, fake) = fake_endpoint(&plan).await;
+    let w = world().await;
+    w.target(&url, &[], false).await;
+    w.task("Refund screen", &[]).await;
+    wait_hits(&fake, 3, 20).await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(hits(&fake).len(), 3, "{:?}", hits(&fake));
 }
