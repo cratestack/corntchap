@@ -18,6 +18,10 @@ type StationView {
   /// The pot's repository (alias) this folder is a checkout of, when known.
   repo String?
   label String?
+  /// The session cannot leave its folder: claim_next hands it only tasks about its repo or about none.
+  confined Boolean
+  /// The pot's guide (how we work here), its first 1500 characters, on register_station's answer only.
+  guide String?
   /// The cook's main station in this pot: the session that answers messages and mentions.
   main Boolean
   created_at String

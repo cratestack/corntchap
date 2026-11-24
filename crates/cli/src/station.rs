@@ -37,6 +37,9 @@ pub enum StationCmd {
         /// Show what would be registered without registering anything.
         #[arg(long)]
         dry_run: bool,
+        /// The session cannot leave its folder (a sandbox, a harness locked to one directory): `claim_next` from it hands out only tasks about its repository or about none, and the dispatcher keeps other repositories' work for other sessions.
+        #[arg(long)]
+        confined: bool,
         #[arg(long)]
         json: bool,
     },
@@ -59,6 +62,9 @@ pub enum StationCmd {
         cook: Option<String>,
         #[arg(long)]
         label: Option<String>,
+        /// The session cannot leave its folder (a sandbox, a harness locked to one directory): `claim_next` from it hands out only tasks about its repository or about none, and the dispatcher keeps other repositories' work for other sessions.
+        #[arg(long)]
+        confined: bool,
         #[arg(long)]
         json: bool,
     },
@@ -114,6 +120,9 @@ pub enum StationCmd {
         /// With --fire: the folder, one of the cook's station folders in the pot.
         #[arg(long, requires = "fire")]
         dir: Option<String>,
+        /// The new session cannot leave this folder (see `station scan --confined`). Not with --fire.
+        #[arg(long, conflicts_with = "fire")]
+        confined: bool,
         #[arg(long)]
         json: bool,
     },
@@ -133,8 +142,9 @@ pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
             cook,
             all,
             dry_run,
+            confined,
             json,
-        } => scan(api, pot, cook, all, dry_run, json).await,
+        } => scan(api, pot, cook, all, dry_run, confined, json).await,
         StationCmd::Add {
             runtime,
             session,
@@ -142,8 +152,14 @@ pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
             pot,
             cook,
             label,
+            confined,
             json,
-        } => add(api, &runtime, &session, dir, pot, cook, label, json).await,
+        } => {
+            add(
+                api, &runtime, &session, dir, pot, cook, label, confined, json,
+            )
+            .await
+        }
         StationCmd::Ls { pot, cook, json } => {
             let mut q = vec![];
             if let Some(p) = pot {
@@ -179,6 +195,7 @@ pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
             desktop,
             fire,
             dir,
+            confined,
             json,
         } => {
             let prompt = Some(prompt.join(" ")).filter(|p| !p.trim().is_empty());
@@ -190,6 +207,7 @@ pub async fn run(cmd: StationCmd, api: &Api) -> Result<()> {
                 label,
                 wait: wait || desktop,
                 desktop,
+                confined,
                 json,
             };
             if fire {
@@ -655,6 +673,7 @@ async fn scan(
     cook: Option<String>,
     all: bool,
     dry_run: bool,
+    confined: bool,
     json: bool,
 ) -> Result<()> {
     let root = work_folder()?;
@@ -675,19 +694,19 @@ async fn scan(
         );
     }
     let repo = repo_alias_of(api, &root, &pot).await;
-    scan_found(api, &dirs, pot, repo, cook, all, dry_run, json).await
+    scan_found(api, &dirs, pot, repo, cook, all, dry_run, confined, json).await
 }
 
 /// Where the sessions work: the git checkout's root when there is one (its worktrees are covered
 /// too), else this very folder. Repositories are a convenience, never a requirement: a pot can
 /// span many repos, or none.
-fn work_folder() -> Result<String> {
+pub(crate) fn work_folder() -> Result<String> {
     let cwd = std::env::current_dir()?;
     Ok(git(&cwd, &["rev-parse", "--show-toplevel"]).unwrap_or_else(|_| cwd.display().to_string()))
 }
 
 /// The pot of a folder: the one given, else the pot with a repository matching its git `origin`.
-async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<String> {
+pub(crate) async fn resolve_pot(api: &Api, root: &str, pot: Option<String>) -> Result<String> {
     let pots = api.get("/projects").await?;
     Ok(match pot {
         Some(p) => p.to_uppercase(),
@@ -723,6 +742,7 @@ async fn scan_found(
     cook: Option<String>,
     all: bool,
     dry_run: bool,
+    confined: bool,
     json: bool,
 ) -> Result<()> {
     let dirs = dirs.to_vec();
@@ -825,6 +845,7 @@ async fn scan_found(
                     json!({
                         "cook": c, "project": pot, "runtime": f.runtime, "session": f.session,
                         "directory": f.directory, "label": label_for(f), "repo": repo,
+                        "confined": confined.then_some(true),
                     }),
                 )
                 .await
@@ -859,6 +880,7 @@ async fn add(
     pot: Option<String>,
     cook: Option<String>,
     label: Option<String>,
+    confined: bool,
     json: bool,
 ) -> Result<()> {
     let runtime = runtime.trim().to_lowercase();
@@ -902,6 +924,7 @@ async fn add(
             serde_json::json!({
                 "cook": cook, "project": pot, "runtime": runtime, "session": session,
                 "directory": dir, "label": label, "repo": repo,
+                "confined": confined.then_some(true),
             }),
         )
         .await?;
@@ -1073,6 +1096,7 @@ pub struct StartArgs {
     label: Option<String>,
     wait: bool,
     desktop: bool,
+    confined: bool,
     json: bool,
 }
 
@@ -1157,7 +1181,8 @@ async fn start_here(api: &Api, a: StartArgs) -> Result<()> {
         .post(
             "/stations",
             json!({"cook": cook, "project": pot, "runtime": "claude-code", "session": session,
-                   "directory": root, "label": label, "repo": repo}),
+                   "directory": root, "label": label, "repo": repo,
+                   "confined": a.confined.then_some(true)}),
         )
         .await
         .context("registering the new session")?;

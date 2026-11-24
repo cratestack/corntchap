@@ -530,6 +530,7 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "set_grants",
             "set_lease_ttl",
             "set_main_station",
+            "set_pot_guide",
             "split_by_repo",
             "start_station",
             "toss_task",
@@ -541,6 +542,7 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "upload_file",
             "usage_report",
             "wait_for_work",
+            "what_now",
             "whoami",
         ]
     );

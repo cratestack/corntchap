@@ -14,6 +14,7 @@ import { useSession } from "@/lib/session";
 import { fmtAgo, useNow } from "@/lib/format";
 import { lastView } from "@/lib/views";
 import { PotRepos } from "@/components/repos";
+import { PotGuide } from "@/components/pot-guide";
 import { Crumb, Quiet, linkClass } from "./common";
 
 const activityLine = (a: ActivityView) => {
@@ -162,6 +163,8 @@ export function PotDetailsPage() {
               ))}
             </ul>
           </Group>
+
+          <PotGuide project={project} canManage={canManage} />
 
           <PotRepos project={project} canManage={canManage} />
 

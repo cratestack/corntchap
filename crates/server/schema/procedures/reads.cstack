@@ -3,9 +3,10 @@ part of "../corntchap.cstack"
 // Read-only procedures: identity, projects, tasks, boards.
 
 /// Your identity and current leases.
-procedure whoami(): WhoamiView
+/// @param project Pot key: with it, the answer carries the start of the pot's guide.
+procedure whoami(project: String?): WhoamiView
   @allow(auth() != null)
-  @mcp(tool: "whoami", description: "Who you are: name, teams, projects and the leases you currently hold.")
+  @mcp(tool: "whoami", description: "Who you are: name, teams, projects and the leases you currently hold. With a project (on a pot's MCP URL it is that pot), also the start of the pot's guide; what_now says what to do.")
 
 /// The projects you can see, with task counts.
 procedure projectOverview(): ProjectSummary[]

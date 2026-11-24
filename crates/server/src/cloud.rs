@@ -203,7 +203,8 @@ pub async fn work_text(
     project: Uuid,
     key: &str,
 ) -> WakeText {
-    let news = pantry_line(c, agent, project).await;
+    let mut news = pantry_line(c, agent, project).await;
+    news.push_str(&guide_line(c, project, key).await);
     let full = format!(
         "corntchap: new work is ready for {agent_name} in {key}.\n\n\
          You are a cloud session: this run starts fresh. Call claim_next with project {key}, finish the \
@@ -263,6 +264,7 @@ pub async fn messages_text(
         full.push_str(&task_context(c, project, t).await);
     }
     full.push_str(&pantry_line(c, agent, project).await);
+    full.push_str(&guide_line(c, project, key).await);
     full.push_str(
         "\n\nAnswer where you are asked (pass, comment), release or complete any task you claim, then stop.",
     );
@@ -379,6 +381,14 @@ async fn task_context(c: &mut PgConnection, project: Uuid, tref: &str) -> String
     }
     s.push('\n');
     s
+}
+
+/// One line when the pot has a guide: how we work here, read with what_now.
+async fn guide_line(c: &mut PgConnection, project: Uuid, key: &str) -> String {
+    match crate::what_now::wake_hint(c, project, key).await {
+        h if h.is_empty() => h,
+        h => format!("\n\n{h}"),
+    }
 }
 
 async fn pantry_line(c: &mut PgConnection, agent: Uuid, project: Uuid) -> String {
