@@ -1301,7 +1301,7 @@ pub async fn complete(
     )
     .await?;
     if !no_propagate {
-        crate::repos::propagate(&mut tx, p, t.id, result).await?;
+        crate::repos::propagate(&mut tx, Some(p.id), t.id, result).await?;
     }
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
@@ -1345,6 +1345,10 @@ async fn end_lease(
         json!({"reason": reason}),
     )
     .await?;
+    // its PR merged while it was held: nobody is left to serve it
+    if new_status == "open" {
+        crate::forge::events::complete_if_merged(&mut tx, t.id, None).await?;
+    }
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
     Ok(out)

@@ -1310,6 +1310,20 @@ pub async fn wake_from(
     if cloud && !(reason == "pass" && owner.is_some() && from == owner) {
         return Ok(json!({"cook": name, "woken": false, "cloud": true}));
     }
+    // its owner's message starts a run only where a cloud target serves the pot
+    if cloud {
+        let covered: bool = sqlx::query_scalar(
+            "select exists (select 1 from wake_targets where agent_id = $1
+               and (projects is null or cardinality(projects) = 0 or $2 = any(projects)))",
+        )
+        .bind(agent)
+        .bind(key)
+        .fetch_one(&mut *c)
+        .await?;
+        if !covered {
+            return Ok(json!({"cook": name, "woken": false, "cloud": true, "uncovered": true}));
+        }
+    }
     let task_ref: Option<String> = match task {
         Some(t) => sqlx::query_scalar(
             "select pr.key || '-' || t.number from tasks t join projects pr on pr.id = t.project_id where t.id = $1",

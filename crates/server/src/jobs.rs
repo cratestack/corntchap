@@ -128,24 +128,39 @@ async fn run_jobs(state: AppState) {
 
 /// Expired claims go back to `open`, with an event, in one statement.
 pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
-    let n = sqlx::query(
+    let mut tx = state.db.begin().await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
         "with old as (
            select id, claimed_by from tasks where status = 'claimed' and lease_expires_at < now() for update skip locked),
          expired as (
            update tasks t set status = 'open', claimed_by = null, lease_expires_at = null, updated_at = now()
            from old where t.id = old.id
-           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch, t.station_id)
-         insert into events (project_id, task_id, kind, actor_id, payload)
-         select project_id, id, 'task.lease_expired', null,
-                jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
-                                   'agent_id', expired.was,
-                                   'station', (select s.ref from stations s where s.id = expired.station_id))
-         from expired",
+           returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch, t.station_id),
+         logged as (
+           insert into events (project_id, task_id, kind, actor_id, payload)
+           select project_id, id, 'task.lease_expired', null,
+                  jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
+                                     'agent_id', expired.was,
+                                     'station', (select s.ref from stations s where s.id = expired.station_id))
+           from expired returning task_id)
+         select id from expired",
     )
-    .execute(&state.db)
-    .await?
-    .rows_affected();
-    Ok(n)
+    .fetch_all(&mut *tx)
+    .await?;
+    // a task whose PR merged while it was held is done, not free work
+    for id in &ids {
+        // a savepoint: one task that cannot be completed must not undo the reaping of the rest
+        let mut sp = tx.begin().await?;
+        match crate::forge::events::complete_if_merged(&mut sp, *id, None).await {
+            Ok(_) => sp.commit().await?,
+            Err(e) => {
+                tracing::warn!("reaper: completing {id} on merge: {e}");
+                sp.rollback().await?;
+            }
+        }
+    }
+    tx.commit().await?;
+    Ok(ids.len() as u64)
 }
 
 /// People's comments a cook has not answered in time (no comment, completion, release or block
@@ -402,7 +417,8 @@ impl Dispatcher {
             .fetch_one(&self.state.db)
             .await
             .unwrap_or(false);
-            if ff {
+            // defense in depth: only a direct message on the pass starts a cloud run
+            if ff && payload["reason"].as_str() == Some("pass") {
                 self.cloud.push((agent, *project, payload.clone()));
             }
             return;

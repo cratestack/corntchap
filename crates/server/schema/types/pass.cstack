@@ -21,7 +21,7 @@ type PassMessageView {
   task String?
   at String
   /// Who posting it woke, kept with the message: each cook, and the session (station) it reached.
-  /// Set on the message you just posted when it woke a cloud cook: what that means.
+  /// Set on the message you just posted when a fire-and-forget cook was involved: it was started by its owner's message and does not stay to chat, it was not woken (a mention; it only takes ready work), or no cloud target of it serves the pot.
   note String?
   woken WokenRef[]
   /// The session (station) that wrote it, when the cook said which: a cook can run several.

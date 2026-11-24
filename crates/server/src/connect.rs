@@ -169,8 +169,8 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 "Paste the routine prompt below into the routine's prompt, so each run acts on what corntchap sends.".into(),
                 format!("Give the routine the corntchap MCP server as a connector, signed in with {cook}'s token."),
                 "Add an API trigger to the routine and copy its URL and its token (the token is shown once).".into(),
-                "Know that each wake starts a new session of the routine: it cannot resume or reach an existing session, so it works from what corntchap sends and keeps (task comments, the pass, the pantry). Do not change the routine's prompt to forward wakes elsewhere.".into(),
-                "It starts for ready tasks in its pots and when called (a direct message, an @mention or a comment on its task); broadcasts and answers to its questions do not start a run (it reads answers on its next run). Tick \"only when called\" if it should never start for new work.".into(),
+                "Know that each wake starts a new session of the routine: it cannot resume or reach an existing session, so it works from what corntchap sends and keeps (task comments, linked pull requests, the pantry). Do not change the routine's prompt to forward wakes elsewhere.".into(),
+                "It is fire and forget: it starts only for ready tasks in its pots and for a direct message from its owner on the pass. Mentions, comments, forge events, review requests, broadcasts and answers never start a run.".into(),
                 "Enter both here. corntchap keeps the token and never shows it again.".into(),
             ],
             vec![
@@ -198,7 +198,7 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 "In Devin, create a service user with permission to use and manage the organization's sessions, and an API key for it (it starts with cog_). corntchap sends it as a bearer token and keeps it: it is never shown again.".into(),
                 "Make the corntchap MCP server reachable from Devin: add it once in your Devin organization's MCP settings, signed in with the cook's token. corntchap sends no credential in the prompt.".into(),
                 "Enter the organization id (it starts with org-). Leave the URL empty for Devin's own API host.".into(),
-                "It starts for ready tasks in its pots and when called (a direct message, an @mention or a comment on its task); broadcasts and answers do not. Tick 'only when called' if it should never start for new work. Only an admin can change the URL.".into(),
+                "It is fire and forget: it starts only for ready tasks in its pots and for a direct message from its owner on the pass; nothing else (mentions, comments, forge events, broadcasts, answers) starts a run. Only an admin can change the URL.".into(),
             ],
             vec![
                 field("token", "Devin API key", true, true, "cog_…", "A service user's key with permission to use and manage sessions."),
@@ -213,7 +213,7 @@ fn guide(s: &Setup, default_mention: &str) -> (Vec<String>, Vec<Value>) {
                 "Make the corntchap MCP server reachable from the agent, signed in with the cook's token: add it as an MCP server in Coder Agents (or, for Tasks, in the template's agent module). corntchap sends no credential in the prompt.".into(),
                 "Enter the deployment URL and the organization id (coder organizations list). To run in a known environment, give a workspace id too: the agent then works in that workspace instead of picking a template itself.".into(),
                 "Older Coder with Tasks: leave the organization empty and give the template (its name or version id), and optionally its preset id and the owner (default me).".into(),
-                "The first wake starts a run; later wakes for the same pot are follow-up messages to it. It starts for ready tasks in its pots and when called (a direct message, an @mention or a comment on its task); broadcasts and answers do not. Tick 'only when called' if it should never start for new work. An admin connects Coder.".into(),
+                "The first wake starts a run; later wakes for the same pot are follow-up messages to it. It is fire and forget: it starts only for ready tasks in its pots and for a direct message from its owner on the pass; nothing else (mentions, comments, forge events, broadcasts, answers) starts a run. An admin connects Coder.".into(),
             ],
             vec![
                 field("url", "Coder URL", false, true, "https://coder.example.com", "The deployment."),

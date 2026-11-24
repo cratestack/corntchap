@@ -87,7 +87,7 @@ pub async fn link_pr(st: &AppState, p: &Principal, task: &str, url: &str) -> Res
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "update forge_prs set task_id = $4, explicit = true, unlinked = false, updated_at = now()
+        "update forge_prs set task_id = $4, explicit = true, unlinked = false, linked_via = null, updated_at = now()
          where provider = $1 and lower(repo) = lower($2) and number = $3",
     )
     .bind(&provider)
@@ -155,7 +155,7 @@ pub async fn unlink_pr(db: &PgPool, p: &Principal, task: &str, url: Option<&str>
         None => None,
     };
     let gone = sqlx::query(
-        "update forge_prs set task_id = null, explicit = false, unlinked = true, updated_at = now()
+        "update forge_prs set task_id = null, explicit = false, unlinked = true, linked_via = null, updated_at = now()
          where task_id = $1 and ($2::text is null or (provider = $2 and lower(repo) = lower($3) and number = $4))",
     )
     .bind(t.id)

@@ -146,7 +146,14 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             Some((id, name))
         }
     };
-    // a fire-and-forget cook takes direct messages from its own owner only
+    // A fire-and-forget cook takes direct messages from its own owner only: sent by the owner
+    // person, or relayed (fromOwner) by a cook that is not itself fire and forget. A
+    // fire-and-forget cook cannot speak for its owner: that would let cooks start each other's
+    // paid runs.
+    let relayer_ff = match relayed_by {
+        Some(_) => crate::cloud::is_fire_and_forget(&mut tx, p.id).await?,
+        None => false,
+    };
     if let Some((id, name)) = &to
         && crate::cloud::is_fire_and_forget(&mut tx, *id).await?
     {
@@ -155,7 +162,7 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
                 .bind(id)
                 .fetch_one(&mut *tx)
                 .await?;
-        if owner != Some(author) {
+        if owner != Some(author) || relayer_ff {
             return Err(crate::cloud::refusal(name));
         }
     }
@@ -259,7 +266,7 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             );
             let _ = (name, sref);
         }
-        let out = record_woken(&mut tx, id, &reached, &[]).await?;
+        let out = record_woken(&mut tx, id, &reached, &[], &[], &pr.key).await?;
         tx.commit().await?;
         return Ok(out);
     }
@@ -267,6 +274,7 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     // Wake the cooks it is for: the recipient of a direct message, or the cooks @mentioned.
     let mut woken: BTreeSet<Uuid> = BTreeSet::new();
     let mut not_woken: Vec<String> = vec![];
+    let mut uncovered: Vec<String> = vec![];
     let targets: Vec<(Uuid, bool)> = match &to {
         Some((id, _)) => vec![(*id, true)],
         None => {
@@ -325,19 +333,24 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             task,
             &prompt,
             "pass",
-            // only a direct message can start a fire-and-forget cook, not a mention
-            direct.then_some(author),
+            // only a direct message can start a fire-and-forget cook, not a mention, and not
+            // one relayed by a fire-and-forget cook
+            (direct && !relayer_ff).then_some(author),
         )
         .await?;
         if w["woken"] == false {
             if let Some(n) = w["cook"].as_str() {
-                not_woken.push(n.to_string());
+                if w["uncovered"] == true {
+                    uncovered.push(n.to_string());
+                } else {
+                    not_woken.push(n.to_string());
+                }
             }
         } else {
             reached.push(w);
         }
     }
-    let out = record_woken(&mut tx, id, &reached, &not_woken).await?;
+    let out = record_woken(&mut tx, id, &reached, &not_woken, &uncovered, &pr.key).await?;
     tx.commit().await?;
     Ok(out)
 }
@@ -349,6 +362,8 @@ async fn record_woken(
     id: Uuid,
     woken: &[Value],
     not_woken: &[String],
+    uncovered: &[String],
+    pot: &str,
 ) -> Result<Value> {
     sqlx::query("update pass_messages set woken = $2 where id = $1")
         .bind(id)
@@ -356,15 +371,21 @@ async fn record_woken(
         .execute(&mut *c)
         .await?;
     let mut out = one(c, id).await?;
-    if let Some(n) = cloud_note(woken, not_woken) {
+    if let Some(n) = cloud_note(woken, not_woken, uncovered, pot) {
         out["note"] = json!(n);
     }
     Ok(out)
 }
 
 /// What the sender should know about fire-and-forget cooks: the ones a message started (it came
-/// from their owner), and the ones it did not wake (a mention).
-pub fn cloud_note(woken: &[Value], not_woken: &[String]) -> Option<String> {
+/// from their owner), the ones it did not wake (a mention) and the ones no cloud target of which
+/// serves the pot (`uncovered`).
+pub fn cloud_note(
+    woken: &[Value],
+    not_woken: &[String],
+    uncovered: &[String],
+    pot: &str,
+) -> Option<String> {
     let mut started: Vec<&str> = woken
         .iter()
         .filter(|w| w["cloud"] == true)
@@ -380,6 +401,13 @@ pub fn cloud_note(woken: &[Value], not_woken: &[String]) -> Option<String> {
         ));
     }
     notes.extend(not_woken_note(not_woken));
+    if !uncovered.is_empty() {
+        notes.push(format!(
+            "{} {} fire-and-forget but no cloud target serves {pot}: nothing was started. Add {pot} to a cloud target's pots (or leave them empty for every pot).",
+            uncovered.join(", "),
+            if uncovered.len() == 1 { "is" } else { "are" },
+        ));
+    }
     (!notes.is_empty()).then(|| notes.join(" "))
 }
 

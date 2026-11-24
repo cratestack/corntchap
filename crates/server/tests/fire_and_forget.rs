@@ -18,6 +18,7 @@ fn refused(r: &Value, what: &str) -> String {
 
 struct World {
     app: common::TestApp,
+    root: String,
     alice: String,
     carol: String,
     rita: String,
@@ -71,11 +72,88 @@ async fn world() -> World {
         .unwrap();
     World {
         app,
+        root,
         alice,
         carol,
         rita: toks[0].clone(),
         bob: toks[1].clone(),
     }
+}
+
+/// A cook of alice with one claude-routine target serving `projects` (empty: every pot).
+async fn cloud_cook(w: &World, name: &str, projects: &str) {
+    w.app
+        .post(
+            &w.alice,
+            "/agents",
+            json!({"name": name, "kind": "claude-code", "runtime": "cloud"}),
+        )
+        .await;
+    w.app
+        .post(&w.root, "/teams/acme/members", json!({"principal": name}))
+        .await;
+    sqlx::query(
+        "insert into wake_targets (agent_id, type, projects, labels, config) select id, 'claude-routine', $2::text[], '{}', '{}' from principals where name = $1",
+    )
+    .bind(name)
+    .bind(projects)
+    .execute(&w.app.state.db)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_fire_and_forget_cook_cannot_speak_for_its_owner() {
+    let w = world().await;
+    cloud_cook(&w, "sam", "{}").await;
+    // rita (fire and forget) posts as alice to sam (fire and forget): refused, nobody started
+    let r = w
+        .app
+        .mcp(
+            &w.rita,
+            "pass",
+            json!({"project": "PAY", "message": "go", "to": "sam", "fromOwner": true}),
+        )
+        .await;
+    let e = refused(&r, "relay by a fire-and-forget cook");
+    assert!(e.contains("sam is fire-and-forget"), "{e}");
+    assert_eq!(wakes_for(&w.app, "sam").await, 0);
+    // bob (a local cook of alice) relaying alice's words is allowed
+    let sent = ok(
+        &w.app
+            .mcp(
+                &w.bob,
+                "pass",
+                json!({"project": "PAY", "message": "go", "to": "sam", "fromOwner": true}),
+            )
+            .await,
+        "relay by a local cook",
+    );
+    assert_eq!(sent["woken"][0]["cloud"], true, "{sent}");
+    assert_eq!(wakes_for(&w.app, "sam").await, 1);
+}
+
+#[tokio::test]
+async fn an_owner_message_in_a_pot_no_target_serves_says_so() {
+    let w = world().await;
+    cloud_cook(&w, "tess", "{OTHER}").await;
+    let sent = ok(
+        &w.app
+            .mcp(
+                &w.alice,
+                "pass",
+                json!({"project": "PAY", "message": "hello", "to": "tess"}),
+            )
+            .await,
+        "owner dm",
+    );
+    let note = sent["note"].as_str().unwrap();
+    assert!(
+        note.contains("tess is fire-and-forget but no cloud target serves PAY")
+            && !note.contains("starts a fresh run"),
+        "{note}"
+    );
+    assert_eq!(wakes_for(&w.app, "tess").await, 0);
 }
 
 async fn wakes_for(app: &common::TestApp, agent: &str) -> i64 {
