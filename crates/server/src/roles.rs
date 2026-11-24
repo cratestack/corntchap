@@ -60,27 +60,75 @@ pub fn oidc_role(id_token: &str, cfg: &OidcConfig) -> Role {
     }
 }
 
-/// Make a person a super-admin, an orchestrator or a member (super-admins only). Any change makes the role
+/// Make a person a super-admin, an orchestrator or a member (super-admins only). A change makes the role
 /// manual (`role_source = 'manual'`): the IdP sync only ever touches roles it made itself, so a manual
-/// demotion sticks and a manual promotion is explicit. The last usable super-admin cannot be demoted.
+/// demotion sticks and a manual promotion is explicit. Setting the role someone already has changes nothing
+/// (the `init` super-admin stays `init`). No change may leave zero usable super-admins.
 /// A demoted team owner keeps the owner row but loses its powers until they are an orchestrator again.
 pub async fn set_role(db: &PgPool, p: &Principal, handle: &str, role: Role) -> Result<Value> {
-    require_super_admin(p, "change people's roles")?;
+    let v = update_person(db, p, handle, Some(role), None).await?;
+    let note = if v["role_source"] == "manual" {
+        "manual role: the IdP role no longer changes it"
+    } else {
+        "role unchanged"
+    };
+    Ok(json!({"name": v["name"], "role": v["role"], "role_source": v["role_source"], "note": note}))
+}
+
+/// Change a person's role and/or disabled flag in one transaction (super-admins only): the result is checked
+/// against the last-usable-super-admin rule, and either everything applies or nothing does.
+pub async fn update_person(
+    db: &PgPool,
+    p: &Principal,
+    handle: &str,
+    role: Option<Role>,
+    disabled: Option<bool>,
+) -> Result<Value> {
+    require_super_admin(p, "change people")?;
     let handle = crate::admin::clean_handle_arg(handle);
     let mut tx = db.begin().await?;
-    let admins = crate::admin::usable_super_admins(&mut tx).await?;
+    let before = crate::admin::usable_super_admins(&mut tx).await?;
     let target = crate::admin::person_id(&mut tx, &handle).await?;
-    if role != Role::SuperAdmin && admins.contains(&target) && admins.iter().all(|a| *a == target) {
-        return Err(crate::admin::last_super_admin());
-    }
-    sqlx::query("update principals set role = $2, role_source = 'manual' where id = $1")
+    if let Some(role) = role {
+        sqlx::query(
+            "update principals set role = $2, role_source = 'manual' where id = $1 and role <> $2",
+        )
         .bind(target)
         .bind(role)
         .execute(&mut *tx)
         .await?;
+    }
+    if let Some(disable) = disabled {
+        sqlx::query(
+            "update principals set disabled_at = case when $2 then coalesce(disabled_at, now()) else null end where id = $1",
+        )
+        .bind(target)
+        .bind(disable)
+        .execute(&mut *tx)
+        .await?;
+        if disable {
+            sqlx::query("delete from auth_sessions where user_id = $1")
+                .bind(target)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "update tokens set revoked_at = now() where principal_id = $1 and revoked_at is null",
+            )
+            .bind(target)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    let after = crate::admin::usable_super_admins(&mut tx).await?;
+    if after.is_empty() && !before.is_empty() {
+        return Err(crate::admin::last_super_admin());
+    }
+    let (role, role_source, off): (Role, String, bool) = sqlx::query_as(
+        "select role, role_source, disabled_at is not null from principals where id = $1",
+    )
+    .bind(target)
+    .fetch_one(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(json!({
-        "name": handle, "role": role, "role_source": "manual",
-        "note": "manual role: the IdP role no longer changes it",
-    }))
+    Ok(json!({"name": handle, "role": role, "role_source": role_source, "disabled": off}))
 }

@@ -438,13 +438,7 @@ async fn oidc_callback(
         .await?;
     // The IdP roles decide the role only for people it made itself (`role_source = 'oidc'`): `init` and manual
     // settings (`user role <handle> ...`) are never changed by a sign-in.
-    sqlx::query(
-        "update principals set role = $2 where id = $1 and role_source = 'oidc' and role <> $2",
-    )
-    .bind(user)
-    .bind(want_role)
-    .execute(&state.db)
-    .await?;
+    sync_oidc_role(&state.db, user, want_role).await?;
     purge_expired(&state.db).await;
     let session = generate_token();
     store(&state)
@@ -1062,4 +1056,32 @@ async fn font_file(Path(file): Path<String>) -> Response {
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// Apply the IdP's role to a person it made itself. If that would demote the last usable super-admin the
+/// role is kept (and a warning logged): a mis-set claim must never lock the instance out.
+async fn sync_oidc_role(db: &sqlx::PgPool, user: Uuid, want: crate::state::Role) -> Result<()> {
+    let mut tx = db.begin().await?;
+    let before = admin::usable_super_admins(&mut tx).await?;
+    let changed = sqlx::query(
+        "update principals set role = $2 where id = $1 and role_source = 'oidc' and role <> $2",
+    )
+    .bind(user)
+    .bind(want)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed == 0 {
+        return Ok(());
+    }
+    let after = admin::usable_super_admins(&mut tx).await?;
+    if after.is_empty() && !before.is_empty() {
+        tracing::warn!(
+            user = %user,
+            "the IdP no longer grants the admin role to the last usable super-admin; keeping super_admin"
+        );
+        return Ok(()); // dropping tx rolls the demotion back
+    }
+    tx.commit().await?;
+    Ok(())
 }

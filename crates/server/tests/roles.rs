@@ -1044,3 +1044,95 @@ async fn usage_follows_the_cooks_and_pots_you_own() {
     app.set_role("orch", "member").await;
     assert_eq!(seen(app.mcp(o, "usage_report", json!({})).await), ["oc"]);
 }
+
+#[tokio::test]
+async fn the_sole_super_admin_cannot_step_down_even_by_a_no_op_first() {
+    let w = world().await;
+    let (app, root) = (&w.app, &w.root);
+    let source = || async {
+        sqlx::query_scalar::<_, String>("select role_source from principals where name = 'octo'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap()
+    };
+    // setting the role they already have changes nothing: still `init`, still usable
+    let v = ok(
+        &app.mcp(
+            root,
+            "set_role",
+            json!({"user": "octo", "role": "super_admin"}),
+        )
+        .await,
+        "no-op",
+    );
+    assert_eq!(v["role_source"], "init");
+    assert_eq!(source().await, "init");
+    let usable: i64 = sqlx::query_scalar(
+        "select count(*) from principals where kind = 'user' and role = 'super_admin'
+         and disabled_at is null and (oidc_sub is not null or role_source = 'init')",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(usable, 1);
+    // so the only super-admin still cannot demote themselves
+    let e = refused(
+        &app.mcp(root, "set_role", json!({"user": "octo", "role": "member"}))
+            .await,
+        "self-demotion",
+    );
+    assert!(e.contains("last super-admin"), "{e}");
+    assert_eq!(role_of(app, "octo").await, "super_admin");
+    assert_eq!(source().await, "init");
+}
+
+#[tokio::test]
+async fn a_refused_disable_leaves_the_role_change_unapplied() {
+    let w = world().await;
+    let (app, root) = (&w.app, &w.root);
+    let (st, _) = app
+        .rest(
+            root,
+            reqwest::Method::PATCH,
+            "/users/octo",
+            Some(json!({"role": "orchestrator", "disabled": true})),
+        )
+        .await;
+    assert_eq!(st, 409);
+    assert_eq!(role_of(app, "octo").await, "super_admin");
+    let off: bool =
+        sqlx::query_scalar("select disabled_at is not null from principals where name = 'octo'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert!(!off);
+}
+
+#[tokio::test]
+async fn a_member_owned_cook_with_manage_and_admin_cannot_create_a_team() {
+    let w = world().await;
+    let (app, m) = (&w.app, &w.mem);
+    ok(
+        &app.mcp(m, "create_cook", json!({"name": "mc"})).await,
+        "member's cook",
+    );
+    let (st, _) = app
+        .post(
+            &w.root,
+            "/agents/mc/grants",
+            json!({"grants": ["manage", "admin"]}),
+        )
+        .await;
+    assert_eq!(st, 200);
+    let mc = ok(
+        &app.mcp(m, "rotate_token", json!({"name": "mc"})).await,
+        "token",
+    )["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    refused(
+        &app.mcp(&mc, "create_team", json!({"name": "nope"})).await,
+        "create_team",
+    );
+}

@@ -494,35 +494,8 @@ pub async fn set_user_disabled(
     handle: &str,
     disable: bool,
 ) -> Result<Value> {
-    crate::roles::require_super_admin(p, "disable or enable people")?;
-    let handle = clean_handle_arg(handle);
-    let mut tx = db.begin().await?;
-    let admins = usable_super_admins(&mut tx).await?;
-    let target = person_id(&mut tx, &handle).await?;
-    if disable && admins.contains(&target) && admins.iter().all(|a| *a == target) {
-        return Err(last_super_admin());
-    }
-    sqlx::query(
-        "update principals set disabled_at = case when $2 then coalesce(disabled_at, now()) else null end where id = $1",
-    )
-    .bind(target)
-    .bind(disable)
-    .execute(&mut *tx)
-    .await?;
-    if disable {
-        sqlx::query("delete from auth_sessions where user_id = $1")
-            .bind(target)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(
-            "update tokens set revoked_at = now() where principal_id = $1 and revoked_at is null",
-        )
-        .bind(target)
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
-    Ok(json!({"name": handle, "disabled": disable}))
+    let v = crate::roles::update_person(db, p, handle, None, Some(disable)).await?;
+    Ok(json!({"name": v["name"], "disabled": disable}))
 }
 
 pub async fn mint_token(

@@ -196,12 +196,13 @@ async fn users_update(
         ));
     }
     crate::roles::require_super_admin(&p, "change people")?;
-    let mut out = json!({"name": name.trim().trim_start_matches('@').to_lowercase()});
-    if let Some(role) = role {
-        out = crate::roles::set_role(&st.db, &p, &name, role).await?;
+    let v = crate::roles::update_person(&st.db, &p, &name, role, disabled).await?;
+    let mut out = json!({"name": v["name"]});
+    if role.is_some() {
+        out["role"] = v["role"].clone();
+        out["role_source"] = v["role_source"].clone();
     }
-    if let Some(d) = disabled {
-        let v = admin::set_user_disabled(&st.db, &p, &name, d).await?;
+    if disabled.is_some() {
         out["disabled"] = v["disabled"].clone();
     }
     ok(out)

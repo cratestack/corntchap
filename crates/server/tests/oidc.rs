@@ -49,6 +49,9 @@ async fn jit_creates_user_and_maps_admin_role() {
         ("member".to_string(), "oidc".to_string())
     );
 
+    // a second usable super-admin, so the sync may demote the first
+    app.sign_in_as("sub-keep", "Keep", true);
+    app.browser_login("/").await;
     // the admin role is synced on every sign-in, both ways
     app.sign_in_as("sub-dev", "Dev", true);
     app.browser_login("/").await;
@@ -597,6 +600,8 @@ async fn a_sign_in_never_becomes_an_agent() {
 #[tokio::test]
 async fn the_orchestrator_role_maps_and_the_admin_role_wins() {
     let app = common::start(false).await;
+    app.sign_in_as("sub-keep", "Keep", true);
+    app.browser_login("/").await;
     app.sign_in_roles("sub-o", "O", &["corntchap-orchestrator"]);
     app.browser_login("/").await;
     assert_eq!(
@@ -665,4 +670,28 @@ async fn the_sync_leaves_manual_and_init_roles_alone() {
             .await
             .is_err()
     );
+}
+
+/// The IdP dropping the admin claim never demotes the last usable super-admin.
+#[tokio::test]
+async fn dropping_the_admin_claim_keeps_the_last_super_admin() {
+    let app = common::start(false).await;
+    app.sign_in_as("sub-solo", "Solo", true);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-solo").await,
+        ("super_admin".to_string(), "oidc".to_string())
+    );
+    app.sign_in_roles("sub-solo", "Solo", &[]);
+    app.browser_login("/").await;
+    assert_eq!(
+        row(&app, "sub-solo").await,
+        ("super_admin".to_string(), "oidc".to_string())
+    );
+    // with a second usable super-admin the sync demotes as usual
+    app.sign_in_as("sub-two", "Two", true);
+    app.browser_login("/").await;
+    app.sign_in_roles("sub-solo", "Solo", &[]);
+    app.browser_login("/").await;
+    assert_eq!(row(&app, "sub-solo").await.0, "member");
 }
