@@ -280,6 +280,16 @@ async fn agent_edits_only_the_task_it_holds() {
         "agent edited an unheld task: {st} {v}"
     );
 
+    // an agent starts with what_now (a claim before it would only return the catch-up)
+    let (st, v) = w
+        .v2(
+            &w.a1,
+            Method::POST,
+            "/$procs/whatNow",
+            Some(json!({"project": "AAA"})),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
     // claim over the generated procedure route, then edit
     let (st, v) = w
         .v2(

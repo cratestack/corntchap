@@ -21,6 +21,9 @@ pub enum Error {
         "the lease on this task is gone (expired, released or re-claimed); stop work and report"
     )]
     LeaseLost,
+    /// The lease is gone and the server says why (no progress for too long, held for too long).
+    #[error("the lease on this task is gone: {0}")]
+    LeaseLostFor(String),
     #[error("agent already holds its maximum number of leases")]
     MaxLeases,
     #[error("authentication required")]
@@ -60,7 +63,7 @@ impl Error {
             Error::Forbidden(_) => "forbidden",
             Error::Invalid(_) => "invalid",
             Error::Conflict(_) => "conflict",
-            Error::LeaseLost => "lease_lost",
+            Error::LeaseLost | Error::LeaseLostFor(_) => "lease_lost",
             Error::MaxLeases => "max_leases",
             Error::Unauthorized => "unauthorized",
             Error::Insecure(_) => "insecure_transport",
@@ -72,7 +75,9 @@ impl Error {
             Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::Forbidden(_) => StatusCode::FORBIDDEN,
             Error::Invalid(_) => StatusCode::BAD_REQUEST,
-            Error::Conflict(_) | Error::LeaseLost | Error::MaxLeases => StatusCode::CONFLICT,
+            Error::Conflict(_) | Error::LeaseLost | Error::LeaseLostFor(_) | Error::MaxLeases => {
+                StatusCode::CONFLICT
+            }
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::Insecure(_) => StatusCode::FORBIDDEN,
             Error::Db(_) | Error::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,

@@ -16,6 +16,8 @@ type NowTask {
   station String?
   /// Held tasks: when the lease runs out.
   lease_expires_at String?
+  /// Held tasks: when the server ends the lease whatever it renews to (no progress for STALL_MINUTES, or MAX_HOLD_HOURS held).
+  stalls_at String?
   /// Stale claims: the cook whose lease lapsed.
   holder String?
   /// Stale claims: when it lapsed.

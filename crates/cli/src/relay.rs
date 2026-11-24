@@ -10,11 +10,11 @@ use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
 
 use crate::api::{Api, Credentials, config_dir};
 
-pub const PROMPT: &str = "New work is ready in {project}. Call claim_next with project {project}, finish the task, then call it again until it returns none.";
+pub const PROMPT: &str = "New work is ready in {project}. Call what_now with project {project} first (it briefs you; after an absence a claim returns a catch_up and no task until you have), then claim_next with project {project}, finish the task, then call it again until it returns none.";
 
 /// The work prompt for a woken station: it must pass its id to claim_next so the server knows which
 /// session holds the task.
-pub const STATION_PROMPT: &str = "New work is ready in {project}. You are station {station}: pass station {station} to claim_next (and claim_task / ask). Call claim_next with project {project} and station {station}, finish the task, then call it again until it returns none.";
+pub const STATION_PROMPT: &str = "New work is ready in {project}. You are station {station}: pass station {station} to claim_next (and what_now / claim_task / ask). Call what_now with project {project} and station {station} first (it briefs you; after an absence a claim returns a catch_up and no task until you have), then claim_next with project {project} and station {station}, finish the task, then call it again until it returns none.";
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 pub struct Target {
@@ -1482,6 +1482,15 @@ mod tests {
 
     fn st(runtime: &str, dir: Option<&str>) -> Value {
         json!({"id": "st_abc", "runtime": runtime, "session": "sess-1", "directory": dir, "label": null})
+    }
+
+    #[test]
+    fn the_work_prompts_start_with_what_now() {
+        for p in [PROMPT, STATION_PROMPT] {
+            let first = p.find("Call what_now").expect(p);
+            assert!(first < p.find("then claim_next").expect(p), "{p}");
+            assert!(!p.contains("Call claim_next"), "{p}");
+        }
     }
 
     #[test]

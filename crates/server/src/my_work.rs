@@ -103,6 +103,14 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
         project_by_key(&mut c, p, k).await?;
     }
     let project = project.as_deref();
+    // naming a pot is being briefed on it; the unscoped board check across every pot is not
+    if p.is_agent()
+        && let Some(k) = project
+    {
+        let mut c = db.acquire().await?;
+        let id = project_by_key(&mut c, p, k).await?.id;
+        crate::what_now::brief(&mut c, p, &[id]).await?;
+    }
     let access = access_sql("$1", "$2");
     let scope = "($3::text is null or pr.key = $3)";
 

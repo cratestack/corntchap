@@ -247,6 +247,9 @@ enum TaskCmd {
         id: String,
         #[arg(long)]
         result: Option<String>,
+        /// What the next agent on similar work must know (saved to the pantry); "nothing new" when there is nothing.
+        #[arg(long, default_value = "nothing new")]
+        learned: String,
     },
     /// Put a blocked task back to open.
     Unblock { id: String },
@@ -314,6 +317,9 @@ enum TaskCmd {
         /// Nothing downstream is affected: do not tell the cooks of repositories that depend on this task's.
         #[arg(long)]
         no_propagate: bool,
+        /// REQUIRED: what the next agent on similar work must know (saved to the pantry as learned-<TASK>); "nothing new" when there is nothing.
+        #[arg(long)]
+        learned: String,
     },
     /// Agent mode: give a task back (JSON).
     Release {
@@ -322,6 +328,9 @@ enum TaskCmd {
         epoch: i64,
         #[arg(long, default_value = "")]
         reason: String,
+        /// What the next agent on similar work must know (saved to the pantry).
+        #[arg(long)]
+        learned: Option<String>,
     },
     /// Agent mode: mark a claimed task blocked (JSON).
     Block {
@@ -330,6 +339,9 @@ enum TaskCmd {
         epoch: i64,
         #[arg(long, default_value = "")]
         reason: String,
+        /// What the next agent on similar work must know (saved to the pantry).
+        #[arg(long)]
+        learned: Option<String>,
     },
     /// Comment on a task (agents pass --epoch; JSON).
     Comment {
@@ -1783,12 +1795,16 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             let v = api.get(&format!("/tasks/{id}")).await?;
             show(&v, json, ui::task_detail);
         }
-        TaskCmd::Done { id, result } => {
+        TaskCmd::Done {
+            id,
+            result,
+            learned,
+        } => {
             let c = api.post(&format!("/tasks/{id}/claim"), json!({})).await?;
             let epoch = c["lease"]["epoch"].as_i64().unwrap_or(0);
             api.post(
                 &format!("/tasks/{id}/complete"),
-                json!({"epoch": epoch, "result": result.unwrap_or_default()}),
+                json!({"epoch": epoch, "result": result.unwrap_or_default(), "learned": learned}),
             )
             .await?;
             ok_line(format!("{id} done"));
@@ -1862,10 +1878,11 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
             epoch,
             result,
             no_propagate,
+            learned,
         } => out(&api
             .post(
                 &format!("/tasks/{id}/complete"),
-                json!({"epoch": epoch, "result": result, "no_propagate": no_propagate}),
+                json!({"epoch": epoch, "result": result, "no_propagate": no_propagate, "learned": learned}),
             )
             .await?),
         TaskCmd::Split { id } => {
@@ -1884,16 +1901,26 @@ async fn task(t: TaskCmd, api: &Api) -> Result<()> {
                 ok_line(format!("{id} split: {}", subs.join(", ")));
             }
         }
-        TaskCmd::Release { id, epoch, reason } => out(&api
+        TaskCmd::Release {
+            id,
+            epoch,
+            reason,
+            learned,
+        } => out(&api
             .post(
                 &format!("/tasks/{id}/release"),
-                json!({"epoch": epoch, "reason": reason}),
+                json!({"epoch": epoch, "reason": reason, "learned": learned}),
             )
             .await?),
-        TaskCmd::Block { id, epoch, reason } => out(&api
+        TaskCmd::Block {
+            id,
+            epoch,
+            reason,
+            learned,
+        } => out(&api
             .post(
                 &format!("/tasks/{id}/block"),
-                json!({"epoch": epoch, "reason": reason}),
+                json!({"epoch": epoch, "reason": reason, "learned": learned}),
             )
             .await?),
         TaskCmd::Comment {

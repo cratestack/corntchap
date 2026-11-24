@@ -941,6 +941,7 @@ async fn task_complete(
         req_epoch(&b)?,
         &s(&b, "result").unwrap_or_default(),
         b["no_propagate"].as_bool().unwrap_or(false),
+        &s(&b, "learned").unwrap_or_default(),
     )
     .await?)
 }
@@ -956,6 +957,7 @@ async fn task_release(
         &id,
         req_epoch(&b)?,
         &s(&b, "reason").unwrap_or_default(),
+        s(&b, "learned").as_deref(),
     )
     .await?)
 }
@@ -971,6 +973,7 @@ async fn task_block(
         &id,
         req_epoch(&b)?,
         &s(&b, "reason").unwrap_or_default(),
+        s(&b, "learned").as_deref(),
     )
     .await?)
 }

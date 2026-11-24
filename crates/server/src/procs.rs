@@ -137,7 +137,9 @@ pub fn map_err(e: Error) -> CratestackError {
         Error::Forbidden(m) => CratestackError::Forbidden(m),
         Error::Invalid(m) => CratestackError::BadRequest(m),
         Error::Conflict(m) => CratestackError::Conflict(m),
-        Error::LeaseLost => CratestackError::Conflict(format!("lease_lost: {e}")),
+        Error::LeaseLost | Error::LeaseLostFor(_) => {
+            CratestackError::Conflict(format!("lease_lost: {e}"))
+        }
         Error::MaxLeases => CratestackError::Conflict(format!("max_leases: {e}")),
         Error::Unauthorized | Error::Insecure(_) => CratestackError::Unauthorized(e.to_string()),
         Error::Db(_) | Error::Internal(_) => {
@@ -145,6 +147,18 @@ pub fn map_err(e: Error) -> CratestackError {
             CratestackError::Internal("internal error".into())
         }
     }
+}
+
+/// The typed claim reply has `memories` as a required list: present, empty when there are none.
+fn claim_reply(
+    r: crate::error::Result<serde_json::Value>,
+) -> crate::error::Result<serde_json::Value> {
+    r.map(|mut v| {
+        if let Some(o) = v.as_object_mut() {
+            o.entry("memories").or_insert_with(|| serde_json::json!([]));
+        }
+        v
+    })
 }
 
 fn typed<T: serde::de::DeserializeOwned>(
@@ -311,7 +325,7 @@ impl ProcedureRegistry for Procedures {
         _z: claim_next::Authorized,
     ) -> Result<claim_next::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(
+        typed(claim_reply(
             service::claim_next(
                 &self.state.db,
                 &p,
@@ -322,7 +336,7 @@ impl ProcedureRegistry for Procedures {
                 a.ttlS.map(|t| t as f64),
             )
             .await,
-        )
+        ))
     }
 
     async fn set_lease_ttl(
@@ -344,7 +358,7 @@ impl ProcedureRegistry for Procedures {
         _z: claim_task::Authorized,
     ) -> Result<claim_task::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(
+        typed(claim_reply(
             service::claim_task(
                 &self.state.db,
                 &p,
@@ -353,7 +367,7 @@ impl ProcedureRegistry for Procedures {
                 a.ttlS.map(|t| t as f64),
             )
             .await,
-        )
+        ))
     }
 
     async fn heartbeat(
@@ -417,6 +431,7 @@ impl ProcedureRegistry for Procedures {
                 a.epoch,
                 &a.result,
                 a.noPropagate.unwrap_or(false),
+                &a.learned,
             )
             .await,
         )
@@ -430,7 +445,17 @@ impl ProcedureRegistry for Procedures {
         _z: release::Authorized,
     ) -> Result<release::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::release(&self.state.db, &p, &a.id, a.epoch, &a.reason).await)
+        typed(
+            service::release(
+                &self.state.db,
+                &p,
+                &a.id,
+                a.epoch,
+                &a.reason,
+                a.learned.as_deref(),
+            )
+            .await,
+        )
     }
 
     async fn block(
@@ -441,7 +466,17 @@ impl ProcedureRegistry for Procedures {
         _z: block::Authorized,
     ) -> Result<block::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::block(&self.state.db, &p, &a.id, a.epoch, &a.reason).await)
+        typed(
+            service::block(
+                &self.state.db,
+                &p,
+                &a.id,
+                a.epoch,
+                &a.reason,
+                a.learned.as_deref(),
+            )
+            .await,
+        )
     }
 
     async fn changes_since(

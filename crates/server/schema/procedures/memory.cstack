@@ -17,13 +17,13 @@ procedure memoryRecall(project: String, query: String?, kind: String?, tags: Str
 /// @param key The memory's key.
 procedure memoryGet(project: String, key: String): MemoryView
   @allow(auth() != null)
-  @mcp(tool: "get_memory", description: "Read one pantry memory in full by its key.")
+  @mcp(tool: "get_memory", description: "Read one pantry memory in full by its key. Reading counts as use: memories nobody reads for 90 days are listed by read_pantry as candidates to forget.")
 
 /// The whole pantry as markdown.
 /// @param project Project key, e.g. PAY.
 procedure memoryDigest(project: String): MarkdownDoc
   @allow(auth() != null)
-  @mcp(tool: "read_pantry", description: "The project's whole pantry as one markdown document, conventions and gotchas first. Read it once when you start working on a project. Returns {markdown}.")
+  @mcp(tool: "read_pantry", description: "The project's whole pantry as one markdown document, conventions and gotchas first. Read it once when you start working on a project; it ends with the memories nobody has read for 90 days (forget the obsolete ones). Returns {markdown}.")
 
 /// Save (create or update) a memory.
 /// @param project Project key, e.g. PAY.
@@ -39,7 +39,7 @@ procedure memoryDigest(project: String): MarkdownDoc
 /// @param station Your own station (st_...), so a notify also reaches your other sessions.
 mutation procedure memoryRemember(project: String, title: String?, body: String, key: String?, kind: String?, tags: String?, task: String?, append: Boolean?, revision: Int?, notify: Boolean?, station: String?): MemoryView
   @allow(auth() != null)
-  @mcp(tool: "remember", description: "Save something the next agent on this project should know into the shared pantry: a convention, a gotcha, a decision and its reason, a how-to (build, test, deploy), a fact about the system. Search with recall first and update the existing memory (same key) rather than adding a duplicate. Not for task progress (comment on the task) and never for secrets.")
+  @mcp(tool: "remember", description: "Save something the next agent on this project should know into the shared pantry: a convention, a gotcha, a decision and its reason, a how-to (build, test, deploy), a fact about the system. Search with recall first and update the existing memory (same key) rather than adding a duplicate. Not for task progress (comment on the task) and never for secrets. What you learn on a task goes in `learned` when you complete, release or block it.")
 
 /// Delete a memory.
 /// @param project Project key, e.g. PAY.

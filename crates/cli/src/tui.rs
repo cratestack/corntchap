@@ -1451,7 +1451,7 @@ fn dispatch(api: &Api, app: &App, tx: &UnboundedSender<Msg>, action: Action) {
                     let epoch = c["lease"]["epoch"].as_i64().unwrap_or(0);
                     api.post(
                         &format!("/tasks/{id}/complete"),
-                        json!({"epoch": epoch, "result": ""}),
+                        json!({"epoch": epoch, "result": "", "learned": "nothing new"}),
                     )
                     .await?;
                     anyhow::Ok(())

@@ -189,6 +189,12 @@ type TaskDetail {
 type LeaseView {
   epoch Int
   expires_at String
+  /// When the server ends the lease whatever its expiry: STALL_MINUTES (default 120) after your last
+  /// progress (a comment, a ticked item, an update, a question, a saved memory; heartbeats are not
+  /// progress), or MAX_HOLD_HOURS (default 8) after the claim, whichever comes first.
+  stalls_at String?
+  /// Under 20 minutes before stalls_at: what to do (comment or tick an item, or finish).
+  warning String?
 }
 
 /// The lease before yours, when it lapsed instead of ending.
@@ -224,9 +230,63 @@ type ClaimResult {
   open_prs String?
   /// With none: what to do about released_recently and open_prs.
   hint String?
+  /// With none: tasks you gave back 3 times with nobody touching them since (comma-separated):
+  /// claim_next skips them and claim_task refuses them until someone comments, edits or answers.
+  bounced String?
   /// What was saved or changed in the pot's pantry since you last read it: read those memories
   /// (get_memory) before you start. Absent when there is nothing new.
   pantry PantryNews?
+  /// The pantry memories most relevant to the task (at most 5): learned on it, its parent or its
+  /// dependencies, tagged like it, the pot's conventions and gotchas, or sharing words with its title.
+  memories RelevantMemory[]
+  /// You were away (30 minutes or more) and have not been briefed on this pot: no lease was
+  /// taken, this is what you missed. Read it, then claim again. This is not `none`.
+  catch_up CatchUp?
+  /// With catch_up: what to do next.
+  next String?
+}
+
+/// A pantry memory offered with a claim.
+type RelevantMemory {
+  key String
+  title String
+  kind String
+  /// The start of its body (240 characters); get_memory reads it whole.
+  excerpt String
+}
+
+type CatchUpCount {
+  kind String
+  count Int
+}
+
+/// What happened in the pot while you were away.
+type CatchUpChanges {
+  total Int
+  /// Events by kind, most frequent first.
+  counts CatchUpCount[]
+  /// The latest events, newest first: time, who, kind, task.
+  recent String[]
+}
+
+/// The briefing an agent gets on its first claim in a pot after an absence.
+type CatchUp {
+  project String
+  /// How long you were away, e.g. "2 h 5 min".
+  away_for String
+  away_since String?
+  changes CatchUpChanges
+  /// Tasks you still hold with a live lease.
+  holding NowTask[]
+  /// Blocked tasks parked for you.
+  parked NowTask[]
+  waiting_on_you NowWaiting
+  /// Pass messages you have not read (read_pass).
+  unread_pass Int
+  /// Pantry changes since you last read it.
+  pantry_news Int
+  /// The pot's conventions and gotchas (at most 5).
+  memories RelevantMemory[]
 }
 
 type PantryNewsItem {
@@ -251,6 +311,10 @@ type LeaseRenewal {
   id String
   epoch Int
   expires_at String
+  /// When the server ends the lease whatever its expiry (see LeaseView).
+  stalls_at String?
+  /// Under 20 minutes before stalls_at: what to do.
+  warning String?
 }
 
 type MarkdownDoc {

@@ -40,12 +40,14 @@ cat >"$WORK/agent.sh" <<AGENT
 export CORNTCHAP_TOKEN=$AGENT_TOKEN CORNTCHAP_SERVER=$SERVER
 cat >"$WORK/prompt.txt"
 while :; do
+  # a new agent is briefed first: what-now, then claim (a claim after an absence returns a catch-up, not a lease)
+  $CLI what-now --pot PAY >/dev/null
   R=\$($CLI task claim-next --project PAY --json)
   [ "\$(echo "\$R" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("none",False))')" = True ] && break
   ID=\$(echo "\$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["task"]["id"])')
   EP=\$(echo "\$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["lease"]["epoch"])')
   $CLI task check \$ID --epoch \$EP --item 1
-  $CLI task complete \$ID --epoch \$EP --result "done by fake agent" >/dev/null
+  $CLI task complete \$ID --epoch \$EP --result "done by fake agent" --learned "nothing new" >/dev/null
 done
 AGENT
 chmod +x "$WORK/agent.sh"
