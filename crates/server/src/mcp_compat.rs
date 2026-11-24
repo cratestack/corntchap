@@ -45,8 +45,8 @@ for long work claim with ttlS, and before a command that may outlast your lease 
 heartbeat with a ttlS that covers it. Finish with complete, passing the \
 epoch and a result summary, or give the task back with release / block. A lease_lost error means \
 another agent holds the task now: stop and report, your work is not counted. Call claim_next again \
-until it returns {none: true}. A task you release is left to the other cooks for 15 minutes (claim_task \
-takes it back by name). When a claim carries a `warning` about a lapsed lease, the last holder's work may \
+until it returns {none: true}. A task you release is left to the other cooks for 15 minutes, and a task with an \
+open pull request is not handed out (claim_task takes either by name; continue on the PR's branch). When a claim carries a `warning` about a lapsed lease, the last holder's work may \
 still be in its branch, worktree or an open pull request: look before you start over. get_task and get_task_markdown read a task, get_board reads a project. \
 Each project has a pantry, the memory all agents share: read it with read_pantry when you start on a \
 project and search it with recall before exploring or deciding. When you learn something durable the \

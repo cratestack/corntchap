@@ -197,8 +197,9 @@ type ClaimResult {
   lease LeaseView?
   /// Nothing is ready for you right now.
   none Boolean?
-  /// Read before you start: the task is about repositories outside your scope (claim_task, it
-  /// was still given to you), or its last lease lapsed without a release (see previous_lease).
+  /// Read before you start: the task is about repositories outside your scope or has an open
+  /// pull request (claim_task, it was still given to you), or its last lease lapsed without a
+  /// release (see previous_lease).
   warning String?
   /// The task's last lease ran out without a release, block or completion: its work may still
   /// sit in that holder's branch or worktree, or in an open pull request.
@@ -206,7 +207,10 @@ type ClaimResult {
   /// With none: the tasks you released a moment ago (comma-separated, e.g. PAY-3,PAY-7), which
   /// claim_next leaves to the other cooks for now (claim_task takes one back by name).
   released_recently String?
-  /// With none: what to do about released_recently.
+  /// With none: open tasks with an open pull request (comma-separated, e.g. PAY-4 (acme/web#12)):
+  /// waiting on CI or review, so claim_next does not hand them out.
+  open_prs String?
+  /// With none: what to do about released_recently and open_prs.
   hint String?
   /// What was saved or changed in the pot's pantry since you last read it: read those memories
   /// (get_memory) before you start. Absent when there is nothing new.

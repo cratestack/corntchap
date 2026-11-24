@@ -173,3 +173,95 @@ async fn released_tasks_go_to_other_cooks_and_lapses_are_named() {
         "{other}"
     );
 }
+
+#[tokio::test]
+async fn tasks_with_an_open_pull_request_are_not_handed_out() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
+    let root = tok.unwrap();
+    app.post(&root, "/teams", json!({"name": "acme"})).await;
+    app.post(
+        &root,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "Pay"}),
+    )
+    .await;
+    let (_, c) = app
+        .post(
+            &root,
+            "/agents",
+            json!({"name": "c1", "kind": "claude-code", "runtime": "local", "max_leases": 5}),
+        )
+        .await;
+    let c1 = c["token"].as_str().unwrap().to_string();
+    app.post(&root, "/teams/acme/members", json!({"principal": "c1"}))
+        .await;
+    for (t, prio) in [("has a PR", 9), ("plain", 1)] {
+        app.post(
+            &root,
+            "/projects/PAY/tasks",
+            json!({"title": t, "priority": prio}),
+        )
+        .await;
+    }
+    sqlx::query(
+        "insert into forge_prs (provider, repo, norm_url, number, url, author, head_branch, task_id)
+         select 'github', 'acme/pay', 'github.com/acme/pay', 12, 'https://github.com/acme/pay/pull/12',
+                'c1[bot]', 'pay-1-fix', id from tasks where number = 1",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+
+    // the open PR keeps PAY-1 out of claim_next and wait_for_work, though it outranks PAY-2
+    let w = ok(
+        &app.mcp(
+            &c1,
+            "wait_for_work",
+            json!({"project": "PAY", "timeoutS": 0}),
+        )
+        .await,
+        "wait_for_work",
+    );
+    assert_eq!(w["ready"].as_array().unwrap().len(), 1, "{w}");
+    assert_eq!(w["ready"][0]["id"], "PAY-2", "{w}");
+    let two = ok(
+        &app.mcp(&c1, "claim_next", json!({"project": "PAY"})).await,
+        "claim_next",
+    );
+    assert_eq!(two["task"]["id"], "PAY-2");
+    let none = ok(
+        &app.mcp(&c1, "claim_next", json!({"project": "PAY"})).await,
+        "claim_next none",
+    );
+    assert_eq!(none["none"], true, "{none}");
+    assert_eq!(none["open_prs"], "PAY-1 (acme/pay#12)", "{none}");
+    assert!(none["released_recently"].is_null(), "{none}");
+
+    // claim_task takes it, and says where the work is
+    let one = ok(
+        &app.mcp(&c1, "claim_task", json!({"id": "PAY-1"})).await,
+        "claim_task",
+    );
+    let w = one["warning"].as_str().unwrap();
+    assert!(
+        w.contains("acme/pay#12") && w.contains("pay-1-fix"),
+        "{one}"
+    );
+
+    // once the PR is closed, the task is ordinary work again
+    sqlx::query("update forge_prs set state = 'merged'")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let free: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select count(*) from tasks t where t.number = 1 and {}",
+        corntchap::service::NO_OPEN_PR_SQL
+    )))
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(free, 1);
+}

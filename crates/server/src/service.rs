@@ -24,6 +24,17 @@ pub fn release_cooldown_secs() -> u64 {
     RELEASE_COOLDOWN_SECS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// SQL predicate on `t` (tasks): no open pull request is linked to the task. A task with an open
+/// PR and no live lease is not free work: its author is waiting on CI or review, and forge events
+/// wake it. `claim_task` by name still takes it (with a warning).
+pub const NO_OPEN_PR_SQL: &str = "not exists (select 1 from forge_prs fp where fp.task_id = t.id and fp.state = 'open' and not fp.unlinked)";
+
+/// SQL predicate on `t` (tasks): what `claim_next`, `wait_for_work` and work wakes hand `agent`
+/// beyond the routing rules: not a task it released a moment ago, not one with an open PR.
+pub fn takeable_sql(agent: &str) -> String {
+    format!("{} and {NO_OPEN_PR_SQL}", cooldown_sql(agent))
+}
+
 /// SQL predicate on `t` (tasks): the task is not one `agent` released within the cooldown.
 /// Uncorrelated on the task, so it runs once per query over the recent events (`events_at`).
 pub fn cooldown_sql(agent: &str) -> String {
@@ -536,7 +547,7 @@ pub async fn claim_next(
                              where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
              and (cardinality($4::text[]) = 0 or t.labels && $4::text[])
              and ($5::text is null or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
-             and {scope} and {cooldown}
+             and {scope} and {takeable}
            order by t.priority desc, t.created_at
            for update of t skip locked limit 1)
          update tasks t set status = 'claimed', claimed_by = $2, lease_epoch = t.lease_epoch + 1,
@@ -544,7 +555,7 @@ pub async fn claim_next(
          from next where t.id = next.id
          returning t.id, t.lease_epoch, t.lease_expires_at, next.was_status, next.was_holder, next.was_expiry",
         scope = crate::repos::scope_sql("$2"),
-        cooldown = cooldown_sql("$2"),
+        takeable = takeable_sql("$2"),
     )))
     .bind(pr.id)
     .bind(p.id)
@@ -577,12 +588,16 @@ pub async fn claim_next(
     Ok(v)
 }
 
-/// `claim_next` found nothing: say so, and name the tasks it held back because this cook
-/// released them a moment ago (they are free for any other cook, and `claim_task` takes them back).
+/// `claim_next` found nothing: say so, and name the open tasks it held back: those this cook
+/// released a moment ago (free for any other cook) and those waiting on an open pull request.
+/// `claim_task` takes either by name.
 async fn held_back(c: &mut PgConnection, p: &Principal, project: Uuid) -> Result<Value> {
-    let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select pr.key || '-' || t.number from tasks t join projects pr on pr.id = t.project_id
-         where t.project_id = $1 and t.status = 'open' and not {cooldown}
+    let rows: Vec<(String, bool, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select pr.key || '-' || t.number, not {cooldown},
+                (select fp.repo || '#' || fp.number from forge_prs fp
+                  where fp.task_id = t.id and fp.state = 'open' and not fp.unlinked order by fp.updated_at desc limit 1)
+         from tasks t join projects pr on pr.id = t.project_id
+         where t.project_id = $1 and t.status = 'open' and (not {cooldown} or not {NO_OPEN_PR_SQL})
          order by t.priority desc, t.created_at",
         cooldown = cooldown_sql("$2"),
     )))
@@ -590,21 +605,45 @@ async fn held_back(c: &mut PgConnection, p: &Principal, project: Uuid) -> Result
     .bind(p.id)
     .fetch_all(&mut *c)
     .await?;
-    if ids.is_empty() {
+    let released: Vec<&str> = rows.iter().filter(|r| r.1).map(|r| r.0.as_str()).collect();
+    let on_pr: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.2.as_ref().map(|pr| format!("{} ({pr})", r.0)))
+        .collect();
+    if released.is_empty() && on_pr.is_empty() {
         return Ok(json!({"none": true}));
     }
-    let mins = release_cooldown_secs().div_ceil(60);
-    Ok(json!({
-        "none": true,
-        "released_recently": ids.join(","),
-        "hint": format!(
-            "{} {} you released in the last {mins} minutes: claim_next leaves {} to the other cooks for now. \
-             Take one back by name with claim_task if you meant to.",
-            ids.join(", "),
-            if ids.len() == 1 { "is a task" } else { "are tasks" },
-            if ids.len() == 1 { "it" } else { "them" },
-        ),
-    }))
+    let mut hint = Vec::new();
+    if !released.is_empty() {
+        let mins = release_cooldown_secs().div_ceil(60);
+        hint.push(format!(
+            "{} {} you released in the last {mins} minutes: claim_next leaves {} to the other cooks for now.",
+            released.join(", "),
+            if released.len() == 1 { "is a task" } else { "are tasks" },
+            if released.len() == 1 { "it" } else { "them" },
+        ));
+    }
+    if !on_pr.is_empty() {
+        hint.push(format!(
+            "{} {} an open pull request: {} waiting on CI or review, not free work.",
+            on_pr.join(", "),
+            if on_pr.len() == 1 { "has" } else { "have" },
+            if on_pr.len() == 1 {
+                "it is"
+            } else {
+                "they are"
+            },
+        ));
+    }
+    hint.push("Take one by name with claim_task if you mean to.".into());
+    let mut v = json!({"none": true, "hint": hint.join(" ")});
+    if !released.is_empty() {
+        v["released_recently"] = json!(released.join(","));
+    }
+    if !on_pr.is_empty() {
+        v["open_prs"] = json!(on_pr.join(","));
+    }
+    Ok(v)
 }
 
 /// A lease that ran out without a release: who held it, from which station, and when it lapsed.
@@ -789,7 +828,25 @@ pub async fn claim_task(
                 .collect()
         })
         .unwrap_or_default();
-    let warning = crate::repos::scope_warning(&mut tx, p.id, t.project_id, &task_repos).await?;
+    let mut warning = crate::repos::scope_warning(&mut tx, p.id, t.project_id, &task_repos).await?;
+    let open_pr: Option<(String, i64, String, Option<String>, String)> = sqlx::query_as(
+        "select repo, number, url, author, head_branch from forge_prs
+         where task_id = $1 and state = 'open' and not unlinked order by updated_at desc limit 1",
+    )
+    .bind(t.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((repo, n, url, author, branch)) = open_pr {
+        let pr = format!(
+            "{r} has an open pull request, {repo}#{n}{by} on branch {branch} ({url}): continue on that \
+             branch rather than starting over.",
+            by = author.map(|a| format!(" by {a}")).unwrap_or_default(),
+        );
+        warning = Some(match warning {
+            Some(w) => format!("{w} {pr}"),
+            None => pr,
+        });
+    }
     let news = crate::pantry::news(&mut tx, p.id, t.project_id).await?;
     tx.commit().await?;
     let mut v = with_news(lease_view(out, epoch, exp), news);
@@ -1305,7 +1362,7 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
          order by t.priority desc, t.created_at limit 20",
         access_sql("$2", "$3"),
         crate::repos::scope_sql("$3"),
-        cooldown_sql("$3"),
+        takeable_sql("$3"),
     );
     Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(pid)
