@@ -42,6 +42,12 @@ Wax-print band (concentric circles + zigzag, SVG, `aria-hidden`) only on sign-in
 - Sign-in / Approve device: indigo left panel (wax band, logo, headline, signed-in-as + Log out) · right: code in Space Mono 46px, details card, Approve (primary) / Deny.
 - Cooks: card with avatar letter, kind/runtime, live state, current task, MCP config, Rotate token.
 
+## Lists
+- Every list reads a `ListSource` (`lib/listbox.ts`); the per-procedure hooks are in `lib/sources.ts` (`useTeamsSource(q)`, `useLabelsSource(pot, {q, bucket})`, ...), thin wrappers over `useListQuery` (cursor paging, debounced server search). Never fetch "all" rows for a select.
+- Pickers: `VirtualCombobox` for data-driven selects (`ui/select` only for fixed enums), `VirtualMenu` for data-driven menus, `VirtualCommand` for the palette, `TagInput` v2 for tags, `MentionPopup` for `@` mentions. All are virtualized, with listbox roles and `aria-activedescendant` keyboard navigation.
+- Filters: `FilterBar` (search + facet chips) over `useUrlFilters`, so a filtered list is a link.
+- Pages: `ListPage` (title, filters, states: loading, empty, error, loading more, capped, end). Pages scroll with the window; internal scroll only inside popovers and dialogs.
+
 ## Mobile and tablet (mobile first)
 
 References (Refero): Linear iOS (grouped status lists, issue detail, display-options bottom sheet), Notion iOS (board as swipeable columns), Monday/Wrike web (list with a detail side panel on wide screens).
