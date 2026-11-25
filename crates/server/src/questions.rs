@@ -1437,7 +1437,7 @@ async fn infer_station(
     }
     // the cook's main station in the pot, else the one woken last
     Ok(sqlx::query_scalar(
-        "select id from stations where agent_id = $1 and project_id = $2
+        "select id from stations where agent_id = $1 and project_id = $2 and kind = 'session'
          order by main desc, last_woken_at desc nulls last, created_at desc limit 1",
     )
     .bind(agent)

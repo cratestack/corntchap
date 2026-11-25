@@ -8,6 +8,7 @@ import { useProcCall } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { SectionLabel } from "./bits";
+import { StationLink, shortUrl } from "./station-link";
 
 const chip = "inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-[11.5px] font-medium leading-none";
 
@@ -91,6 +92,12 @@ function PrStrip({ pr, onUnlink, busy }: { pr: PrView; onUnlink: () => void; bus
           <p className="mt-0.5 truncate font-mono text-[11.5px] text-muted-foreground">
             {pr.repo}#{pr.number}
             {pr.head_branch && <> · {pr.head_branch}</>}
+            {pr.station_url && (
+              <>
+                {" "}
+                · <StationLink label={shortUrl(pr.station_url)} url={pr.station_url} title={`Opened by cloud run ${pr.station}: ${pr.station_url}`} />
+              </>
+            )}
           </p>
         </div>
         <Button variant="ghost" size="sm" className="shrink-0 text-muted-foreground max-md:h-11" disabled={busy} onClick={onUnlink} aria-label={`Unlink ${pr.repo}#${pr.number}`}>

@@ -33,6 +33,7 @@ const MSG_JSON: &str = r#"jsonb_build_object(
   'at', m.created_at, 'woken', m.woken,
   'station', (select s.ref from stations s where s.id = m.station_id),
   'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = m.station_id),
+  'station_url', (select s.session_url from stations s where s.id = m.station_id),
   'to_station', (select s.ref from stations s where s.id = m.to_station_id),
   'to_station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = m.to_station_id))"#;
 
@@ -116,7 +117,7 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
                 "select st.id, st.agent_id, a.name, coalesce(st.label, st.directory, st.session_ref)
                  from stations st join principals a on a.id = st.agent_id
                  join team_members tm on tm.principal_id = a.id and tm.team_id = $3
-                 where st.ref = $1 and st.project_id = $2 and a.disabled_at is null",
+                 where st.ref = $1 and st.project_id = $2 and st.kind = 'session' and a.disabled_at is null",
             )
             .bind(r)
             .bind(pr.id)
@@ -227,7 +228,7 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
             sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "select a.id, a.name, st.id, st.ref from principals a
                  join team_members tm on tm.principal_id = a.id and tm.team_id = $1
-                 left join stations st on st.agent_id = a.id and st.project_id = $2
+                 left join stations st on st.agent_id = a.id and st.project_id = $2 and st.kind = 'session'
                  where a.kind = 'agent' and a.disabled_at is null and not {}
                  order by a.name, st.created_at",
                 crate::cloud::fire_and_forget_sql("a.id")

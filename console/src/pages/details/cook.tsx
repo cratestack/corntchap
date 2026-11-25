@@ -20,7 +20,7 @@ import {
   cookState,
   formSheetClass,
 } from "@/components/bits";
-import { StationList } from "@/components/stations";
+import { CloudRunList, StationList } from "@/components/stations";
 import { CookRepoScopes } from "@/components/repos";
 import { UsagePanel } from "@/components/usage";
 import { TaskRow } from "@/components/task-views";
@@ -484,7 +484,9 @@ export function CookDetailsPage() {
   const [token, setToken] = useState<{ token: string; title: string; hint?: string } | null>(null);
 
   const cook = (agents.data ?? []).find((a) => a.name.toLowerCase() === name.toLowerCase());
-  const stations = useMemo(() => stationsQ.data ?? [], [stationsQ.data]);
+  const allStations = useMemo(() => stationsQ.data ?? [], [stationsQ.data]);
+  const stations = useMemo(() => allStations.filter((s) => s.kind !== "cloud-run"), [allStations]);
+  const cloudRuns = useMemo(() => allStations.filter((s) => s.kind === "cloud-run"), [allStations]);
 
   const myTeams = useMemo(() => cook?.teams ?? [], [cook]);
   const pots = useMemo(() => (projects.data ?? []).filter((p) => p.team && myTeams.includes(p.team)), [projects.data, myTeams]);
@@ -608,11 +610,19 @@ export function CookDetailsPage() {
           </div>
 
           <div className="space-y-6">
-            <Group title="Stations" aside={<span className="font-mono text-[11px] text-muted-foreground">{stations.length}</span>}>
+            <Group title="Sessions" aside={<span className="font-mono text-[11px] text-muted-foreground">{stations.length}</span>}>
               <div className="p-3.5">
                 {stationsQ.isLoading ? <RowSkeleton rows={2} /> : <StationList stations={stations} cook={cook.name} kind={cook.agent_kind} />}
               </div>
             </Group>
+
+            {cloudRuns.length > 0 && (
+              <Group title="Cloud runs" hint="One station per run: what a run claims, comments and passes is attributed to it." aside={<span className="font-mono text-[11px] text-muted-foreground">{cloudRuns.length}</span>}>
+                <div className="p-3.5">
+                  <CloudRunList stations={cloudRuns} />
+                </div>
+              </Group>
+            )}
 
             <WakeGroup agent={cook.name} runtime={cook.runtime} />
 

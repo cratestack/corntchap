@@ -19,7 +19,9 @@ mutation procedure stationRegister(project: String, runtime: String, session: St
 /// Stations you can see.
 /// @param project Only this pot.
 /// @param cook Only this cook.
-procedure stationList(project: String?, cook: String?): StationView[]
+/// @param kind session (registered agent sessions) or cloud-run (one station per cloud run).
+/// @param live true: only sessions and cloud runs that have not ended; false: only ended cloud runs.
+procedure stationList(project: String?, cook: String?, kind: String?, live: Boolean?): StationView[]
   @allow(auth() != null)
   @mcp(tool: "list_stations", description: "Registered agent sessions (stations): yours as a cook, or those of the cooks you own, with the tasks each holds or waits on.")
 

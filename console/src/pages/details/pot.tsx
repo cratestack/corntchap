@@ -75,7 +75,7 @@ export function PotDetailsPage() {
   const project = (projects.data ?? []).find((p) => p.key === potKey);
   const team = project?.team ?? null;
   const members = useTeamChefs(team);
-  const stations = useProc("stationList", { project: potKey }, { enabled: !!project });
+  const stations = useProc("stationList", { project: potKey, kind: "session" }, { enabled: !!project });
   const usage = useProc("usageReport", { project: potKey, days: 7 }, { enabled: !!project });
   const activity = useProc("activityList", { project: potKey, limit: 20 }, { enabled: !!project, refetchMs: 15000 });
   const now = useNow();

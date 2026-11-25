@@ -55,7 +55,7 @@ export function Composer({
   const channel = withWho === POT;
   // a direct message to a cook can go to one of its sessions (stations) rather than its main one
   const toCook = !channel && chefs.find((c) => c.name === withWho)?.kind === "agent";
-  const stations = useProc("stationList", { project: potKey, cook: withWho }, { enabled: toCook });
+  const stations = useProc("stationList", { project: potKey, cook: withWho, kind: "session" }, { enabled: toCook });
   const stationList = stations.data ?? [];
   const hasOptions = channel || (toCook && stationList.length > 1);
 

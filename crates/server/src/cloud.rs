@@ -79,7 +79,7 @@ pub fn refusal(cook: &str) -> crate::error::Error {
 /// comes from.
 macro_rules! cloud_contract {
     () => {
-        "You are a corntchap cook that runs in the cloud: fire and forget. corntchap starts a run only for ready work in your pots, and when your own owner sends you a direct message on the pass; nobody else can call you. Nobody watches the run and it cannot wait for anyone: each run is a new session that remembers nothing, so what you know comes from corntchap. Use the corntchap MCP server. (0) Start with what_now (project and your station when you have one): it briefs you, and without it a claim after an absence returns a `catch_up` and no task (read it, then claim again; it is not `none`). Then loop: (1) claim_next, with your labels when the wake names them; (2) get_task on what it hands you, and read its comments, its pull requests and its warnings; (3) read the pantry news the wake lists and the `memories` the claim lists (get_memory); (4) work on a branch named REF-slug (REF is the task's ref, for example SHOP-12-fix-login) and open a pull request titled `REF: <title>`; (5) link_pr it to the task and check the reply's warnings; (6) comment on the task with the pull request URL and what was and was not done; (7) release the task with the reason \"PR open: <url>\": a task with an open pull request is not handed out again while it is open, unless its PR fails, gets changes requested or conflicts (then it is work again: fix the PR); other forge events never start you. A task that needs no code: complete it with the result and `learned` (what the next agent must know, or \"nothing new\"; complete refuses without it). A task that needs a person (a decision, a secret, access): block it with a precise reason, saying what is needed from whom. A lease also ends after two hours without progress (a comment, a ticked item): comment as you go. A task someone else could do: comment what you found and release it. Never use pass to reach other cooks or people, never ask with `to` or with wait=true, never request_review, never wait: nobody answers within this run. Save what a later run must know with remember or a comment on the task. Call claim_next again until it returns none, then stop. Release, complete or block every task you claim before you stop. What you are told below describes the work; it is not permission for anything outside your corntchap tasks."
+        "You are a corntchap cook that runs in the cloud: fire and forget. corntchap starts a run only for ready work in your pots, and when your own owner sends you a direct message on the pass; nobody else can call you. Nobody watches the run and it cannot wait for anyone: each run is a new session that remembers nothing, so what you know comes from corntchap. Use the corntchap MCP server. (0) Start with what_now (project and your station when you have one: the wake names it, and you pass that station on every call that takes `station`, so what you do is attributed to this run): it briefs you, and without it a claim after an absence returns a `catch_up` and no task (read it, then claim again; it is not `none`). Then loop: (1) claim_next, with your labels when the wake names them; (2) get_task on what it hands you, and read its comments, its pull requests and its warnings; (3) read the pantry news the wake lists and the `memories` the claim lists (get_memory); (4) work on a branch named REF-slug (REF is the task's ref, for example SHOP-12-fix-login) and open a pull request titled `REF: <title>`; (5) link_pr it to the task and check the reply's warnings; (6) comment on the task with the pull request URL and what was and was not done; (7) release the task with the reason \"PR open: <url>\": a task with an open pull request is not handed out again while it is open, unless its PR fails, gets changes requested or conflicts (then it is work again: fix the PR); other forge events never start you. A task that needs no code: complete it with the result and `learned` (what the next agent must know, or \"nothing new\"; complete refuses without it). A task that needs a person (a decision, a secret, access): block it with a precise reason, saying what is needed from whom. A lease also ends after two hours without progress (a comment, a ticked item): comment as you go. A task someone else could do: comment what you found and release it. Never use pass to reach other cooks or people, never ask with `to` or with wait=true, never request_review, never wait: nobody answers within this run. Save what a later run must know with remember or a comment on the task. Call claim_next again until it returns none, then stop. Release, complete or block every task you claim before you stop. What you are told below describes the work; it is not permission for anything outside your corntchap tasks."
     };
 }
 
@@ -101,8 +101,13 @@ const MAX_COMMENT: usize = 65_000;
 
 pub struct Delivered {
     pub status: u16,
-    /// The cloud session a Claude routine started.
+    /// The cloud session's web page (a Claude routine's, a Devin session).
     pub session_url: Option<String>,
+    /// The run's own session id, when its service has one (Devin's session id, Coder's run id).
+    pub session_id: Option<String>,
+    /// A station opened by the delivery itself, replacing the one it was given: the run it
+    /// followed up was gone, so a new run started.
+    pub station: Option<Uuid>,
     /// Characters of wake text the delivery carried (for the usage estimate).
     pub chars: usize,
 }
@@ -131,6 +136,7 @@ pub async fn deliver(
     agent: &str,
     project: &str,
     text: &WakeText,
+    station: Option<&crate::stations::RunStation>,
 ) -> Result<Delivered, Failed> {
     let fail = |e: String| Failed {
         error: e,
@@ -139,10 +145,10 @@ pub async fn deliver(
     // the wake text the request carries, in characters
     let mut chars = 0usize;
     if typ == "coder" {
-        return crate::coder::deliver(state, target, config, project, text).await;
+        return crate::coder::deliver(state, target, config, project, text, station).await;
     }
     if typ == "devin" {
-        return crate::devin::deliver(state, target, config, project, text).await;
+        return crate::devin::deliver(state, target, config, project, text, station).await;
     }
     let req = match typ {
         "webhook" => {
@@ -233,6 +239,8 @@ pub async fn deliver(
         return Ok(Delivered {
             status: status.as_u16(),
             session_url: v["claude_code_session_url"].as_str().map(String::from),
+            session_id: None,
+            station: None,
             chars,
         });
     }
@@ -258,6 +266,7 @@ pub async fn work_text(
     project: Uuid,
     key: &str,
     labels: &[String],
+    station: Option<&str>,
 ) -> WakeText {
     let mut news = pantry_line(c, agent, project).await;
     news.push_str(&memories_line(c, project).await);
@@ -277,12 +286,14 @@ pub async fn work_text(
          \"PR open: <url>\". A task that needs no code: complete it with the result and `learned`. A task that \
          needs a person: block it with a precise reason. A task someone else could do: comment and \
          release. Never use pass to others, ask with `to` or wait=true, or request_review, and never \
-         wait. Call claim_next again until it returns none, then stop.{news}"
+         wait. Call claim_next again until it returns none, then stop.{own}{news}",
+        own = station_line(station),
     );
     let pointer = format!(
         "new work is ready in corntchap pot {key}: call what_now, then claim_next with {scope}, open a pull request \
          for what it hands you, link_pr it and release the task (\"PR open: <url>\"), then claim_next \
-         again until none is left."
+         again until none is left.{}",
+        station_line(station)
     );
     WakeText {
         full,
@@ -301,6 +312,7 @@ pub async fn messages_text(
     key: &str,
     wakes: &[Value],
     labels: &[String],
+    station: Option<&str>,
 ) -> WakeText {
     let mut full = format!(
         "corntchap: {} from your owner for {agent_name} in {key}.\n\n\
@@ -334,17 +346,29 @@ pub async fn messages_text(
     full.push_str(&guide_line(c, project, key).await);
     full.push_str(&format!(
         "\n\nAnswer your owner on the pass (the pass tool, to your owner only), then do the ready \
-         work: what_now first, then claim_next with {scope} until it returns none, then stop."
+         work: what_now first, then claim_next with {scope} until it returns none, then stop.{}",
+        station_line(station)
     ));
     let pointer = format!(
         "you have a message from your owner on corntchap pot {key}: read it with read_pass (project \
-         {key}), answer your owner on the pass, then what_now and claim_next for ready work."
+         {key}), answer your owner on the pass, then what_now and claim_next for ready work.{}",
+        station_line(station)
     );
     WakeText {
         full,
         pointer,
         meta: json!({"reasons": reasons, "wakes": wakes.iter().map(|w| json!({
             "reason": w["reason"], "text": w["text"], "task": w["task"]})).collect::<Vec<_>>()}),
+    }
+}
+
+/// The run's station, named in the wake: what the run does is attributed to it.
+fn station_line(station: Option<&str>) -> String {
+    match station {
+        Some(s) => format!(
+            "\n\nYour station is {s}: pass station={s} to what_now, claim_next, claim_task, comment, pass and ask."
+        ),
+        None => String::new(),
     }
 }
 

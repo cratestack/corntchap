@@ -586,6 +586,8 @@ async fn stations_list(
         &p.worker()?,
         q.get("project").map(|x| x.as_str()),
         q.get("cook").map(|x| x.as_str()),
+        q.get("kind").map(|x| x.as_str()),
+        q.get("live").map(|x| x == "true" || x == "1"),
     )
     .await?)
 }

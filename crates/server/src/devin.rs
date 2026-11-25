@@ -34,6 +34,7 @@ use uuid::Uuid;
 use crate::{
     cloud::{Delivered, Failed, WakeText, cut},
     state::AppState,
+    stations::RunStation,
 };
 
 /// Devin's API host.
@@ -110,6 +111,7 @@ pub async fn deliver(
     config: &Value,
     project: &str,
     text: &WakeText,
+    station: Option<&RunStation>,
 ) -> Result<Delivered, Failed> {
     let base = config["url"]
         .as_str()
@@ -123,8 +125,8 @@ pub async fn deliver(
         .as_str()
         .ok_or_else(|| fail("missing organization"))?;
     let c = Client { state, base, token };
-    let wake = cut(&text.full, MAX_TEXT);
-    let first = cut(&format!("{DEVIN_PROMPT}\n\n{wake}"), MAX_TEXT);
+    let mut full = text.full.clone();
+    let wake = cut(&full, MAX_TEXT);
 
     // the session this cook already has in this pot (a test wake has no target: always a new one)
     let known: Option<(String, Option<String>)> = match target {
@@ -158,53 +160,91 @@ pub async fn deliver(
         {
             if let Some(t) = target {
                 let _ = sqlx::query(
-                    "update coder_runs set updated_at = now() where target_id = $1 and project = $2",
+                    "update coder_runs set updated_at = now(), station_id = coalesce(station_id, $3)
+                     where target_id = $1 and project = $2",
                 )
                 .bind(t)
                 .bind(project)
+                .bind(station.map(|s| s.id))
                 .execute(&state.db)
                 .await;
             }
             return Ok(Delivered {
                 status: 200,
                 session_url: v["url"].as_str().map(String::from).or_else(|| url.clone()),
+                session_id: Some(id.clone()),
+                station: None,
                 chars: wake.chars().count(),
             });
         }
-        // the session is gone: start a new one below
+        // the session is gone: start a new one below, with a station of its own
     }
+    let mut run_station = station.map(|s| s.id);
+    let mut fresh: Option<RunStation> = None;
+    if known.is_some()
+        && let Some(old) = station
+        && let Ok(mut conn) = state.db.acquire().await
+        && let Ok(new) =
+            crate::stations::new_run(&mut conn, old.agent, old.project, old.target, &old.typ).await
+    {
+        full = full.replace(&old.reference, &new.reference);
+        run_station = Some(new.id);
+        fresh = Some(new);
+    }
+    let first = cut(
+        &format!("{DEVIN_PROMPT}\n\n{}", cut(&full, MAX_TEXT)),
+        MAX_TEXT,
+    );
+    let drop_fresh = async || {
+        if let (Some(n), Ok(mut conn)) = (&fresh, state.db.acquire().await) {
+            let _ = crate::stations::drop_run(&mut conn, n.id).await;
+        }
+    };
 
     let body = json!({"prompt": first, "title": format!("corntchap {project}"),
         "tags": ["corntchap"]});
-    let Sent::Ok(v) = c
+    let created = c
         .post(&format!("/v3/organizations/{org}/sessions"), body, &[])
-        .await?
-    else {
-        return Err(fail("Devin: could not start a session"));
+        .await;
+    let v = match created {
+        Ok(Sent::Ok(v)) => v,
+        Ok(Sent::Gone) => {
+            drop_fresh().await;
+            return Err(fail("Devin: could not start a session"));
+        }
+        Err(f) => {
+            drop_fresh().await;
+            return Err(f);
+        }
     };
-    let remote = v["session_id"]
-        .as_str()
-        .ok_or_else(|| fail("Devin started a session but its answer has no session_id"))?
-        .to_string();
+    let Some(remote) = v["session_id"].as_str().map(String::from) else {
+        drop_fresh().await;
+        return Err(fail(
+            "Devin started a session but its answer has no session_id",
+        ));
+    };
     let url = v["url"].as_str().map(String::from);
     if let Some(t) = target {
         let _ = sqlx::query(
-            "insert into coder_runs (target_id, project, api, remote_id, session_url)
-             values ($1, $2, 'devin', $3, $4)
+            "insert into coder_runs (target_id, project, api, remote_id, session_url, station_id)
+             values ($1, $2, 'devin', $3, $4, $5)
              on conflict (target_id, project) do update
-               set api = 'devin', remote_id = $3, session_url = $4,
+               set api = 'devin', remote_id = $3, session_url = $4, station_id = $5,
                    created_at = now(), updated_at = now()",
         )
         .bind(t)
         .bind(project)
         .bind(&remote)
         .bind(&url)
+        .bind(run_station)
         .execute(&state.db)
         .await;
     }
     Ok(Delivered {
         status: 200,
         session_url: url,
+        session_id: Some(remote),
+        station: fresh.map(|n| n.id),
         chars: first.chars().count(),
     })
 }
