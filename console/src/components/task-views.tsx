@@ -7,6 +7,7 @@ import { useIsPhone } from "@/lib/media";
 import { MenuChip } from "./menus";
 import { PrChip } from "./forge-prs";
 import { ReviewChip } from "./reviews";
+import { VirtualList } from "./ui/virtual-list";
 import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip } from "./bits";
 
 function priorityTag(p: number) {
@@ -197,11 +198,8 @@ export function TaskGroup({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const [all, setAll] = useState(false);
   const phone = useIsPhone();
   const meta = BUCKETS.find((b) => b.id === bucket)!;
-  const cap = bucket === "done" || bucket === "cancelled" ? 8 : tasks.length;
-  const shown = all ? tasks : tasks.slice(0, cap);
   return (
     <section aria-labelledby={`g-${bucket}`}>
       <h2 id={`g-${bucket}`} className="m-0 text-base">
@@ -221,16 +219,20 @@ export function TaskGroup({
         </button>
       </h2>
       {open && (
-        <div className={cn("mt-1.5", phone ? "divide-y divide-border overflow-hidden rounded-xl border border-border bg-card" : "space-y-1.5")}>
-          {shown.map((t) => (
-            <TaskRow key={t.id} task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />
-          ))}
-          {!all && tasks.length > shown.length && (
-            <button type="button" onClick={() => setAll(true)} className="min-h-11 w-full px-3.5 py-1 text-left text-[13px] text-primary hover:underline md:min-h-0 md:w-auto md:px-2 md:text-[12.5px]">
-              Show {tasks.length - shown.length} more
-            </button>
+        <VirtualList
+          scroll="window"
+          aria-label={meta.label}
+          items={tasks}
+          itemKey={(t) => t.id}
+          defaultItemHeight={phone ? 72 : 76}
+          className={cn("mt-1.5", phone && "overflow-hidden rounded-xl border border-border bg-card")}
+          itemClassName={phone ? undefined : "pb-1.5"}
+          renderItem={(t, i) => (
+            <div className={cn(phone && i > 0 && "border-t border-border")}>
+              <TaskRow task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />
+            </div>
           )}
-        </div>
+        />
       )}
     </section>
   );

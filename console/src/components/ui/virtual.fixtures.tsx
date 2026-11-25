@@ -1,0 +1,137 @@
+// Generated data and tiny live stores for the virtual list stories; not used by the app.
+import { useMemo, useSyncExternalStore } from "react";
+import type { ChangeView, TaskView } from "@corntchap/api";
+
+export interface FixtureRow {
+  id: number;
+  title: string;
+  /** Between 1 and 4 lines, so row heights are mixed. */
+  lines: number;
+}
+
+export function makeRows(count: number, from = 0): FixtureRow[] {
+  return Array.from({ length: count }, (_, i) => ({ id: from + i + 1, title: `Row ${from + i + 1}`, lines: 1 + ((from + i) % 4) }));
+}
+
+export function RowCard({ row }: { row: FixtureRow }) {
+  return (
+    <div data-testid="row" className="border-b border-border bg-card px-4 py-3">
+      <p className="font-mono text-[12px] font-bold">{row.title}</p>
+      {Array.from({ length: row.lines }, (_, i) => (
+        <p key={i} className="text-[13px] text-muted-foreground">
+          Line {i + 1} of {row.lines}: a few words about this row so that it has some height.
+        </p>
+      ))}
+    </div>
+  );
+}
+
+const KINDS = ["task.created", "task.claimed", "item.checked", "task.commented", "task.completed", "task.released", "memory.saved"];
+const ACTORS = ["ada", "bola", "chidi", "ngozi", "kemi"];
+const NOW = Date.now();
+
+/** Oldest first, like `useLive().events`: one every 7 minutes back from now, so a 10k feed spans about 7 weeks of days. */
+export function makeEvents(count: number, from = 0): ChangeView[] {
+  return Array.from({ length: count }, (_, i) => {
+    const n = from + i;
+    return {
+      seq: n + 1,
+      kind: KINDS[n % KINDS.length]!,
+      project: "PAY",
+      task: `PAY-${(n % 480) + 1}`,
+      actor: ACTORS[n % ACTORS.length]!,
+      at: new Date(NOW - (from + count - n) * 7 * 60_000).toISOString(),
+      payload: { title: `Event ${n + 1}: ${"a longer title ".repeat(n % 3)}`.trim(), result: n % 5 === 0 ? "all green, merged and deployed" : undefined },
+    } as ChangeView;
+  });
+}
+
+const STATUSES = ["open", "claimed", "blocked", "done", "cancelled"];
+
+export function makeTasks(count: number): TaskView[] {
+  return Array.from({ length: count }, (_, i) => {
+    const status = STATUSES[i % STATUSES.length]!;
+    return {
+      id: `PAY-${i + 1}`,
+      project: "PAY",
+      number: i + 1,
+      title: `Task ${i + 1}: ${"wire the thing through the other thing ".repeat(1 + (i % 3))}`.trim(),
+      body: "",
+      priority: (i % 5) - 1,
+      labels: i % 3 === 0 ? ["backend", "payments", "urgent"] : i % 3 === 1 ? ["web"] : [],
+      repos: i % 4 === 0 ? ["acme/shop"] : [],
+      status,
+      depends_on: [],
+      claimed_by: status === "claimed" ? ACTORS[i % ACTORS.length]! : null,
+      owner: null,
+      lease_epoch: 1,
+      lease_expires_at: status === "claimed" ? new Date(NOW + 20 * 60_000).toISOString() : null,
+      lease_live: status === "claimed",
+      ready: status === "open",
+      open_items: i % 4,
+      total_items: i % 6,
+      menu: null,
+      created_at: new Date(NOW - i * 60_000).toISOString(),
+      updated_at: new Date(NOW - i * 60_000).toISOString(),
+      pr: null,
+      review: null,
+    } as TaskView;
+  });
+}
+
+/** Grows by `step` items every `ms`, until `max`; a stand-in for the live event stream. */
+export function useGrowing<T>(make: (count: number) => T[], start: number, step = 1, ms = 1000, max = 400): T[] {
+  const store = useMemo(() => {
+    let count = start;
+    let items = make(count);
+    const listeners = new Set<() => void>();
+    let timer: ReturnType<typeof setInterval> | undefined;
+    return {
+      get: () => items,
+      subscribe: (l: () => void) => {
+        listeners.add(l);
+        timer ??= setInterval(() => {
+          count = Math.min(max, count + step);
+          items = make(count);
+          listeners.forEach((f) => f());
+        }, ms);
+        return () => {
+          listeners.delete(l);
+          if (listeners.size === 0) {
+            clearInterval(timer);
+            timer = undefined;
+          }
+        };
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return useSyncExternalStore(store.subscribe, store.get);
+}
+
+/** Pages in `page` more items 600 ms after `loadMore()`, up to `total`; a stand-in for a server-paged bucket. */
+export function usePaged<T>(make: (count: number) => T[], first: number, page: number, total: number) {
+  const store = useMemo(() => {
+    let state = { items: make(first), loading: false };
+    const listeners = new Set<() => void>();
+    const set = (next: typeof state) => {
+      state = next;
+      listeners.forEach((f) => f());
+    };
+    return {
+      get: () => state,
+      subscribe: (l: () => void) => {
+        listeners.add(l);
+        return () => void listeners.delete(l);
+      },
+      loadMore: () => {
+        if (state.loading || state.items.length >= total) return;
+        set({ ...state, loading: true });
+        setTimeout(() => set({ items: make(Math.min(total, state.items.length + page)), loading: false }), 600);
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const { items, loading } = useSyncExternalStore(store.subscribe, store.get);
+  return { items, loading, done: items.length >= total, loadMore: store.loadMore };
+}
