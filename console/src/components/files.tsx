@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { useSearchParams } from "react-router";
-import type { FileRef } from "@corntchap/api";
-import { Camera, FileIcon, Loader2, Paperclip, Search, Trash2, Upload as UploadIcon, X } from "lucide-react";
+import type { FileRef, FileView } from "@corntchap/api";
+import { Camera, FileIcon, Loader2, Paperclip, Trash2, Upload as UploadIcon, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/api";
-import { useInvalidateAll, usePotFiles, useV1Call } from "@/lib/data";
+import { useInvalidateAll, useV1Call } from "@/lib/data";
+import { useFilesSource } from "@/lib/sources";
+import { useStaticSource } from "@/lib/listbox";
+import { useUrlFilters } from "@/lib/url-filters";
 import { dismissUpload, fileHref, fmtBytes, isImage, onUploadsSettled, uploadFiles, useUploads } from "@/lib/files";
-import { fmtAgo, plural, useNow } from "@/lib/format";
+import { fmtAgo, useNow } from "@/lib/format";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +21,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { EmptyState, RowSkeleton, SectionLabel } from "./bits";
+import { SectionLabel } from "./bits";
+import { FilterBar, type FacetDef, type FacetOption } from "./filter-bar";
+import { ListPage } from "./list-page";
 import { RefreshButton } from "./refresh-button";
 
 type Target = { pot: string; task?: string; question?: string };
@@ -235,7 +238,7 @@ function Thumb({ f, className }: { f: AnyFile; className?: string }) {
   );
 }
 
-function FileRow({ f, compact, onDelete, extra }: { f: AnyFile; compact?: boolean; onDelete: (f: AnyFile) => void; extra?: ReactNode }) {
+function FileRow({ f, compact, bare, onDelete, extra }: { f: AnyFile; compact?: boolean; /** A row of a list that is itself a card: no border of its own. */ bare?: boolean; onDelete: (f: AnyFile) => void; extra?: ReactNode }) {
   const linkable = f.status === "ready";
   const name = (
     <span className="block truncate text-[13px] font-medium" title={f.name}>
@@ -243,7 +246,7 @@ function FileRow({ f, compact, onDelete, extra }: { f: AnyFile; compact?: boolea
     </span>
   );
   return (
-    <li className={cn("flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-card", compact ? "px-2 py-1.5" : "px-3 py-2 pointer-coarse:min-h-16")}>
+    <div className={cn("flex min-w-0 items-center gap-2.5", !bare && "rounded-lg border border-border bg-card", compact ? "px-2 py-1.5" : "px-3 py-2 pointer-coarse:min-h-16")}>
       <Thumb f={f} className={compact ? "size-8" : "size-10 pointer-coarse:size-11"} />
       <div className="min-w-0 flex-1">
         {linkable ? (
@@ -268,7 +271,7 @@ function FileRow({ f, compact, onDelete, extra }: { f: AnyFile; compact?: boolea
       >
         <Trash2 className="size-3.5" aria-hidden="true" />
       </button>
-    </li>
+    </div>
   );
 }
 
@@ -292,7 +295,9 @@ export function Attachments({ target, files, compact = false }: { target: Target
         ) : (
           <ul className="space-y-1.5">
             {files.map((f) => (
-              <FileRow key={f.id} f={f} compact={compact} onDelete={del.ask} />
+              <li key={f.id}>
+                <FileRow f={f} compact={compact} onDelete={del.ask} />
+              </li>
             ))}
           </ul>
         )}
@@ -304,140 +309,103 @@ export function Attachments({ target, files, compact = false }: { target: Target
 
 // ---------------------------------------------------------------- the pot's files view
 
-export function FilesView({ potKey }: { potKey: string }) {
-  const [params, setParams] = useSearchParams();
-  const q = params.get("q") ?? "";
-  const [text, setText] = useState(q);
-  useEffect(() => setText(q), [q]);
-  useEffect(() => {
-    if (text === q) return;
-    const t = setTimeout(
-      () =>
-        setParams(
-          (p) => {
-            const n = new URLSearchParams(p);
-            if (text.trim()) n.set("q", text);
-            else n.delete("q");
-            return n;
-          },
-          { replace: true },
-        ),
-      250,
-    );
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text]);
 
-  const res = usePotFiles(potKey);
+/** The statuses a file's list can be narrowed to (a deleted file is not listed). */
+const FILE_STATUSES: FacetOption[] = [
+  { value: "ready", label: "Ready" },
+  { value: "uploading", label: "Uploading" },
+  { value: "failed", label: "Failed" },
+];
+const FILE_FILTERS = { status: { type: "string" } } as const;
+
+/** A pot's files, newest first: searched by name and narrowed by status on the server, a page at a time as the page scrolls. */
+export function FilesView({ potKey }: { potKey: string }) {
+  const f = useUrlFilters(FILE_FILTERS);
+  const status = f.values.status;
+  const source = useFilesSource(potKey, { q: f.q, status: status || null });
+  const statuses = useStaticSource(FILE_STATUSES);
   const del = useDeleteFile();
   const now = useNow();
-  const all = useMemo(() => res.items.filter((f) => f.status !== "deleted"), [res.items]);
-  const rows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return needle ? all.filter((f) => f.name.toLowerCase().includes(needle) || f.id.toLowerCase().includes(needle)) : all;
-  }, [all, q]);
   const input = useRef<HTMLInputElement>(null);
   const camera = useRef<HTMLInputElement>(null);
   const target = { pot: potKey };
+  const filtered = !!(f.q.trim() || status);
+  const facets = useMemo<FacetDef[]>(() => [{ id: "status", label: "Status", source: statuses, searchable: false }], [statuses]);
 
   return (
     <FileDrop target={target} label="Drop to upload to this pot" className="mx-auto max-w-3xl">
-      <div className="flex flex-wrap items-center gap-2" role="search" aria-label="Search files">
-        <div className="relative min-w-0 flex-1 basis-full sm:basis-60">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-          <Input
-            type="search"
-            aria-label="Filter files by name"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Filter by name…"
-            className="h-11 rounded-full pr-3 pl-9 text-[14px] md:h-9 md:text-[13px]"
-          />
-        </div>
-        <RefreshButton />
-        <AttachButton target={target} size="default" variant="default">
-          Upload
-        </AttachButton>
-      </div>
-
-      <button
-        type="button"
-        onClick={() => input.current?.click()}
-        className="mt-4 flex min-h-14 w-full items-center justify-center max-md:hidden gap-2 rounded-xl border-2 border-dashed border-border px-4 py-4 text-[13px] text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-      >
-        <UploadIcon className="size-4" aria-hidden="true" />
-        Drop files anywhere on this page, or click to choose
-      </button>
-      <Button type="button" variant="outline" className="mt-2 w-full md:hidden" onClick={() => camera.current?.click()}>
-        <Camera /> Take a photo
-      </Button>
-      <input
-        ref={camera}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        hidden
-        tabIndex={-1}
-        onChange={(e) => {
-          uploadFiles(Array.from(e.target.files ?? []), target);
-          e.target.value = "";
-        }}
-      />
-      <input
-        ref={input}
-        type="file"
-        multiple
-        hidden
-        tabIndex={-1}
-        onChange={(e) => {
-          uploadFiles(Array.from(e.target.files ?? []), target);
-          e.target.value = "";
-        }}
-      />
-
-      <div className="mt-5">
-        {res.isLoading ? (
-          <RowSkeleton rows={4} />
-        ) : res.error && res.items.length === 0 ? (
-          <EmptyState band={false} title="The files would not load">
-            {errorMessage(res.error)}
-          </EmptyState>
-        ) : all.length === 0 ? (
-          <EmptyState title="No files in this pot yet">Upload screenshots, logs or build output. Cooks can attach files too.</EmptyState>
-        ) : rows.length === 0 ? (
-          <EmptyState band={false} title="No file by that name">
-            {plural(all.length, "file")} loaded, none matching “{q}”.
-            {res.hasNextPage && " Older files are not loaded yet."}
-          </EmptyState>
-        ) : (
-          <ul className="space-y-1.5">
-            {rows.map((f) => (
-              <FileRow
-                key={f.id}
-                f={f}
-                onDelete={del.ask}
-                extra={
-                  <>
-                    {f.task && ` · ${f.task}`}
-                    {f.question && ` · ${f.question}`}
-                    {f.created_by && ` · ${f.created_by}`}
-                    {` · ${fmtAgo(f.created_at, now)}`}
-                    {f.status === "failed" && f.error && ` · ${f.error}`}
-                  </>
-                }
-              />
-            ))}
-          </ul>
-        )}
-        {res.hasNextPage && (
-          <div className="mt-3 flex justify-center">
-            <Button type="button" variant="outline" disabled={res.isFetchingNextPage} onClick={() => void res.fetchNextPage()}>
-              {res.isFetchingNextPage && <Loader2 className="animate-spin" />}
-              Load older files{res.total ? ` (${all.length} of ${res.total})` : ""}
+      <ListPage<FileView>
+        embedded
+        title="Files"
+        count={source.total}
+        source={source}
+        itemKey={(file) => file.id}
+        scroll="window"
+        actions={
+          <>
+            <RefreshButton />
+            <AttachButton target={target} size="default" variant="default">
+              Upload
+            </AttachButton>
+          </>
+        }
+        filters={
+          <>
+            <FilterBar q={f.q} onQ={f.setQ} facets={facets} values={{ status }} onChange={(p) => f.set(p as never)} onClear={f.clear} searchPlaceholder="Filter by name" />
+            <button
+              type="button"
+              onClick={() => input.current?.click()}
+              className="mt-4 flex min-h-14 w-full items-center justify-center max-md:hidden gap-2 rounded-xl border-2 border-dashed border-border px-4 py-4 text-[13px] text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
+            >
+              <UploadIcon className="size-4" aria-hidden="true" />
+              Drop files anywhere on this page, or click to choose
+            </button>
+            <Button type="button" variant="outline" className="mt-2 w-full md:hidden" onClick={() => camera.current?.click()}>
+              <Camera /> Take a photo
             </Button>
-          </div>
+            <input
+              ref={camera}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              hidden
+              tabIndex={-1}
+              onChange={(e) => {
+                uploadFiles(Array.from(e.target.files ?? []), target);
+                e.target.value = "";
+              }}
+            />
+            <input
+              ref={input}
+              type="file"
+              multiple
+              hidden
+              tabIndex={-1}
+              onChange={(e) => {
+                uploadFiles(Array.from(e.target.files ?? []), target);
+                e.target.value = "";
+              }}
+            />
+          </>
+        }
+        empty={filtered ? "No file matches those filters." : "No files in this pot yet. Upload screenshots, logs or build output. Cooks can attach files too."}
+        renderItem={(file) => (
+          <FileRow
+            f={file}
+            bare
+            onDelete={del.ask}
+            extra={
+              <>
+                {file.task && ` · ${file.task}`}
+                {file.question && ` · ${file.question}`}
+                {file.created_by && ` · ${file.created_by}`}
+                {` · ${fmtAgo(file.created_at, now)}`}
+                {file.status === "failed" && file.error && ` · ${file.error}`}
+              </>
+            }
+          />
         )}
-      </div>
+      />
       {del.dialog}
     </FileDrop>
   );

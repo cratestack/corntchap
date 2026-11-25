@@ -26,13 +26,15 @@ export interface ListPageProps<T> {
   /** Shown instead of the default message when the first page failed. */
   error?: ReactNode;
   className?: string | undefined;
+  /** Inside a page that has its own header (a pot's tabs): no page padding, and the title is read, not seen. */
+  embedded?: boolean | undefined;
 }
 
 /**
  * A list page: header (title, count, actions), filters, and a virtualized list or table that pages as the page is
  * scrolled, with its loading, empty, error, loading-more and end states.
  */
-export function ListPage<T>({ title, count, actions, filters, source, itemKey, renderItem, columns, scroll = "window", empty, error, className }: ListPageProps<T>) {
+export function ListPage<T>({ title, count, actions, filters, source, itemKey, renderItem, columns, scroll = "window", empty, error, className, embedded = false }: ListPageProps<T>) {
   const { items } = source;
   const shownCount = count === undefined ? source.total : count;
   const loadMore = () => {
@@ -75,17 +77,18 @@ export function ListPage<T>({ title, count, actions, filters, source, itemKey, r
     );
   }
 
+  const Heading = embedded ? "h2" : "h1";
   return (
-    <div className={cn("px-4 pt-4 pb-10 md:px-5 md:pt-6 md:pb-16 lg:px-8", scroll === "own" && "flex h-full min-h-0 flex-col", className)}>
+    <div className={cn(!embedded && "px-4 pt-4 pb-10 md:px-5 md:pt-6 md:pb-16 lg:px-8", scroll === "own" && "flex h-full min-h-0 flex-col", className)}>
       <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <h1 className="min-w-0 flex-1 basis-40 text-[26px] leading-[1.1] sm:text-[34px]">
+        <Heading className={cn("min-w-0 flex-1 basis-40", embedded ? "sr-only" : "text-[26px] leading-[1.1] sm:text-[34px]")}>
           {title}
           {shownCount != null && <span className="ml-3 align-middle font-mono text-[13px] font-normal text-muted-foreground">{typeof shownCount === "number" ? shownCount.toLocaleString() : shownCount}</span>}
-        </h1>
-        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+        </Heading>
+        {actions && <div className={cn("flex shrink-0 flex-wrap items-center gap-2", embedded && "ml-auto")}>{actions}</div>}
       </header>
       {filters && <div className="mt-4">{filters}</div>}
-      <div className={cn("mt-5", scroll === "own" && "min-h-0 flex-1")}>{body}</div>
+      <div className={cn(embedded ? "mt-4" : "mt-5", scroll === "own" && "min-h-0 flex-1")}>{body}</div>
     </div>
   );
 }

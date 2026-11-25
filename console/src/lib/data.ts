@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { keepPreviousData, useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
-import type { CorntchapApiClient, FileView, ProjectSummary, TaskView, ViewOut } from "@corntchap/api";
+import type { CorntchapApiClient, ProjectSummary, TaskView } from "@corntchap/api";
 import { client, v1 } from "./api";
 import { invalidateData, usePagedQuery } from "./paging";
 
@@ -80,8 +80,6 @@ function useModel<T>(key: unknown[], fn: () => Promise<T>, enabled = true) {
   return { data: q.data, isLoading: q.isLoading, error: q.error as unknown, refetch: q.refetch };
 }
 
-const num = (v: bigint | number | null | undefined) => (v === null || v === undefined ? null : Number(v));
-
 /** A team's chefs (people and cooks) with their role, from the TeamMember model. */
 export function useTeamChefs(team: string | null | undefined, opts: { enabled?: boolean } = {}) {
   return useModel(
@@ -94,71 +92,6 @@ export function useTeamChefs(team: string | null | undefined, opts: { enabled?: 
         .sort((a, b) => a.name.localeCompare(b.name));
     },
     !!team && (opts.enabled ?? true),
-  );
-}
-
-/** Files per page of a pot's file list. */
-const FILES_PAGE = 50;
-
-/** A pot's files (newest first, a page at a time), from the File model's keyset-paged list. */
-export function usePotFiles(pot: string) {
-  return usePagedQuery(
-    ["files", pot],
-    async (limit, cursor): Promise<{ items: FileView[]; total: number | null; nextCursor: string | null }> => {
-      const page = await client.files.list({
-        query: {
-          filters: { "project.key": pot },
-          include: ["project", "task", "question", "creator"],
-          sort: ["-createdAt", "-id"],
-          limit,
-          cursor: cursor ?? "",
-        },
-      });
-      const items = page.items.map((f): FileView => {
-        const key = f.project?.key ?? pot;
-        const id = `${key}-F${num(f.number)}`;
-        return {
-          id,
-          project: key,
-          name: f.name ?? "",
-          content_type: f.contentType ?? "application/octet-stream",
-          size: num(f.size),
-          size_expected: num(f.sizeExpected),
-          status: f.status ?? "uploading",
-          url: `/files/${id}/${encodeURIComponent(f.name ?? "")}`,
-          task: f.task ? `${key}-${num(f.task.number)}` : null,
-          question: f.question ? `${key}-Q${num(f.question.number)}` : null,
-          created_by: f.creator?.name ?? null,
-          created_at: f.createdAt ?? "",
-          ready_at: f.readyAt ?? null,
-          error: f.error ?? null,
-        };
-      });
-      return { items, total: page.totalCount, nextCursor: page.pageInfo.nextCursor ?? null };
-    },
-    { getCursor: (p) => p.nextCursor, pageSize: FILES_PAGE, maxLimit: 1000 },
-  );
-}
-
-/** A pot's saved views in tab order, from the PotView model. */
-export function usePotViews(pot: string, opts: { enabled?: boolean } = {}) {
-  return useModel(
-    ["views", pot],
-    async (): Promise<ViewOut[]> => {
-      const rows = await client.potViews.list({ query: { filters: { "project.key": pot }, include: ["creator"], sort: ["position"] } });
-      return rows.map((v) => ({
-        key: v.key ?? "",
-        name: v.name ?? "",
-        description: v.description ?? null,
-        layout: v.layout ?? "list",
-        where: v.whereSql ?? "true",
-        order: v.orderSql ?? null,
-        position: num(v.position) ?? 0,
-        created_by: v.creator?.name ?? null,
-        updated_at: v.updatedAt ?? "",
-      }));
-    },
-    opts.enabled ?? true,
   );
 }
 
@@ -179,20 +112,34 @@ export function useProjects() {
   return useProc("projectOverview", {});
 }
 
-/** Live (claimed) tasks across every pot: who is cooking what. */
+/** Rows per request when reading a pot's claimed tasks (the server's most). */
+const CLAIMED_PAGE = 200;
+
+/**
+ * Live (claimed) tasks across every pot: who is cooking what. Each pot's claimed tasks are read through `taskPage`
+ * (`status` claimed), page after page to the end: a cook holds a few leases, so what is claimed stays small however
+ * long the pot's lists are.
+ */
 export function useClaimedTasks(projects: ProjectSummary[] | undefined) {
   const dp = useDataProvider();
   const results = useQueries({
     queries: (projects ?? []).map((p) => ({
       queryKey: ["data", "claimed", p.key],
       queryFn: async () => {
-        const res = await dp().custom!({
-          url: "",
-          method: "get",
-          meta: { procedure: "projectTasks" },
-          payload: { project: p.key, status: "claimed" },
-        });
-        return (res as { data: TaskView[] }).data;
+        const tasks: TaskView[] = [];
+        let cursor: string | null = null;
+        do {
+          const res: { data: unknown } = await dp().custom!({
+            url: "",
+            method: "get",
+            meta: { procedure: "taskPage" },
+            payload: { project: p.key, status: "claimed", page: { limit: CLAIMED_PAGE, cursor } },
+          });
+          const page = res.data as { items: TaskView[]; nextCursor?: string | null };
+          tasks.push(...page.items);
+          cursor = page.nextCursor ?? null;
+        } while (cursor);
+        return tasks;
       },
       staleTime: 1500,
     })),

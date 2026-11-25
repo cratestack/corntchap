@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { GitBranch, CloudDownload, Link2, Loader2, Plus, Trash2, Unlink } from "lucide-react";
 import { toast } from "sonner";
 import type { ProjectSummary, RepoView } from "@corntchap/api";
@@ -8,54 +8,128 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { errorMessage } from "@/lib/api";
-import { useProcCall } from "@/lib/data";
 import { cn } from "@/lib/utils";
+import { useProcCall } from "@/lib/data";
+import { useReposSource } from "@/lib/sources";
+import { useStoreValue } from "@/lib/use-store-value";
 import { Group, GroupRow, RepoChip } from "./bits";
 import { AddFromGithubDialog } from "./forge-repos";
+import { FilterBar } from "./filter-bar";
+import { listFooter, loadMore } from "./list-footer";
+import { VirtualCombobox } from "./ui/virtual-combobox";
+import { VirtualList } from "./ui/virtual-list";
 
-/** Toggle chips for choosing some of a pot's repositories (a task's, or a cook's scope). Renders nothing for a pot with none. */
-export function RepoPicker({
-  repos,
-  value,
-  onChange,
-  label,
+const repoKey = (r: RepoView) => r.name;
+const repoText = (r: RepoView) => r.name;
+const repoRow = (r: RepoView) => (
+  <span className="flex min-w-0 items-center gap-2" title={r.url}>
+    <GitBranch className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
+    <span className="truncate font-mono text-[12.5px]">{r.name}</span>
+  </span>
+);
+
+/**
+ * A pot's repositories as a searchable, paged picker: one repository (`value` a name or null) or several. For a task's
+ * repositories, a cook's scope, or the repository a dependency points at. Pass `skip` to leave one out.
+ */
+export function RepoPicker(
+  props: { pot: string; label: string; id?: string | undefined; skip?: string | undefined; placeholder?: string | undefined; disabled?: boolean | undefined } & (
+    | { multiple: true; value: string[]; onChange: (v: string[]) => void }
+    | { multiple?: false; value: string | null; onChange: (v: string | null) => void }
+  ),
+) {
+  const { pot, label, id, skip, placeholder, disabled } = props;
+  const q = useStoreValue("");
+  const source = useReposSource(pot, q.value);
+  const rows = useMemo(() => (skip ? { ...source, items: source.items.filter((r) => r.name !== skip) } : source), [source, skip]);
+  const common = { source: rows, onQuery: q.set, itemKey: repoKey, itemText: repoText, renderItem: repoRow, label, id, placeholder, disabled };
+  return props.multiple ? (
+    <VirtualCombobox<RepoView> {...common} multiple value={props.value} onChange={props.onChange} />
+  ) : (
+    <VirtualCombobox<RepoView> {...common} value={props.value} onChange={props.onChange} />
+  );
+}
+
+/** One repository of the list: its url and branch, what it depends on, and (for managers) the link and remove buttons. */
+function RepoRow({
+  repo: r,
+  canManage,
+  hasOthers,
+  onLink,
+  onRemove,
+  onUnlink,
 }: {
-  repos: RepoView[];
-  value: string[];
-  onChange: (v: string[]) => void;
-  label: string;
+  repo: RepoView;
+  canManage: boolean;
+  hasOthers: boolean;
+  onLink: () => void;
+  onRemove: () => void;
+  onUnlink: (on: string) => void;
 }) {
-  if (repos.length === 0) return null;
-  const toggle = (name: string) => onChange(value.includes(name) ? value.filter((v) => v !== name) : [...value, name]);
   return (
-    <div role="group" aria-label={label} className="flex flex-wrap gap-1.5">
-      {repos.map((r) => {
-        const on = value.includes(r.name);
-        return (
-          <button
-            key={r.name}
-            type="button"
-            aria-pressed={on}
-            onClick={() => toggle(r.name)}
-            title={r.url}
-            className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-3 font-mono text-[12px] font-medium transition-colors pointer-coarse:h-11 pointer-coarse:px-4",
-              on ? "border-primary bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted/60",
+    <div className="px-4 py-3">
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] font-medium leading-tight">
+            <span className="font-mono font-bold">{r.name}</span>
+            {r.default_branch && (
+              <span className="inline-flex items-center gap-1 font-mono text-[11.5px] font-normal text-muted-foreground">
+                <GitBranch className="size-3" aria-hidden="true" /> {r.default_branch}
+              </span>
             )}
-          >
-            <GitBranch className="size-3.5 text-primary" aria-hidden="true" /> {r.name}
-          </button>
-        );
-      })}
+          </p>
+          <p className="mt-0.5 truncate font-mono text-[12px] text-muted-foreground" title={r.url}>
+            {r.url.replace(/^https?:\/\//, "")}
+          </p>
+          {r.depends_on.length > 0 && (
+            <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
+              depends on
+              {r.depends_on.map((d) => (
+                <span key={d.name} className="inline-flex items-center gap-1">
+                  <RepoChip>
+                    {d.name}
+                    <span className="font-sans font-normal text-muted-foreground"> · {d.mode === "task" ? "follow-up task" : "tell cooks"}</span>
+                  </RepoChip>
+                  {canManage && (
+                    <button
+                      type="button"
+                      aria-label={`${r.name} no longer depends on ${d.name}`}
+                      onClick={() => onUnlink(d.name)}
+                      className="grid size-6 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground pointer-coarse:size-9"
+                    >
+                      <Unlink className="size-3.5" />
+                    </button>
+                  )}
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
+        {canManage && (
+          <div className="flex shrink-0 items-center">
+            {hasOthers && (
+              <Button size="icon-sm" variant="ghost" aria-label={`${r.name} depends on…`} title="Depends on…" onClick={onLink}>
+                <Link2 />
+              </Button>
+            )}
+            <Button size="icon-sm" variant="ghost" aria-label={`Remove ${r.name}`} onClick={onRemove}>
+              <Trash2 />
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-/** The repositories of a pot, with what each depends on. Owners and admins add, remove and link. */
+/** The repositories of a pot, with what each depends on: searchable and paged. Owners and admins add, remove and link. */
 export function PotRepos({ project, canManage }: { project: ProjectSummary; canManage: boolean }) {
   const call = useProcCall();
   const [dlg, setDlg] = useState<{ kind: "add" } | { kind: "github" } | { kind: "link"; repo: RepoView } | { kind: "remove"; repo: RepoView } | null>(null);
-  const repos = project.repos;
+  const q = useStoreValue("");
+  const source = useReposSource(project.key, q.value);
+  const repos = source.items;
+  const none = repos.length === 0 && !source.isLoading && !source.pending && !q.value.trim();
 
   async function unlink(repo: string, on: string) {
     try {
@@ -71,7 +145,7 @@ export function PotRepos({ project, canManage }: { project: ProjectSummary; canM
       <Group
         title="Repositories"
         hint={
-          repos.length === 0
+          none
             ? "None yet: the pot works without. Add them so tasks can say which repository they are about, and cooks can handle some of them."
             : "Tasks name them in repos; a cook can handle some of them. A repository can depend on another: serving a task in the upstream tells the dependent's cooks."
         }
@@ -88,61 +162,37 @@ export function PotRepos({ project, canManage }: { project: ProjectSummary; canM
           ) : undefined
         }
       >
-        {repos.length === 0 && <GroupRow label="No repository" hint={canManage ? "Add the first one with the button above." : "A team owner can add them."} />}
-        {repos.map((r) => (
-          <div key={r.name} className="px-4 py-3">
-            <div className="flex min-w-0 items-start gap-2">
-              <div className="min-w-0 flex-1">
-                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] font-medium leading-tight">
-                  <span className="font-mono font-bold">{r.name}</span>
-                  {r.default_branch && (
-                    <span className="inline-flex items-center gap-1 font-mono text-[11.5px] font-normal text-muted-foreground">
-                      <GitBranch className="size-3" aria-hidden="true" /> {r.default_branch}
-                    </span>
-                  )}
-                </p>
-                <p className="mt-0.5 truncate font-mono text-[12px] text-muted-foreground" title={r.url}>
-                  {r.url.replace(/^https?:\/\//, "")}
-                </p>
-                {r.depends_on.length > 0 && (
-                  <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
-                    depends on
-                    {r.depends_on.map((d) => (
-                      <span key={d.name} className="inline-flex items-center gap-1">
-                        <RepoChip>
-                          {d.name}
-                          <span className="font-sans font-normal text-muted-foreground"> · {d.mode === "task" ? "follow-up task" : "tell cooks"}</span>
-                        </RepoChip>
-                        {canManage && (
-                          <button
-                            type="button"
-                            aria-label={`${r.name} no longer depends on ${d.name}`}
-                            onClick={() => void unlink(r.name, d.name)}
-                            className="grid size-6 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground pointer-coarse:size-9"
-                          >
-                            <Unlink className="size-3.5" />
-                          </button>
-                        )}
-                      </span>
-                    ))}
-                  </p>
-                )}
-              </div>
-              {canManage && (
-                <div className="flex shrink-0 items-center">
-                  {repos.length > 1 && (
-                    <Button size="icon-sm" variant="ghost" aria-label={`${r.name} depends on…`} title="Depends on…" onClick={() => setDlg({ kind: "link", repo: r })}>
-                      <Link2 />
-                    </Button>
-                  )}
-                  <Button size="icon-sm" variant="ghost" aria-label={`Remove ${r.name}`} onClick={() => setDlg({ kind: "remove", repo: r })}>
-                    <Trash2 />
-                  </Button>
-                </div>
-              )}
-            </div>
+        {(!none || project.repos.length > 0) && (
+          <div className="p-3">
+            <FilterBar q={q.value} onQ={q.set} facets={[]} values={{}} onChange={() => {}} onClear={() => q.set("")} searchPlaceholder="Search repositories" />
           </div>
-        ))}
+        )}
+        {source.isLoading && repos.length === 0 && <GroupRow label="Loading repositories" />}
+        {!!source.error && repos.length === 0 && <GroupRow label="The repositories would not load" hint={errorMessage(source.error)} />}
+        {none && !source.error && <GroupRow label="No repository" hint={canManage ? "Add the first one with the button above." : "A team owner can add them."} />}
+        {!none && !source.isLoading && !source.pending && repos.length === 0 && !source.error && <GroupRow label="No repository matches that" />}
+        {repos.length > 0 && (
+          <VirtualList<RepoView>
+            items={repos}
+            itemKey={repoKey}
+            scroll="window"
+            aria-label="Repositories"
+            onEndReached={loadMore(source)}
+            footer={listFooter(source)}
+            itemClassName="border-b border-border last:border-b-0"
+            defaultItemHeight={72}
+            renderItem={(r) => (
+              <RepoRow
+                repo={r}
+                canManage={canManage}
+                hasOthers={project.repos.length > 1}
+                onLink={() => setDlg({ kind: "link", repo: r })}
+                onRemove={() => setDlg({ kind: "remove", repo: r })}
+                onUnlink={(on) => void unlink(r.name, on)}
+              />
+            )}
+          />
+        )}
       </Group>
       <AddFromGithubDialog project={project.key} open={dlg?.kind === "github"} onOpenChange={(o) => !o && setDlg(null)} />
       <AddRepoDialog project={project.key} open={dlg?.kind === "add"} onOpenChange={(o) => !o && setDlg(null)} />
@@ -213,12 +263,12 @@ function AddRepoDialog({ project, open, onOpenChange }: { project: string; open:
 
 function LinkDialog({ project, repo, onOpenChange }: { project: ProjectSummary; repo: RepoView; onOpenChange: (o: boolean) => void }) {
   const call = useProcCall();
-  const others = project.repos.filter((r) => r.name !== repo.name);
-  const [on, setOn] = useState(others.find((o) => !repo.depends_on.some((d) => d.name === o.name))?.name ?? others[0]?.name ?? "");
+  const [on, setOn] = useState<string | null>(null);
   const [mode, setMode] = useState("notify");
   const [busy, setBusy] = useState(false);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!on) return;
     setBusy(true);
     try {
       await call("repoLink", { project: project.key, repo: repo.name, on, mode });
@@ -240,18 +290,7 @@ function LinkDialog({ project, repo, onOpenChange }: { project: ProjectSummary; 
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="link-on">Repository</Label>
-            <Select value={on} onValueChange={setOn}>
-              <SelectTrigger id="link-on" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {others.map((o) => (
-                  <SelectItem key={o.name} value={o.name}>
-                    <span className="font-mono">{o.name}</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <RepoPicker id="link-on" pot={project.key} skip={repo.name} label="Repository" placeholder="Choose a repository" value={on} onChange={setOn} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="link-mode">Then</Label>
@@ -416,7 +455,7 @@ function ScopeDialog({ cook, pot, initial, onOpenChange }: { cook: string; pot: 
               </button>
             ))}
           </div>
-          {!all && <RepoPicker repos={pot.repos} value={pick} onChange={setPick} label={`Repositories ${cook} handles`} />}
+          {!all && <RepoPicker multiple pot={pot.key} value={pick} onChange={setPick} label={`Repositories ${cook} handles`} />}
         </div>
         <DialogFooter className="flex-row justify-end gap-2">
           <Button variant="ghost" onClick={() => onOpenChange(false)} className="max-sm:flex-1">

@@ -3,7 +3,8 @@ import type { TaskView, ViewOut } from "@corntchap/api";
 import { ChevronRight, Loader2, Play } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { usePotViews, useProcCall } from "@/lib/data";
+import { useProcCall } from "@/lib/data";
+import { useListQuery } from "@/lib/list-query";
 import { client, errorMessage } from "@/lib/api";
 import { plural } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -26,11 +27,20 @@ export type ViewLayout = "list" | "board";
 
 export const layoutOf = (v: ViewOut): ViewLayout => (v.layout === "list" ? "list" : "board");
 
-/** A pot's saved views, in `position` order. */
-export function useViews(potKey: string, enabled: boolean) {
-  const q = usePotViews(potKey, { enabled });
-  const views = [...(q.data ?? [])].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
-  return { views, isLoading: q.isLoading, error: q.error };
+/**
+ * One saved view of a pot by its key: the paged read narrowed by the key (it matches key and name), and the row that
+ * is exactly it, pulling further pages while it is not among them. `view` is undefined while that runs and for a key
+ * that is not a view of the pot.
+ */
+export function useSavedView(potKey: string, viewKey: string | undefined, enabled: boolean) {
+  const on = enabled && !!viewKey;
+  const source = useListQuery("savedViewPage", { project: potKey }, { q: viewKey ?? "", enabled: on });
+  const view = on ? source.items.find((v) => v.key === viewKey) : undefined;
+  const { hasNextPage, isFetchingNextPage, pending, fetchNextPage } = source;
+  useEffect(() => {
+    if (on && !view && hasNextPage && !isFetchingNextPage && !pending) fetchNextPage();
+  }, [on, view, hasNextPage, isFetchingNextPage, pending, fetchNextPage]);
+  return { view, isLoading: on && !view && (source.isLoading || !!hasNextPage || !!pending) };
 }
 
 const COLUMNS: [string, string][] = [
