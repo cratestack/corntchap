@@ -3,7 +3,7 @@ import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { keepPreviousData, useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
 import type { CorntchapApiClient, ProjectSummary, TaskView } from "@corntchap/api";
 import { client, v1 } from "./api";
-import { invalidateData, usePagedQuery } from "./paging";
+import { invalidateData } from "./paging";
 
 type Procs = CorntchapApiClient["procedures"];
 export type ProcName = keyof Procs;
