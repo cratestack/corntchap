@@ -84,6 +84,7 @@ async fn the_server_becomes_an_actor_and_its_history_follows() {
     for (body, author) in [
         ("[released by the server] no progress for 2h", false),
         ("[blocked by the server] bounced 5x", false),
+        ("Upstream change passed on (shop: told c1).", false),
         ("a note from a deleted cook", false),
         ("a persons note", true),
     ] {
@@ -200,7 +201,8 @@ async fn the_server_becomes_an_actor_and_its_history_follows() {
     for (body, author) in &notes {
         match body.as_str() {
             b if b.starts_with("[released by the server]")
-                || b.starts_with("[blocked by the server]") =>
+                || b.starts_with("[blocked by the server]")
+                || b.starts_with("Upstream change passed on (") =>
             {
                 assert_eq!(author.as_deref(), Some(RESTAURANT), "{body}")
             }

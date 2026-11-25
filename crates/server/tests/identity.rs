@@ -1056,6 +1056,22 @@ async fn nobody_can_sign_in_as_the_restaurant() {
         .unwrap_err()
         .to_string();
     assert!(e.contains("restaurant is the server itself"), "{e}");
+    // its own row: who it is never changes, and it is never deleted
+    for sql in [
+        "update principals set disabled_at = null where id = $1::uuid",
+        "update principals set kind = 'agent' where id = $1::uuid",
+        "update principals set role = 'super_admin' where id = $1::uuid",
+        "update principals set oidc_sub = 'x' where id = $1::uuid",
+        "delete from principals where id = $1::uuid",
+    ] {
+        let e = sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+            .bind(RESTAURANT_ID)
+            .execute(db)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("restaurant is the server itself"), "{sql}: {e}");
+    }
 }
 
 #[tokio::test]

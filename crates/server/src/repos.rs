@@ -785,11 +785,13 @@ pub async fn pass_on(
         })
         .collect();
     if let Some(task) = task {
-        sqlx::query("insert into comments (task_id, author_id, body) values ($1, null, $2)")
-            .bind(task)
-            .bind(format!("Upstream change passed on ({}).", line.join("; ")))
-            .execute(&mut *c)
-            .await?;
+        // the server's own note: its author is the restaurant
+        service::system_comment(
+            c,
+            task,
+            &format!("Upstream change passed on ({}).", line.join("; ")),
+        )
+        .await?;
     }
     service::emit(
         c,

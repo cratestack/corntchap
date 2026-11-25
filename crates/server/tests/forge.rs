@@ -1192,6 +1192,15 @@ async fn a_merge_that_completes_a_task_propagates_its_repos_once() {
         titles[0]
     );
     assert_eq!(w.events("task.propagated").await, 1);
+    // the note on the upstream task is the server's: the restaurant wrote it
+    let authors: Vec<Option<String>> = sqlx::query_scalar(
+        "select (select kind from principals where id = c.author_id) from comments c
+          where c.body like 'Upstream change passed on (%'",
+    )
+    .fetch_all(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(authors, [Some("restaurant".to_string())]);
 }
 
 // ---------- cloud ----------

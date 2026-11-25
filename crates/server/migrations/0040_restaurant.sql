@@ -60,13 +60,32 @@ create trigger stations_no_restaurant before insert or update on stations
 create trigger handle_claims_no_restaurant before insert or update on handle_claims
   for each row execute function forbid_restaurant('principal_id');
 
+-- The row itself: who it is never changes and it is never deleted (bookkeeping columns may move).
+create function keep_restaurant() returns trigger language plpgsql as $$
+begin
+  if old.id = '00000000-0000-4000-8000-524553545552' and (tg_op = 'DELETE'
+     or new.id <> old.id or new.kind <> old.kind or new.name <> old.name or new.role <> old.role
+     or new.disabled_at is distinct from old.disabled_at or new.oidc_sub is distinct from old.oidc_sub
+     or new.owner_id is distinct from old.owner_id) then
+    raise exception 'the restaurant is the server itself: its row cannot change'
+      using errcode = 'check_violation';
+  end if;
+  return coalesce(new, old);
+end $$;
+create trigger principals_keep_restaurant before update or delete on principals
+  for each row execute function keep_restaurant();
+
+-- What a cook claimed since a decision (restaurant.rs `holding_line`).
+create index events_claimed_by_actor on events (actor_id, seq) where kind = 'task.claimed';
+
 -- History: what the server decided on its own was recorded without an actor (forge events stay that way:
 -- GitHub is their actor, except the two the server itself makes).
 update events set actor_id = '00000000-0000-4000-8000-524553545552'
  where actor_id is null and (kind not like 'forge.%' or kind in ('forge.linked', 'forge.backfill'));
 update comments set author_id = '00000000-0000-4000-8000-524553545552'
  where author_id is null
-   and (starts_with(body, '[released by the server]') or starts_with(body, '[blocked by the server]'));
+   and (starts_with(body, '[released by the server]') or starts_with(body, '[blocked by the server]')
+        or starts_with(body, 'Upstream change passed on ('));
 
 -- The restaurant's decisions about one cook (the cook page, what_now).
 create index events_restaurant_agent on events ((payload ->> 'agent_id'), seq)

@@ -131,14 +131,20 @@ async fn decide_now(c: &mut PgConnection, d: Decision) -> Result<Option<i64>> {
     .bind(&key)
     .execute(&mut *c)
     .await?;
-    let (quiet, suppressed): (bool, i32) = sqlx::query_as(
+    // `skip locked`: when another transaction is deciding the same key right now, it records the
+    // decision; waiting for it could deadlock two requests that decide about two cooks in opposite
+    // order.
+    let row: Option<(bool, i32)> = sqlx::query_as(
         "select last_at > now() - make_interval(secs => $2::float8), suppressed
-         from restaurant_quiet where key = $1 for update",
+         from restaurant_quiet where key = $1 for update skip locked",
     )
     .bind(&key)
     .bind(d.quiet.unwrap_or(QUIET_SECS) as f64)
-    .fetch_one(&mut *c)
+    .fetch_optional(&mut *c)
     .await?;
+    let Some((quiet, suppressed)) = row else {
+        return Ok(None);
+    };
     if quiet {
         sqlx::query("update restaurant_quiet set suppressed = suppressed + 1 where key = $1")
             .bind(&key)
