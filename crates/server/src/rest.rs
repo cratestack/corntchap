@@ -588,6 +588,7 @@ async fn stations_list(
         q.get("cook").map(|x| x.as_str()),
         q.get("kind").map(|x| x.as_str()),
         q.get("live").map(|x| x == "true" || x == "1"),
+        q.get("limit").and_then(|x| x.parse().ok()),
     )
     .await?)
 }

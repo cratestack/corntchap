@@ -471,7 +471,8 @@ export function CookDetailsPage() {
   const { name = "" } = useParams();
   const agents = useAgents();
   const projects = useProjects();
-  const stationsQ = useProc("stationList", { cook: name });
+  const stationsQ = useProc("stationList", { cook: name, kind: "session" });
+  const cloudQ = useProc("stationList", { cook: name, kind: "cloud-run" });
   const usage = useProc("usageReport", { cook: name, days: 7 });
   const claimed = useClaimedTasks(projects.data);
   const { events } = useLive();
@@ -484,9 +485,8 @@ export function CookDetailsPage() {
   const [token, setToken] = useState<{ token: string; title: string; hint?: string } | null>(null);
 
   const cook = (agents.data ?? []).find((a) => a.name.toLowerCase() === name.toLowerCase());
-  const allStations = useMemo(() => stationsQ.data ?? [], [stationsQ.data]);
-  const stations = useMemo(() => allStations.filter((s) => s.kind !== "cloud-run"), [allStations]);
-  const cloudRuns = useMemo(() => allStations.filter((s) => s.kind === "cloud-run"), [allStations]);
+  const stations = useMemo(() => stationsQ.data ?? [], [stationsQ.data]);
+  const cloudRuns = useMemo(() => cloudQ.data ?? [], [cloudQ.data]);
 
   const myTeams = useMemo(() => cook?.teams ?? [], [cook]);
   const pots = useMemo(() => (projects.data ?? []).filter((p) => p.team && myTeams.includes(p.team)), [projects.data, myTeams]);

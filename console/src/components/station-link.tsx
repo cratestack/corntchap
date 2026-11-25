@@ -2,7 +2,7 @@ import { ExternalLink } from "lucide-react";
 
 /** A station's name, as a link to its session page (a cloud run's URL) when it has one. */
 export function StationLink({ label, url, title, className }: { label: string; url?: string | null | undefined; title?: string | undefined; className?: string | undefined }) {
-  if (!url) {
+  if (!url || !/^https:\/\//i.test(url)) {
     return (
       <span className={className} title={title}>
         {label}

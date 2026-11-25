@@ -1365,6 +1365,7 @@ impl ProcedureRegistry for Procedures {
                 a.cook.as_deref(),
                 a.kind.as_deref(),
                 a.live,
+                a.limit,
             )
             .await,
         )

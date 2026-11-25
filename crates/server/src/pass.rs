@@ -97,7 +97,21 @@ pub async fn post(db: &PgPool, p: &Principal, a: Post) -> Result<Value> {
     };
     // the session sending it, if it said: shown with the message, a broadcast skips it, and a
     // direct answer can come back to it
-    let own_station = crate::stations::for_claim(&mut tx, &p, a.station.as_deref(), pr.id).await?;
+    let about = match a.task.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(r) => task_by_ref(&mut tx, &p, r).await.ok().map(|t| t.id),
+        None => None,
+    };
+    let own_station = crate::stations::for_call(
+        &mut tx,
+        &p,
+        a.station.as_deref(),
+        pr.id,
+        crate::stations::Call {
+            task: about,
+            ..Default::default()
+        },
+    )
+    .await?;
     let own_ref: Option<(String, String)> =
         match own_station {
             Some(s) => sqlx::query_as(

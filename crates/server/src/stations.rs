@@ -338,7 +338,9 @@ async fn one(c: &mut PgConnection, id: Uuid) -> Result<Value> {
 }
 
 /// Stations the caller can see: a cook its own; a person those of the cooks they own (admins:
-/// all); optionally one pot or one cook.
+/// all); optionally one pot or one cook. Without a `kind`: the sessions and the cloud runs that
+/// have not ended; the ended runs only with `kind = cloud-run` (newest first, at most `limit`,
+/// 100 by default).
 pub async fn list(
     db: &PgPool,
     p: &Principal,
@@ -346,6 +348,7 @@ pub async fn list(
     cook: Option<&str>,
     kind: Option<&str>,
     live: Option<bool>,
+    limit: Option<i64>,
 ) -> Result<Value> {
     if let Some(k) = kind
         && !matches!(k, "session" | "cloud-run")
@@ -361,9 +364,11 @@ pub async fn list(
                                    where m.team_id = pr.team_id and m.principal_id = $2 and m.role = 'owner')))
            and ($3::text is null or pr.key = $3)
            and ($4::text is null or a.name = $4)
-           and ($6::text is null or st.kind = $6)
+           and (case when $6::text is null then (st.kind = 'session' or st.ended_at is null) else st.kind = $6 end)
            and ($7::bool is null or $7 = (st.ended_at is null))
-         order by pr.key, a.name, st.created_at"
+         order by case when $6::text = 'cloud-run' then st.created_at end desc,
+                  pr.key, a.name, st.created_at
+         limit $8"
     );
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(who.is_super_admin())
@@ -373,6 +378,10 @@ pub async fn list(
         .bind(who.can_orchestrate())
         .bind(kind)
         .bind(live)
+        .bind(match kind {
+            Some("cloud-run") => limit.unwrap_or(100).clamp(1, 500),
+            _ => i64::MAX,
+        })
         .fetch_all(db)
         .await?;
     Ok(Value::Array(rows))
@@ -440,49 +449,100 @@ pub async fn remove(db: &PgPool, p: &Principal, station: &str) -> Result<Value> 
     Ok(json!({"ok": true}))
 }
 
+/// What a call that names a station is about, to pick the cloud run it belongs to when it names
+/// none (see [`for_call`]).
+#[derive(Default, Clone, Copy)]
+pub struct Call {
+    /// The call only reads: it never reopens an ended run.
+    pub read_only: bool,
+    /// The task it concerns: when that task is held by one of the cook's live runs, that run.
+    pub task: Option<Uuid>,
+}
+
 /// The station a claim is made from: it must be one of the caller's, in the task's pot. An agent
-/// whose cook is fire and forget may leave it out: the call is attributed to its most recent cloud
-/// run in the pot (a live one first), since a cloud run is started with no way to choose a
-/// session. Naming (or falling back to) a cloud run that already ended reopens it.
+/// whose cook is fire and forget may leave it out, or name one that does not exist: the call is
+/// attributed to its most recent cloud run in the pot (a live one first), since a cloud run is
+/// started with no way to choose a session. Naming (or falling back to) a cloud run that already
+/// ended reopens it.
 pub async fn for_claim(
     c: &mut PgConnection,
     p: &Principal,
     station: Option<&str>,
     project: Uuid,
 ) -> Result<Option<Uuid>> {
-    let Some(s) = station.map(str::trim).filter(|s| !s.is_empty()) else {
-        if !p.is_agent() || !crate::cloud::is_fire_and_forget(&mut *c, p.id).await? {
-            return Ok(None);
+    for_call(c, p, station, project, Call::default()).await
+}
+
+pub async fn for_call(
+    c: &mut PgConnection,
+    p: &Principal,
+    station: Option<&str>,
+    project: Uuid,
+    call: Call,
+) -> Result<Option<Uuid>> {
+    let named = station.map(str::trim).filter(|s| !s.is_empty());
+    let row: Option<(Uuid, Uuid, Uuid, String)> = match named {
+        Some(s) => {
+            sqlx::query_as("select id, agent_id, project_id, kind from stations where ref = $1")
+                .bind(s)
+                .fetch_optional(&mut *c)
+                .await?
         }
-        let id: Option<Uuid> = sqlx::query_scalar(
-            "select id from stations where agent_id = $1 and project_id = $2 and kind = 'cloud-run'
-             order by (ended_at is null) desc, coalesce(last_woken_at, created_at) desc, created_at desc limit 1",
-        )
-        .bind(p.id)
-        .bind(project)
-        .fetch_optional(&mut *c)
-        .await?;
-        if let Some(id) = id {
-            reopen(c, id).await?;
-        }
-        return Ok(id);
+        None => None,
     };
-    let row: Option<(Uuid, Uuid, Uuid, String)> =
-        sqlx::query_as("select id, agent_id, project_id, kind from stations where ref = $1")
-            .bind(s)
-            .fetch_optional(&mut *c)
-            .await?;
-    match row {
-        Some((id, agent, pid, kind)) if agent == p.id && pid == project => {
-            if kind == "cloud-run" {
+    match (named, row) {
+        (Some(_), Some((id, agent, pid, kind))) if agent == p.id && pid == project => {
+            if kind == "cloud-run" && !call.read_only {
                 reopen(c, id).await?;
             }
             Ok(Some(id))
         }
-        Some((_, agent, _, _)) if agent == p.id => Err(Error::Invalid(format!(
+        (Some(s), Some((_, agent, _, _))) if agent == p.id => Err(Error::Invalid(format!(
             "station {s} is registered for another pot"
         ))),
-        _ => Err(Error::NotFound(format!("{} has no station {s}", p.name))),
+        (Some(s), Some(_)) => Err(Error::NotFound(format!("{} has no station {s}", p.name))),
+        (named, _) => {
+            // no station, or one that is not there (a run's station that was removed): a fire and
+            // forget cook's run cannot choose, so it falls back; anyone else is told
+            if !p.is_agent() || !crate::cloud::is_fire_and_forget(&mut *c, p.id).await? {
+                return match named {
+                    Some(s) => Err(Error::NotFound(format!("{} has no station {s}", p.name))),
+                    None => Ok(None),
+                };
+            }
+            let mut id: Option<Uuid> = None;
+            if let Some(t) = call.task {
+                id = sqlx::query_scalar(
+                    "select st.id from tasks t join stations st on st.id = t.station_id
+                     where t.id = $1 and st.agent_id = $2 and st.project_id = $3
+                       and st.kind = 'cloud-run' and st.ended_at is null",
+                )
+                .bind(t)
+                .bind(p.id)
+                .bind(project)
+                .fetch_optional(&mut *c)
+                .await?;
+            }
+            if id.is_none() {
+                // a read picks a live run or none; a write may reopen the latest ended one
+                let sql = format!(
+                    "select id from stations where agent_id = $1 and project_id = $2 and kind = 'cloud-run'
+                     {} order by (ended_at is null) desc, coalesce(last_woken_at, created_at) desc, created_at desc limit 1",
+                    if call.read_only { "and ended_at is null" } else { "" }
+                );
+                id = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                    .bind(p.id)
+                    .bind(project)
+                    .fetch_optional(&mut *c)
+                    .await?;
+            }
+            if let Some(id) = id
+                && !call.read_only
+            {
+                reopen(c, id).await?;
+            }
+            Ok(id)
+        }
     }
 }
 
@@ -584,8 +644,27 @@ pub async fn new_run(
     })
 }
 
+/// A session page a station may link to: https, and a host its service owns (a Claude routine's
+/// run lives on claude.ai, a Devin session on devin.ai). Anything else (a webhook's answer, a
+/// look-alike host) is not stored: the answer of an endpoint is not to be trusted with a link
+/// the console renders.
+pub fn safe_session_url(typ: &str, url: &str) -> Option<String> {
+    let domain = match typ {
+        "claude-routine" => "claude.ai",
+        "devin" => "devin.ai",
+        _ => return None,
+    };
+    let u = url::Url::parse(url.trim()).ok()?;
+    if u.scheme() != "https" || !u.username().is_empty() || u.password().is_some() {
+        return None;
+    }
+    let host = u.host_str()?.to_ascii_lowercase();
+    (host == domain || host.ends_with(&format!(".{domain}"))).then(|| u.to_string())
+}
+
 /// The run started: its own session id and page replace the placeholder, and the label becomes the
-/// page's address (the console shows a short link anyway).
+/// page's address (the console shows a short link anyway). The page is kept only when
+/// [`safe_session_url`] accepts it for the run's target type.
 pub async fn settle_run(
     c: &mut PgConnection,
     id: Uuid,
@@ -593,6 +672,13 @@ pub async fn settle_run(
     url: Option<&str>,
     seq: Option<i64>,
 ) -> Result<()> {
+    let typ: Option<String> =
+        sqlx::query_scalar("select runtime from stations where id = $1 and kind = 'cloud-run'")
+            .bind(id)
+            .fetch_optional(&mut *c)
+            .await?;
+    let Some(typ) = typ else { return Ok(()) };
+    let url = url.and_then(|u| safe_session_url(&typ, u));
     sqlx::query(
         "update stations set session_ref = coalesce($2, session_ref), session_url = coalesce($3, session_url),
             label = coalesce($3, label), delivery_seq = coalesce($4, delivery_seq)
@@ -607,15 +693,24 @@ pub async fn settle_run(
     Ok(())
 }
 
-/// The delivery failed or was deferred: a station opened for it that never ran goes away again.
+/// A delivery that cannot have started a run (the target asked to wait, nothing was sent): the
+/// station opened for it goes away again, unless something already points at it, in which case it
+/// just ends. Never deletes a station a run may be using.
 pub async fn drop_run(c: &mut PgConnection, id: Uuid) -> Result<()> {
     sqlx::query(
-        "delete from stations where id = $1 and kind = 'cloud-run' and delivery_seq is null",
+        "delete from stations st
+         where st.id = $1 and st.kind = 'cloud-run'
+           and not exists (select 1 from tasks x where x.station_id = st.id)
+           and not exists (select 1 from comments x where x.station_id = st.id)
+           and not exists (select 1 from pass_messages x where x.station_id = st.id or x.to_station_id = st.id)
+           and not exists (select 1 from questions x where x.station_id = st.id)
+           and not exists (select 1 from forge_prs x where x.station_id = st.id)
+           and not exists (select 1 from coder_runs x where x.station_id = st.id)",
     )
     .bind(id)
-    .execute(c)
+    .execute(&mut *c)
     .await?;
-    Ok(())
+    end_if_idle(c, id).await
 }
 
 /// A cloud run is over when its cook holds nothing for it: no live lease and no task parked on a
@@ -635,7 +730,7 @@ pub async fn end_if_idle(c: &mut PgConnection, id: Uuid) -> Result<()> {
 }
 
 /// Cloud runs that went quiet without releasing anything (the run died, or went on after its
-/// lease was gone): no live lease, nothing parked, and no claim, comment or pass from them for the
+/// lease was gone): no live lease, nothing parked, and no comment or pass from them for the
 /// service's stall time.
 pub async fn end_stale_runs(db: &PgPool) -> Result<u64> {
     let sql = format!(
@@ -646,8 +741,7 @@ pub async fn end_stale_runs(db: &PgPool) -> Result<u64> {
                      or (t.status = 'blocked' and t.reserved_for is not null)))
            and greatest(st.created_at, coalesce(st.last_woken_at, st.created_at),
                  coalesce((select max(cm.created_at) from comments cm where cm.station_id = st.id), st.created_at),
-                 coalesce((select max(pm.created_at) from pass_messages pm where pm.station_id = st.id), st.created_at),
-                 coalesce((select max(t.updated_at) from tasks t where t.station_id = st.id), st.created_at))
+                 coalesce((select max(pm.created_at) from pass_messages pm where pm.station_id = st.id), st.created_at))
                < now() - make_interval(secs => {})",
         crate::service::stall_secs()
     );

@@ -36,6 +36,10 @@ struct Fake {
     gone: Arc<AtomicBool>,
     /// everything answers 500
     broken: Arc<AtomicBool>,
+    /// everything answers 429 (nothing started)
+    throttled: Arc<AtomicBool>,
+    /// the session URL the routine answers with, instead of a claude.ai one
+    routine_url: Arc<Mutex<Option<String>>>,
 }
 
 async fn handle(State(f): State<Fake>, method: Method, uri: Uri, body: Bytes) -> impl IntoResponse {
@@ -52,10 +56,24 @@ async fn handle(State(f): State<Fake>, method: Method, uri: Uri, body: Bytes) ->
     if f.broken.load(Ordering::SeqCst) {
         return (StatusCode::INTERNAL_SERVER_ERROR, "{}".to_string());
     }
+    if f.throttled.load(Ordering::SeqCst) {
+        return (StatusCode::TOO_MANY_REQUESTS, "{}".to_string());
+    }
     let ok = |v: Value| (StatusCode::OK, v.to_string());
     if path.starts_with("/routine") {
+        let url = f
+            .routine_url
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| format!("https://claude.ai/code/session_{n}"));
+        return ok(json!({"claude_code_session_url": url}));
+    }
+    if path.starts_with("/hook") {
+        // a webhook's answer is not trusted with a session page
         return ok(
-            json!({"claude_code_session_url": format!("https://claude.ai/code/session_{n}")}),
+            json!({"claude_code_session_url": "https://claude.ai/code/from-a-webhook",
+            "url": "https://example.com/x"}),
         );
     }
     if path.ends_with("/messages") && path.contains("/v3/") {
@@ -501,6 +519,11 @@ async fn devin_reuses_its_station_and_a_gone_session_gets_a_new_one() {
             .await
             .unwrap();
     assert_eq!(stored, Some(s2.id));
+    assert!(
+        w.ended(s1.id).await,
+        "the station of the gone session is over"
+    );
+    assert!(!w.ended(s2.id).await);
     let delivered: Vec<Value> = sqlx::query_scalar(
         "select payload from events where kind = 'wake.delivered' and payload->>'type' = 'devin' order by seq",
     )
@@ -614,15 +637,7 @@ async fn a_run_ends_when_it_holds_nothing_and_a_later_call_reopens_it() {
         .execute(&w.app.state.db)
         .await
         .unwrap();
-    // (the tasks_touch trigger would set updated_at to now again)
-    sqlx::raw_sql(
-        "alter table tasks disable trigger tasks_touch;
-         update tasks set updated_at = now() - interval '3 hours';
-         alter table tasks enable trigger tasks_touch;",
-    )
-    .execute(&w.app.state.db)
-    .await
-    .unwrap();
+    // (a task the run once held was touched just now: that is not the run's activity)
     sqlx::query("update comments set created_at = now() - interval '3 hours'")
         .execute(&w.app.state.db)
         .await
@@ -689,25 +704,316 @@ async fn cloud_runs_are_not_sessions_to_wake_or_make_main() {
     assert_eq!(r["isError"], true, "{r}");
 }
 
-#[tokio::test]
-async fn a_failed_delivery_leaves_no_station() {
-    let w = world(&[("claude-web", "claude-routine")]).await;
-    w.fake.broken.store(true, Ordering::SeqCst);
-    w.new_task("Refund screen").await;
-    let mut failed = 0i64;
+async fn wait_failed(w: &World, n: i64) {
     for _ in 0..80 {
-        failed = sqlx::query_scalar("select count(*) from events where kind = 'wake.failed'")
-            .fetch_one(&w.app.state.db)
-            .await
-            .unwrap();
-        if failed > 0 {
-            break;
+        let failed: i64 =
+            sqlx::query_scalar("select count(*) from events where kind = 'wake.failed'")
+                .fetch_one(&w.app.state.db)
+                .await
+                .unwrap();
+        if failed >= n {
+            // record_delivery settles the station right after emitting
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            return;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    assert!(failed > 0, "the wake failed");
+    panic!("no {n} failed wakes");
+}
+
+#[tokio::test]
+async fn a_throttled_delivery_leaves_no_station() {
+    let w = world(&[("claude-web", "claude-routine")]).await;
+    w.fake.throttled.store(true, Ordering::SeqCst);
+    w.new_task("Refund screen").await;
+    wait_failed(&w, 1).await;
     assert!(
         w.runs("claude-web").await.is_empty(),
-        "no station for a run that never started"
+        "429: nothing was sent, so no station"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_delivery_keeps_the_station_of_a_run_that_may_have_started() {
+    let w = world(&[("claude-web", "claude-routine")]).await;
+    let tok = &w.tokens["claude-web"];
+    w.fake.broken.store(true, Ordering::SeqCst);
+    w.new_task("Refund screen").await;
+    wait_failed(&w, 1).await;
+    // a 500 may come after the run started: the station stays, ended, and the run can use it
+    let runs = w.runs("claude-web").await;
+    assert_eq!(runs.len(), 1, "the station was kept");
+    let run = &runs[0];
+    assert!(run.ended);
+    // not in the default listing, but in the cloud runs
+    let list = |args: Value| async {
+        ok(
+            &w.app.mcp(&w.root, "list_stations", args).await,
+            "list_stations",
+        )
+    };
+    let default = list(json!({"cook": "claude-web"})).await;
+    assert!(default.as_array().unwrap().is_empty(), "{default}");
+    let runs_listed = list(json!({"cook": "claude-web", "kind": "cloud-run"})).await;
+    assert_eq!(runs_listed.as_array().unwrap().len(), 1, "{runs_listed}");
+    assert_eq!(runs_listed[0]["id"], json!(run.reference));
+    let capped = list(json!({"cook": "claude-web", "kind": "cloud-run", "limit": 1})).await;
+    assert_eq!(capped.as_array().unwrap().len(), 1);
+
+    // the run's later calls name that station: they are attributed to it, and it reopens
+    let claim = ok(
+        &w.app
+            .mcp(
+                tok,
+                "claim_task",
+                json!({"id": "PAY-1", "station": run.reference}),
+            )
+            .await,
+        "claim",
+    );
+    assert_eq!(claim["task"]["station"], json!(run.reference), "{claim}");
+    assert!(!w.ended(run.id).await, "a call from the run reopens it");
+    let live = list(json!({"cook": "claude-web"})).await;
+    assert_eq!(live.as_array().unwrap().len(), 1, "{live}");
+}
+
+#[tokio::test]
+async fn a_station_that_does_not_exist_falls_back_for_a_fire_and_forget_agent() {
+    let w = world(&[("claude-web", "claude-routine")]).await;
+    let tok = &w.tokens["claude-web"];
+    w.new_task("Refund screen").await;
+    w.fake.wait("/routine/fire", 1).await;
+    let run = w.settled_runs("claude-web", 1).await.remove(0);
+    ok(
+        &w.app
+            .mcp(
+                tok,
+                "claim_task",
+                json!({"id": "PAY-1", "station": "st_0123456789"}),
+            )
+            .await,
+        "claim with a station that is gone",
+    );
+    ok(
+        &w.app
+            .mcp(
+                tok,
+                "comment",
+                json!({"id": "PAY-1", "body": "hi", "station": "st_0123456789"}),
+            )
+            .await,
+        "comment",
+    );
+    let t = w.task("PAY-1").await;
+    assert_eq!(t["comments"][0]["station"], json!(run.reference), "{t}");
+    assert_eq!(t["station"], json!(run.reference), "{t}");
+}
+
+#[tokio::test]
+async fn session_urls_are_kept_only_for_known_hosts_over_https() {
+    use corntchap::stations::safe_session_url as safe;
+    assert_eq!(
+        safe("claude-routine", "https://claude.ai/code/session_1").as_deref(),
+        Some("https://claude.ai/code/session_1")
+    );
+    assert!(safe("claude-routine", "https://sub.claude.ai/x").is_some());
+    assert!(safe("devin", "https://app.devin.ai/sessions/1").is_some());
+    for bad in [
+        "http://claude.ai/x",
+        "javascript:alert(1)",
+        "https://evil.com/claude.ai",
+        "https://claude.ai.evil.com/x",
+        "https://notclaude.ai/x",
+        "https://user:pw@claude.ai/x",
+        "https://app.devin.ai/x",
+        "not a url",
+    ] {
+        assert!(safe("claude-routine", bad).is_none(), "{bad}");
+    }
+    assert!(safe("devin", "https://claude.ai/x").is_none());
+    for typ in ["webhook", "github-comment", "coder"] {
+        assert!(safe(typ, "https://claude.ai/x").is_none(), "{typ}");
+    }
+
+    // a routine that answers with a page elsewhere: no link, and not copied into the label
+    let w = world(&[("claude-web", "claude-routine")]).await;
+    *w.fake.routine_url.lock().unwrap() = Some("https://evil.example/phish".into());
+    w.new_task("Refund screen").await;
+    w.fake.wait("/routine/fire", 1).await;
+    let run = w.settled_runs("claude-web", 1).await.remove(0);
+    assert!(run.url.is_none());
+    let label: Option<String> = sqlx::query_scalar("select label from stations where id = $1")
+        .bind(run.id)
+        .fetch_one(&w.app.state.db)
+        .await
+        .unwrap();
+    assert!(!label.unwrap_or_default().contains("evil"), "label");
+}
+
+#[tokio::test]
+async fn a_webhook_answer_does_not_set_a_session_url() {
+    let w = world(&[("hook-cook", "webhook")]).await;
+    w.new_task("Refund screen").await;
+    w.fake.wait("/hook", 1).await;
+    let run = w.settled_runs("hook-cook", 1).await.remove(0);
+    assert!(run.url.is_none(), "{:?}", run.url);
+}
+
+#[tokio::test]
+async fn a_reused_station_ends_again_when_the_follow_up_fails() {
+    let w = world(&[("devin-cook", "devin")]).await;
+    w.new_task("Refund screen").await;
+    w.fake.wait("/sessions", 1).await;
+    let s1 = w.settled_runs("devin-cook", 1).await.remove(0);
+    sqlx::query("update stations set ended_at = now() where id = $1")
+        .bind(s1.id)
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    w.fake.broken.store(true, Ordering::SeqCst);
+    w.dm("devin-cook", "carry on").await;
+    wait_failed(&w, 1).await;
+    let runs = w.runs("devin-cook").await;
+    assert_eq!(runs.len(), 1, "the follow-up reuses the station");
+    assert!(w.ended(s1.id).await, "a failed follow-up leaves it ended");
+}
+
+#[tokio::test]
+async fn a_gone_session_opens_one_station_not_two() {
+    let w = world(&[("devin-cook", "devin")]).await;
+    w.new_task("Refund screen").await;
+    w.fake.wait("/sessions", 1).await;
+    w.settled_runs("devin-cook", 1).await;
+    // a session from before stations: the run row has none, so the wake opens a station of its own
+    sqlx::query("update coder_runs set station_id = null")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    w.fake.gone.store(true, Ordering::SeqCst);
+    w.dm("devin-cook", "are you there").await;
+    w.fake.wait("/sessions", 2).await;
+    let runs = w.settled_runs("devin-cook", 2).await;
+    assert_eq!(
+        runs.len(),
+        2,
+        "one for the first session, one for the second: {}",
+        runs.len()
+    );
+}
+
+#[tokio::test]
+async fn a_read_never_reopens_and_a_call_about_a_task_goes_to_its_run() {
+    let w = world(&[("claude-web", "claude-routine")]).await;
+    let tok = &w.tokens["claude-web"];
+    w.new_task("Refund screen").await;
+    w.fake.wait("/routine/fire", 1).await;
+    let a = w.settled_runs("claude-web", 1).await.remove(0);
+    // an ended run: what_now (a read) leaves it ended
+    sqlx::query("update stations set ended_at = now() where id = $1")
+        .bind(a.id)
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    ok(
+        &w.app.mcp(tok, "what_now", json!({"project": "PAY"})).await,
+        "what_now",
+    );
+    assert!(w.ended(a.id).await, "a read does not reopen a run");
+    ok(
+        &w.app
+            .mcp(
+                tok,
+                "what_now",
+                json!({"project": "PAY", "station": a.reference}),
+            )
+            .await,
+        "what_now naming it",
+    );
+    assert!(w.ended(a.id).await, "nor does naming it on a read");
+
+    // two live runs: the one that holds the task gets the call about it, not the newest
+    let claim = ok(
+        &w.app
+            .mcp(
+                tok,
+                "claim_task",
+                json!({"id": "PAY-1", "station": a.reference}),
+            )
+            .await,
+        "claim",
+    );
+    assert!(claim["lease"]["epoch"].is_number());
+    let (agent, project): (Uuid, Uuid) = sqlx::query_as(
+        "select (select id from principals where name = 'claude-web'), (select id from projects where key = 'PAY')",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    let mut conn = w.app.state.db.acquire().await.unwrap();
+    let b = corntchap::stations::new_run(&mut conn, agent, project, a.target, "claude-routine")
+        .await
+        .unwrap();
+    drop(conn);
+    ok(
+        &w.app
+            .mcp(tok, "comment", json!({"id": "PAY-1", "body": "no station"}))
+            .await,
+        "comment",
+    );
+    let t = w.task("PAY-1").await;
+    assert_eq!(t["comments"][0]["station"], json!(a.reference), "{t}");
+    assert_ne!(b.reference, a.reference);
+}
+
+#[tokio::test]
+async fn an_owner_message_about_a_task_names_only_the_new_run() {
+    let w = world(&[("claude-web", "claude-routine")]).await;
+    let tok = &w.tokens["claude-web"];
+    w.new_task("Refund screen").await;
+    w.fake.wait("/routine/fire", 1).await;
+    let old = w.settled_runs("claude-web", 1).await.remove(0);
+    let claim = ok(
+        &w.app
+            .mcp(
+                tok,
+                "claim_task",
+                json!({"id": "PAY-1", "station": old.reference}),
+            )
+            .await,
+        "claim",
+    );
+    let epoch = claim["lease"]["epoch"].as_i64().unwrap();
+    ok(
+        &w.app
+            .mcp(
+                tok,
+                "complete",
+                json!({"id": "PAY-1", "epoch": epoch, "result": "done", "learned": "nothing new"}),
+            )
+            .await,
+        "complete",
+    );
+    // the owner asks about that task: a new run, and only it is named
+    ok(
+        &w.app
+            .mcp(
+                &w.root,
+                "pass",
+                json!({"project": "PAY", "message": "what happened here?", "to": "claude-web", "task": "PAY-1"}),
+            )
+            .await,
+        "dm about the task",
+    );
+    let fires = w.fake.wait("/routine/fire", 2).await;
+    let runs = w.settled_runs("claude-web", 2).await;
+    let new = runs.iter().find(|r| r.id != old.id).unwrap();
+    let text = text_of(&fires[1]);
+    assert!(text.contains(&new.reference), "{text}");
+    assert!(!text.contains(&old.reference), "{text}");
+    // the station comes first, so a cut text keeps it
+    let body = fires[1].body["text"].as_str().unwrap();
+    assert!(
+        body.starts_with(&format!("Your station is {}", new.reference)),
+        "{body}"
     );
 }

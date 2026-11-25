@@ -345,7 +345,17 @@ pub async fn what_now(
 ) -> Result<Value> {
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
-    let st = crate::stations::for_claim(&mut c, p, station, pr.id).await?;
+    let st = crate::stations::for_call(
+        &mut c,
+        p,
+        station,
+        pr.id,
+        crate::stations::Call {
+            read_only: true,
+            ..Default::default()
+        },
+    )
+    .await?;
     let st_row: Option<(String, Option<String>, Option<String>, bool)> = match st {
         Some(id) => {
             sqlx::query_as("select ref, repo, directory, confined from stations where id = $1")

@@ -1461,7 +1461,11 @@ pub async fn comment(
     }
     let comment_id = add_comment(&mut tx, &t, p.id, body).await?;
     // which of the cook's sessions wrote it, when it said
-    if let Some(st) = crate::stations::for_claim(&mut tx, p, station, t.project_id).await? {
+    let call = crate::stations::Call {
+        task: Some(t.id),
+        ..Default::default()
+    };
+    if let Some(st) = crate::stations::for_call(&mut tx, p, station, t.project_id, call).await? {
         sqlx::query("update comments set station_id = $2 where id = $1")
             .bind(comment_id)
             .bind(st)

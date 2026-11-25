@@ -171,7 +171,10 @@ pub async fn deliver(
             }
             return Ok(Delivered {
                 status: 200,
-                session_url: v["url"].as_str().map(String::from).or_else(|| url.clone()),
+                session_url: v["url"]
+                    .as_str()
+                    .and_then(|u| crate::stations::safe_session_url("devin", u))
+                    .or_else(|| url.clone()),
                 session_id: Some(id.clone()),
                 station: None,
                 chars: wake.chars().count(),
@@ -181,8 +184,11 @@ pub async fn deliver(
     }
     let mut run_station = station.map(|s| s.id);
     let mut fresh: Option<RunStation> = None;
+    // only the station of a session that went on is replaced: one opened for this wake is the new
+    // session's
     if known.is_some()
         && let Some(old) = station
+        && old.reused
         && let Ok(mut conn) = state.db.acquire().await
         && let Ok(new) =
             crate::stations::new_run(&mut conn, old.agent, old.project, old.target, &old.typ).await
@@ -195,9 +201,14 @@ pub async fn deliver(
         &format!("{DEVIN_PROMPT}\n\n{}", cut(&full, MAX_TEXT)),
         MAX_TEXT,
     );
-    let drop_fresh = async || {
+    // nothing was sent: the new station goes; the session may have started: it ends
+    let drop_fresh = async |sent: bool| {
         if let (Some(n), Ok(mut conn)) = (&fresh, state.db.acquire().await) {
-            let _ = crate::stations::drop_run(&mut conn, n.id).await;
+            let _ = if sent {
+                crate::stations::end_if_idle(&mut conn, n.id).await
+            } else {
+                crate::stations::drop_run(&mut conn, n.id).await
+            };
         }
     };
 
@@ -209,21 +220,23 @@ pub async fn deliver(
     let v = match created {
         Ok(Sent::Ok(v)) => v,
         Ok(Sent::Gone) => {
-            drop_fresh().await;
+            drop_fresh(false).await;
             return Err(fail("Devin: could not start a session"));
         }
         Err(f) => {
-            drop_fresh().await;
+            drop_fresh(f.retry_after.is_none()).await;
             return Err(f);
         }
     };
     let Some(remote) = v["session_id"].as_str().map(String::from) else {
-        drop_fresh().await;
+        drop_fresh(true).await;
         return Err(fail(
             "Devin started a session but its answer has no session_id",
         ));
     };
-    let url = v["url"].as_str().map(String::from);
+    let url = v["url"]
+        .as_str()
+        .and_then(|u| crate::stations::safe_session_url("devin", u));
     if let Some(t) = target {
         let _ = sqlx::query(
             "insert into coder_runs (target_id, project, api, remote_id, session_url, station_id)

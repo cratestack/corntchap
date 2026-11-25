@@ -953,6 +953,10 @@ async fn record_delivery(
                 (None, Some(r)) => Some(r.reference.clone()),
                 _ => None,
             };
+            // a follow-up whose run was gone started a new one: the old station is over
+            if let (Some(_), Some(r)) = (d.station, run) {
+                let _ = crate::stations::end_if_idle(&mut *c, r.id).await;
+            }
             if let Some(id) = d.station.or(run.map(|r| r.id)) {
                 settled = Some((id, d.session_id.clone(), d.session_url.clone()));
             }
@@ -963,10 +967,16 @@ async fn record_delivery(
             )
         }
         Err(f) => {
-            if let Some(r) = run
-                && !r.reused
-            {
-                let _ = crate::stations::drop_run(&mut *c, r.id).await;
+            if let Some(r) = run {
+                if f.retry_after.is_some() && !r.reused {
+                    // told to wait: nothing was sent, so the station was never needed
+                    let _ = crate::stations::drop_run(&mut *c, r.id).await;
+                } else {
+                    // the run may have started all the same (a timeout, an answer without an id):
+                    // it keeps its station, which ends unless it holds something; a reused one that
+                    // was reopened for this wake goes back to ended
+                    let _ = crate::stations::end_if_idle(&mut *c, r.id).await;
+                }
             }
             tracing::warn!("cloud wake for {agent} ({typ}) failed: {}", f.error);
             (

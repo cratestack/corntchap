@@ -199,8 +199,10 @@ pub async fn deliver(
     }
     let mut run_station = station.map(|s| s.id);
     let mut fresh: Option<RunStation> = None;
+    // only the station of a run that went on is replaced: one opened for this wake is the new run's
     if known.is_some()
         && let Some(old) = station
+        && old.reused
         && let Ok(mut conn) = state.db.acquire().await
         && let Ok(new) =
             crate::stations::new_run(&mut conn, old.agent, old.project, old.target, &old.typ).await
@@ -217,14 +219,23 @@ pub async fn deliver(
     let created = match create_run(&c, config, api, owner, &first).await {
         Ok(v) => v,
         Err(f) => {
-            // the run never started: its new station is not needed
+            // told to wait: nothing was sent and its new station is not needed; any other failure
+            // may have started the run, whose station then ends instead
             if let (Some(n), Ok(mut conn)) = (&fresh, state.db.acquire().await) {
-                let _ = crate::stations::drop_run(&mut conn, n.id).await;
+                if f.retry_after.is_some() {
+                    let _ = crate::stations::drop_run(&mut conn, n.id).await;
+                } else {
+                    let _ = crate::stations::end_if_idle(&mut conn, n.id).await;
+                }
             }
             return Err(f);
         }
     };
     let Sent::Ok(v) = created else {
+        // the service refused to start a run: nothing runs for the new station
+        if let (Some(n), Ok(mut conn)) = (&fresh, state.db.acquire().await) {
+            let _ = crate::stations::drop_run(&mut conn, n.id).await;
+        }
         return Err(fail("Coder: could not start a run"));
     };
     let Some(remote) = v["id"]
@@ -232,8 +243,9 @@ pub async fn deliver(
         .or_else(|| v["name"].as_str())
         .map(String::from)
     else {
+        // the run started: its station stays, ended
         if let (Some(n), Ok(mut conn)) = (&fresh, state.db.acquire().await) {
-            let _ = crate::stations::drop_run(&mut conn, n.id).await;
+            let _ = crate::stations::end_if_idle(&mut conn, n.id).await;
         }
         return Err(fail("Coder started a run but its answer has no id"));
     };

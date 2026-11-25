@@ -238,7 +238,11 @@ pub async fn deliver(
         let v: Value = resp.json().await.unwrap_or(Value::Null);
         return Ok(Delivered {
             status: status.as_u16(),
-            session_url: v["claude_code_session_url"].as_str().map(String::from),
+            // only a Claude routine's answer names a session page; any other endpoint's is not trusted
+            session_url: (typ == "claude-routine")
+                .then(|| v["claude_code_session_url"].as_str())
+                .flatten()
+                .and_then(|u| crate::stations::safe_session_url(typ, u)),
             session_id: None,
             station: None,
             chars,
@@ -287,13 +291,17 @@ pub async fn work_text(
          needs a person: block it with a precise reason. A task someone else could do: comment and \
          release. Never use pass to others, ask with `to` or wait=true, or request_review, and never \
          wait. Call claim_next again until it returns none, then stop.{own}{news}",
-        own = station_line(station),
+        own = station_line(station)
+            .map(|l| format!("\n\n{l}"))
+            .unwrap_or_default(),
     );
     let pointer = format!(
         "new work is ready in corntchap pot {key}: call what_now, then claim_next with {scope}, open a pull request \
          for what it hands you, link_pr it and release the task (\"PR open: <url>\"), then claim_next \
          again until none is left.{}",
         station_line(station)
+            .map(|l| format!("\n\n{l}"))
+            .unwrap_or_default()
     );
     WakeText {
         full,
@@ -314,10 +322,14 @@ pub async fn messages_text(
     labels: &[String],
     station: Option<&str>,
 ) -> WakeText {
+    // the station comes first: a long message must not push it out of a cut text
     let mut full = format!(
-        "corntchap: {} from your owner for {agent_name} in {key}.\n\n\
+        "{}corntchap: {} from your owner for {agent_name} in {key}.\n\n\
          You are a cloud session, fire and forget: this run starts fresh, so what you need is below \
          or one corntchap MCP call away (read_pass shows the conversation).\n",
+        station_line(station)
+            .map(|l| format!("{l}\n\n"))
+            .unwrap_or_default(),
         if wakes.len() == 1 {
             "a message".to_string()
         } else {
@@ -346,13 +358,14 @@ pub async fn messages_text(
     full.push_str(&guide_line(c, project, key).await);
     full.push_str(&format!(
         "\n\nAnswer your owner on the pass (the pass tool, to your owner only), then do the ready \
-         work: what_now first, then claim_next with {scope} until it returns none, then stop.{}",
-        station_line(station)
+         work: what_now first, then claim_next with {scope} until it returns none, then stop."
     ));
     let pointer = format!(
         "you have a message from your owner on corntchap pot {key}: read it with read_pass (project \
          {key}), answer your owner on the pass, then what_now and claim_next for ready work.{}",
         station_line(station)
+            .map(|l| format!("\n\n{l}"))
+            .unwrap_or_default()
     );
     WakeText {
         full,
@@ -363,13 +376,12 @@ pub async fn messages_text(
 }
 
 /// The run's station, named in the wake: what the run does is attributed to it.
-fn station_line(station: Option<&str>) -> String {
-    match station {
-        Some(s) => format!(
-            "\n\nYour station is {s}: pass station={s} to what_now, claim_next, claim_task, comment, pass and ask."
-        ),
-        None => String::new(),
-    }
+fn station_line(station: Option<&str>) -> Option<String> {
+    station.map(|s| {
+        format!(
+            "Your station is {s}: pass station={s} to what_now, claim_next, claim_task, comment, pass and ask."
+        )
+    })
 }
 
 /// One line when the pot has a guide: how we work here, read with what_now.

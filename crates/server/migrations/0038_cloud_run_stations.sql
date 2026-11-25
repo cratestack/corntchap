@@ -21,3 +21,13 @@ create index stations_cloud_runs on stations (agent_id, project_id, created_at d
 alter table coder_runs add column station_id uuid references stations(id) on delete set null;
 -- the run that opened a pull request (link_pr)
 alter table forge_prs add column station_id uuid references stations(id) on delete set null;
+
+-- everything that points at a station: a delete (a failed run's station, remove_station) sets these
+-- null, and "what did this run do" / "is anything still on it" look them up by station
+create index tasks_station on tasks (station_id) where station_id is not null;
+create index comments_station on comments (station_id) where station_id is not null;
+create index pass_messages_station on pass_messages (station_id) where station_id is not null;
+create index pass_messages_to_station on pass_messages (to_station_id) where to_station_id is not null;
+create index questions_station on questions (station_id) where station_id is not null;
+create index forge_prs_station on forge_prs (station_id) where station_id is not null;
+create index coder_runs_station on coder_runs (station_id) where station_id is not null;
