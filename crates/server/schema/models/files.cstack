@@ -29,6 +29,7 @@ model File {
   @@deny("read", auth().kind == "relay")
   @@deny("read", status == "deleted")
   @@allow("read", auth().role == "super_admin" || project.team.members.some.principalRef == auth().id)
+  @@paged
   @@mcp(resource: "files")
 }
 

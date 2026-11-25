@@ -350,6 +350,16 @@ pub(crate) async fn task_json(c: &mut PgConnection, id: Uuid) -> Result<Value> {
 
 /// Task with its items, comments and dependency states.
 pub(crate) async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
+    task_full_n(c, id, None).await
+}
+
+/// [`task_full`] with only the newest `comments_limit` comments (oldest first); `comments_total`
+/// always counts all of them.
+pub(crate) async fn task_full_n(
+    c: &mut PgConnection,
+    id: Uuid,
+    comments_limit: Option<i64>,
+) -> Result<Value> {
     let mut t = task_json(c, id).await?;
     let items: Value = sqlx::query_scalar(
         "select coalesce(jsonb_agg(jsonb_build_object('position', i.position, 'text', i.text, 'done', i.done,
@@ -359,6 +369,7 @@ pub(crate) async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
     .bind(id)
     .fetch_one(&mut *c)
     .await?;
+    // the newest N when asked (oldest first either way); `created_at, id` keeps the cut stable
     let comments: Value = sqlx::query_scalar(
         "select coalesce(jsonb_agg(jsonb_build_object('author', (select name from principals where id = cm.author_id),
             'body', cm.body, 'at', cm.created_at,
@@ -366,11 +377,17 @@ pub(crate) async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
             'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = cm.station_id),
             'station_url', (select s.session_url from stations s where s.id = cm.station_id))
             order by cm.created_at), '[]'::jsonb)
-         from comments cm where cm.task_id = $1",
+         from (select * from comments where task_id = $1 order by created_at desc, id desc limit $2) cm",
     )
     .bind(id)
+    .bind(comments_limit.map(|n| n.clamp(0, 10_000)).unwrap_or(i64::MAX))
     .fetch_one(&mut *c)
     .await?;
+    let comments_total: i64 =
+        sqlx::query_scalar("select count(*) from comments where task_id = $1")
+            .bind(id)
+            .fetch_one(&mut *c)
+            .await?;
     let deps: Value = sqlx::query_scalar(
         "select coalesce(jsonb_agg(jsonb_build_object('id', dp.key || '-' || dt.number, 'title', dt.title, 'status', dt.status)), '[]'::jsonb)
          from task_deps d join tasks dt on dt.id = d.depends_on join projects dp on dp.id = dt.project_id where d.task_id = $1",
@@ -396,6 +413,7 @@ pub(crate) async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
     let o = t.as_object_mut().unwrap();
     o.insert("items".into(), items);
     o.insert("comments".into(), comments);
+    o.insert("comments_total".into(), json!(comments_total));
     o.insert("dependencies".into(), deps);
     o.insert("subtasks".into(), subtasks);
     o.insert("files".into(), files);
@@ -405,9 +423,19 @@ pub(crate) async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
 }
 
 pub async fn get_task(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
+    get_task_n(db, p, r, None).await
+}
+
+/// [`get_task`] with only the newest `comments_limit` comments.
+pub async fn get_task_n(
+    db: &PgPool,
+    p: &Principal,
+    r: &str,
+    comments_limit: Option<i64>,
+) -> Result<Value> {
     let mut c = db.acquire().await?;
     let t = task_by_ref(&mut c, p, r).await?;
-    task_full(&mut c, t.id).await
+    task_full_n(&mut c, t.id, comments_limit).await
 }
 
 pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
@@ -498,6 +526,121 @@ pub async fn list_tasks(
         .fetch_all(&mut *c)
         .await?;
     Ok(Value::Array(rows))
+}
+
+/// One page of a project's tasks for the console board (`taskPage`; `list_tasks` stays the agents'
+/// list). `bucket`: `active` (open, claimed, blocked: priority desc, number), `done` or
+/// `cancelled` (newest change first: updated_at desc, number desc). `total` counts every match.
+#[allow(clippy::too_many_arguments)]
+pub async fn task_page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    bucket: &str,
+    label: Option<&str>,
+    menu: Option<&str>,
+    owner: Option<&str>,
+    repo: Option<&str>,
+    q: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<Value> {
+    let (statuses, order, default, max): (&[&str], &str, i64, i64) = match bucket {
+        "active" => (
+            &["open", "claimed", "blocked"],
+            "-priority,number",
+            500,
+            500,
+        ),
+        "done" => (&["done"], "-updated_at,-number", 25, 200),
+        "cancelled" => (&["cancelled"], "-updated_at,-number", 25, 200),
+        _ => return invalid("bucket is active, done or cancelled"),
+    };
+    // the cursor is minted per bucket: one for `done` does not fit `cancelled`
+    let order = format!("{order}:{bucket}");
+    let paging = crate::paging::paging(page, &order, 2, default, max)?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, project).await?;
+    let owner = match owner.map(str::trim).filter(|o| !o.is_empty()) {
+        None => None,
+        Some(o) if o.eq_ignore_ascii_case("anyone") => None,
+        Some(o) if o.eq_ignore_ascii_case("me") => Some(p.name.clone()),
+        Some(o) => Some(o.to_string()),
+    };
+    let menu = menu.map(|m| {
+        if m.trim() == "-" {
+            "-".to_string()
+        } else {
+            crate::menus::slug(m)
+        }
+    });
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
+    let filters = "t.project_id = $1 and t.status = any($2::text[])
+           and ($3::text is null or $3 = any(t.labels))
+           and ($4::text is null or ($4 = '-' and t.menu_id is null)
+                or exists (select 1 from menus m where m.id = t.menu_id and m.key = $4))
+           and ($5::text is null or ($5 = '-' and t.owner_id is null)
+                or t.owner_id = (select id from principals where name = $5))
+           and ($6::text is null or $6 = any(t.repos))
+           and ($7::text is null or position(lower($7) in lower(t.title)) > 0
+                or position(lower($7) in lower(t.body)) > 0
+                or position(lower($7) in lower(pr.key || '-' || t.number)) > 0)";
+    let statuses: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
+    let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select count(*) from tasks t join projects pr on pr.id = t.project_id where {filters}"
+    )))
+    .bind(pr.id)
+    .bind(&statuses)
+    .bind(label)
+    .bind(menu.as_deref())
+    .bind(owner.as_deref())
+    .bind(repo)
+    .bind(q)
+    .fetch_one(&mut *c)
+    .await?;
+    let (keys, after, sort) = if bucket == "active" {
+        (
+            "array[t.priority::text, t.number::text]",
+            "(t.priority < $8::text::int or (t.priority = $8::text::int and t.number > $9::text::bigint))",
+            "t.priority desc, t.number",
+        )
+    } else {
+        (
+            "array[t.updated_at::text, t.number::text]",
+            "(t.updated_at, t.number) < ($8::text::timestamptz, $9::text::bigint)",
+            "t.updated_at desc, t.number desc",
+        )
+    };
+    let sql = format!(
+        "select {TASK_JSON} || jsonb_build_object('body', {body}, 'result', {result}), {keys}
+         from tasks t join projects pr on pr.id = t.project_id
+         where {filters} and ($8::text is null or {after})
+         order by {sort} limit $10",
+        body = cut_sql("t.body"),
+        result = cut_sql("t.result"),
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(&statuses)
+        .bind(label)
+        .bind(menu.as_deref())
+        .bind(owner.as_deref())
+        .bind(repo)
+        .bind(q)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    let (items, next) = crate::paging::finish(rows, &paging);
+    let mut out = json!({"items": items, "total": total});
+    if let Some(n) = next {
+        out["next_cursor"] = json!(n);
+    }
+    Ok(out)
 }
 
 pub struct NewTask {
@@ -2060,8 +2203,9 @@ pub async fn changes_since(
     cursor: i64,
     project: Option<&str>,
     limit: i64,
+    before: Option<i64>,
 ) -> Result<Value> {
-    let out = changes_feed(db, p, cursor, project, limit).await?;
+    let out = changes_feed_before(db, p, cursor, project, limit, before).await?;
     if project.is_some() && p.is_agent() {
         let mut c = db.acquire().await?;
         let pr = project_by_key(&mut c, p, project.unwrap_or_default()).await?;
@@ -2078,31 +2222,75 @@ pub async fn changes_feed(
     project: Option<&str>,
     limit: i64,
 ) -> Result<Value> {
+    changes_feed_before(db, p, cursor, project, limit, None).await
+}
+
+/// [`changes_feed`], or with `before`: the newest `limit` events with a seq below it, oldest first
+/// (the console's "load older"). `older` says whether events older than the first one returned remain.
+pub async fn changes_feed_before(
+    db: &PgPool,
+    p: &Principal,
+    cursor: i64,
+    project: Option<&str>,
+    limit: i64,
+    before: Option<i64>,
+) -> Result<Value> {
     let mut c = db.acquire().await?;
     let pid = match project {
         Some(k) => Some(project_by_key(&mut c, p, k).await?.id),
         None => None,
+    };
+    let filter = |pid: &str, admin: &str, me: &str| {
+        format!(
+            "e.kind not like 'wake%' and e.kind <> 'activity' and ({pid}::uuid is null or e.project_id = {pid})
+               and (e.audience is null or {me} = any(e.audience)) and {}",
+            access_sql(admin, me)
+        )
     };
     let sql = format!(
         "select e.seq, jsonb_build_object('seq', e.seq, 'kind', e.kind, 'project', pr.key,
             'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
             'actor', coalesce((select name from principals where id = e.actor_id), e.payload->>'actor_name'), 'at', e.at, 'payload', e.payload)
          from events e join projects pr on pr.id = e.project_id
-         where e.seq > $1 and ($2::uuid is null or e.project_id = $2) and e.kind not like 'wake%' and e.kind <> 'activity'
-           and (e.audience is null or $5 = any(e.audience)) and {}
-         order by e.seq limit $3",
-        access_sql("$4", "$5")
+         where e.seq > $1 and ($6::bigint is null or e.seq < $6) and {}
+         order by case when $6::bigint is null then e.seq else -e.seq end limit $3",
+        filter("$2", "$4", "$5")
     );
-    let rows: Vec<(i64, Value)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
-        .bind(cursor)
+    let mut rows: Vec<(i64, Value)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(if before.is_some() { 0 } else { cursor })
         .bind(pid)
         .bind(limit.clamp(1, 500))
         .bind(p.is_super_admin())
         .bind(p.id)
+        .bind(before)
         .fetch_all(&mut *c)
         .await?;
+    if before.is_some() {
+        rows.reverse();
+    }
+    let older = match rows.first() {
+        Some((first, _)) => {
+            let sql = format!(
+                "select exists (select 1 from events e join projects pr on pr.id = e.project_id
+                 where e.seq < $1 and {})",
+                filter("$2", "$3", "$4")
+            );
+            sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                .bind(first)
+                .bind(pid)
+                .bind(p.is_super_admin())
+                .bind(p.id)
+                .fetch_one(&mut *c)
+                .await?
+        }
+        None => false,
+    };
     let next = rows.last().map(|r| r.0).unwrap_or(cursor);
-    Ok(json!({"events": rows.into_iter().map(|r| r.1).collect::<Vec<_>>(), "next_cursor": next}))
+    Ok(json!({
+        "events": rows.into_iter().map(|r| r.1).collect::<Vec<_>>(),
+        "next_cursor": next,
+        "older": older,
+    }))
 }
 
 /// Ready tasks this principal could take right now (empty when it already holds its maximum leases).

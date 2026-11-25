@@ -402,9 +402,20 @@ function StartSessionDialog({
 }
 
 /** A cook's cloud runs, newest first: one station per Claude routine run, Devin or Coder session, webhook or GitHub-comment run. */
-export function CloudRunList({ stations }: { stations: StationView[] }) {
+export function CloudRunList({
+  stations,
+  hasMore = false,
+  loadingMore = false,
+  onMore,
+}: {
+  stations: StationView[];
+  /** More runs than the ones given exist (`cloudRunPage`); `onMore` reads the next page. */
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onMore?: () => void;
+}) {
   const now = useNow();
-  const runs = [...stations].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const runs = stations;
   if (runs.length === 0) {
     return <p className="text-[12.5px] text-muted-foreground">No cloud runs yet. Each wake of a cloud target opens one, and what the run does is attributed to it.</p>;
   }
@@ -449,6 +460,14 @@ export function CloudRunList({ stations }: { stations: StationView[] }) {
           </li>
         );
       })}
+      {hasMore && (
+        <li className="flex justify-center pt-1">
+          <Button type="button" variant="outline" size="sm" disabled={loadingMore} onClick={onMore}>
+            {loadingMore && <Loader2 className="animate-spin" />}
+            Show older runs
+          </Button>
+        </li>
+      )}
     </ul>
   );
 }

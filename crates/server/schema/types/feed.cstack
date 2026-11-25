@@ -84,6 +84,8 @@ type ChangeView {
 type ChangeFeed {
   events ChangeView[]
   next_cursor Int
+  /// There are older events than the first one returned (read them with `before`).
+  older Boolean
 }
 
 /// A task you could claim now (wait_for_work). Read it in full with get_task.

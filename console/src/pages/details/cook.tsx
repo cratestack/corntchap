@@ -20,6 +20,7 @@ import {
   cookState,
   formSheetClass,
 } from "@/components/bits";
+import { useProcInfinite } from "@/lib/paging";
 import { CloudRunList, StationList } from "@/components/stations";
 import { CookRepoScopes } from "@/components/repos";
 import { UsagePanel } from "@/components/usage";
@@ -472,7 +473,7 @@ export function CookDetailsPage() {
   const agents = useAgents();
   const projects = useProjects();
   const stationsQ = useProc("stationList", { cook: name, kind: "session" });
-  const cloudQ = useProc("stationList", { cook: name, kind: "cloud-run" });
+  const cloudQ = useProcInfinite("cloudRunPage", { cook: name, project: null, live: null }, { getCursor: (p) => p.nextCursor });
   const usage = useProc("usageReport", { cook: name, days: 7 });
   const claimed = useClaimedTasks(projects.data);
   const { events } = useLive();
@@ -486,7 +487,7 @@ export function CookDetailsPage() {
 
   const cook = (agents.data ?? []).find((a) => a.name.toLowerCase() === name.toLowerCase());
   const stations = useMemo(() => stationsQ.data ?? [], [stationsQ.data]);
-  const cloudRuns = useMemo(() => cloudQ.data ?? [], [cloudQ.data]);
+  const cloudRuns = cloudQ.items;
 
   const myTeams = useMemo(() => cook?.teams ?? [], [cook]);
   const pots = useMemo(() => (projects.data ?? []).filter((p) => p.team && myTeams.includes(p.team)), [projects.data, myTeams]);
@@ -617,9 +618,9 @@ export function CookDetailsPage() {
             </Group>
 
             {cloudRuns.length > 0 && (
-              <Group title="Cloud runs" hint="One station per run: what a run claims, comments and passes is attributed to it." aside={<span className="font-mono text-[11px] text-muted-foreground">{cloudRuns.length}</span>}>
+              <Group title="Cloud runs" hint="One station per run: what a run claims, comments and passes is attributed to it." aside={<span className="font-mono text-[11px] text-muted-foreground">{cloudRuns.length}{cloudQ.hasNextPage ? "+" : ""}</span>}>
                 <div className="p-3.5">
-                  <CloudRunList stations={cloudRuns} />
+                  <CloudRunList stations={cloudRuns} hasMore={!!cloudQ.hasNextPage} loadingMore={cloudQ.isFetchingNextPage} onMore={() => void cloudQ.fetchNextPage()} />
                 </div>
               </Group>
             )}

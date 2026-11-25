@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, Link2, Loader2, Pencil, Plus, Search, Trash2
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useProc, useProcCall } from "@/lib/data";
+import { useProcInfinite } from "@/lib/paging";
 import { errorMessage, errorStatus } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -69,6 +70,8 @@ function plainExcerpt(md: string): string {
 // ---------------------------------------------------------------- the view
 
 const LIMIT = 100;
+/** Memories per page of the unfiltered pantry. */
+const PAGE = 100;
 
 export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => void }) {
   const [params, setParams] = useSearchParams();
@@ -117,21 +120,21 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
     );
   };
 
-  // The unfiltered pantry feeds the tag list and the "is it empty at all" check; the filtered call only runs with a filter.
-  const all = useProc("memoryRecall", { project: potKey, query: null, kind: null, tags: null, limit: LIMIT });
+  // The unfiltered pantry (newest change first, a page at a time) feeds the list, the tag list and the "is it empty at all" check;
+  // the search runs only with a filter.
+  const all = useProcInfinite("memoryPage", { project: potKey, kind: null, tags: null }, { getCursor: (p) => p.nextCursor, pageSize: PAGE });
   const res = useProc(
     "memoryRecall",
     { project: potKey, query: q.trim() || null, kind: kind || null, tags: tags.length ? tags.join(",") : null, limit: LIMIT },
     { enabled: filtered },
   );
-  const active = filtered ? res : all;
-  const rows = active.data ?? [];
+  const rows = filtered ? (res.data ?? []) : all.items;
   const tagCounts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const r of all.data ?? []) for (const t of r.tags) m.set(t, (m.get(t) ?? 0) + 1);
+    for (const r of all.items) for (const t of r.tags) m.set(t, (m.get(t) ?? 0) + 1);
     for (const t of tags) if (!m.has(t)) m.set(t, 0);
     return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [all.data, tags]);
+  }, [all.items, tags]);
 
   const openMemory = (key: string) => setParam("memory", key);
   const closeSheet = () =>
@@ -144,7 +147,7 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
       { replace: false },
     );
 
-  const empty = !all.isLoading && !all.error && (all.data ?? []).length === 0;
+  const empty = !all.isLoading && !all.error && all.items.length === 0;
 
   return (
     <div className="max-w-5xl">
@@ -162,7 +165,7 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
           />
         </div>
         <div className="scrollbar-none -mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-0.5" role="group" aria-label="Kinds">
-          <KindChip active={!kind} onClick={() => setParam("kind", undefined)} count={(all.data ?? []).length}>
+          <KindChip active={!kind} onClick={() => setParam("kind", undefined)} count={all.items.length}>
             All
           </KindChip>
           {KINDS.map((k) => (
@@ -170,7 +173,7 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
               key={k.id}
               active={kind === k.id}
               onClick={() => setParam("kind", kind === k.id ? undefined : k.id)}
-              count={(all.data ?? []).filter((r) => r.kind === k.id).length}
+              count={all.items.filter((r) => r.kind === k.id).length}
             >
               <KindDot kind={k.id} className="size-2" /> {k.label}
             </KindChip>
@@ -220,8 +223,8 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
           <>
             <p className="label-caps px-0.5" aria-live="polite">
               {plural(rows.length, "memory", "memories")}
-              {rows.length >= LIMIT && ` (showing the first ${LIMIT})`}
-              {filtered && ` · ${(all.data ?? []).length} in the pantry`}
+              {filtered && rows.length >= LIMIT && ` (showing the first ${LIMIT})`}
+              {filtered && ` · ${all.items.length}${all.hasNextPage ? "+" : ""} in the pantry`}
             </p>
             <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5 max-md:pb-16 lg:grid-cols-2">
               {rows.map((m) => (
@@ -230,6 +233,14 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
                 </li>
               ))}
             </ul>
+            {!filtered && all.hasNextPage && (
+              <div className="flex justify-center pt-1">
+                <Button type="button" variant="outline" disabled={all.isFetchingNextPage} onClick={() => void all.fetchNextPage()}>
+                  {all.isFetchingNextPage && <Loader2 className="animate-spin" />}
+                  Show more memories
+                </Button>
+              </div>
+            )}
           </>
         )}
       </div>

@@ -211,3 +211,123 @@ async fn relay_token_on_mcp_explains_itself() {
     let text = r["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("cook token"), "{text}");
 }
+
+/// The console's `*Page` procedures are not MCP tools, and the agents' tools keep their default
+/// shapes: `list_tasks` is one array with no paging keys, `read_pass` and `get_task` carry only the
+/// additive `older` and `comments_total`.
+#[tokio::test]
+async fn page_procedures_are_not_tools_and_default_shapes_hold() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
+    let admin = tok.unwrap();
+    app.post(&admin, "/teams", json!({"name": "acme"})).await;
+    app.post(
+        &admin,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "Payments"}),
+    )
+    .await;
+    let (_, ag) = app
+        .post(
+            &admin,
+            "/agents",
+            json!({"name": "a1", "kind": "opencode", "runtime": "local"}),
+        )
+        .await;
+    app.post(&admin, "/teams/acme/members", json!({"principal": "a1"}))
+        .await;
+    let w = W {
+        agent: ag["token"].as_str().unwrap().to_string(),
+        app,
+    };
+    w.ok("create_task", json!({"project": "PAY", "title": "Base"}))
+        .await;
+    for i in 0..3 {
+        w.ok("comment", json!({"id": "PAY-1", "body": format!("c{i}")}))
+            .await;
+    }
+    w.ok("pass", json!({"project": "PAY", "message": "hello"}))
+        .await;
+
+    // tools/list holds no page procedure
+    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}});
+    let r: Value = w
+        .app
+        .http
+        .post(format!("{}/mcp", w.app.base))
+        .bearer_auth(&w.agent)
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "tools/list")
+        .header("accept", "application/json, text/event-stream")
+        .json(
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"_meta": meta}}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<&str> = r["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for n in names.iter() {
+        assert!(
+            !n.ends_with("_page") && !n.contains("page_"),
+            "{n} is a page tool"
+        );
+    }
+    for n in [
+        "task_page",
+        "question_page",
+        "review_page",
+        "memory_page",
+        "cloud_run_page",
+        "view_page",
+    ] {
+        let r = w.app.mcp(&w.agent, n, json!({})).await;
+        assert!(
+            r["isError"] == true || r.is_null(),
+            "{n} must not be callable as a tool: {r}"
+        );
+    }
+    // they are procedures on the REST surface
+    let r = w
+        .app
+        .http
+        .post(format!("{}/api/v2/$procs/taskPage", w.app.base))
+        .bearer_auth(&w.agent)
+        .json(&json!({"project": "PAY", "bucket": "active", "page": {}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    // list_tasks: a plain array of tasks, no paging fields
+    let tasks = w.ok("list_tasks", json!({"project": "PAY"})).await;
+    assert!(tasks.is_array(), "{tasks}");
+    let keys = |v: &Value| -> Vec<String> {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    assert!(
+        !keys(&tasks[0])
+            .iter()
+            .any(|k| k.contains("cursor") || k == "total")
+    );
+    // read_pass: the same keys as ever plus `older`
+    let pass = w.ok("read_pass", json!({"project": "PAY"})).await;
+    assert_eq!(keys(&pass), ["cursor", "messages", "older", "unread"]);
+    assert_eq!(pass["older"], false);
+    // get_task: every comment by default, with the count beside them
+    let t = w.ok("get_task", json!({"id": "PAY-1"})).await;
+    assert_eq!(t["comments"].as_array().unwrap().len(), 3);
+    assert_eq!(t["comments_total"], 3);
+    assert_eq!(t["comments"][0]["body"], "c0", "oldest first");
+}

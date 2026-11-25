@@ -453,3 +453,125 @@ async fn the_pass() {
     assert!(!left.iter().any(|b| b.starts_with("I take")), "{left:?}");
     assert_eq!(left.len(), 4);
 }
+
+/// `read_pass` with `before`: the newest `limit` messages below a seq, oldest first, `older` says
+/// whether more remain, and reading back through history marks nothing read.
+#[tokio::test]
+async fn read_pass_before_reads_older_and_does_not_mark_read() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
+    let root = tok.unwrap();
+    for u in ["alice", "bob"] {
+        app.add_user(u).await;
+    }
+    app.post(&root, "/teams", json!({"name": "acme"})).await;
+    for u in ["alice", "bob"] {
+        app.post(&root, "/teams/acme/members", json!({"principal": u}))
+            .await;
+    }
+    app.post(
+        &root,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "Pay"}),
+    )
+    .await;
+    let alice = admin::operator_token(&app.state.db, "alice", None)
+        .await
+        .unwrap();
+    let bob = admin::operator_token(&app.state.db, "bob", None)
+        .await
+        .unwrap();
+    for i in 1..=10 {
+        ok(
+            &app.mcp(
+                &bob,
+                "pass",
+                json!({"project": "PAY", "message": format!("m{i}")}),
+            )
+            .await,
+            "post",
+        );
+    }
+    // a direct message from bob to alice sits between: only the two of them read it
+    ok(
+        &app.mcp(
+            &bob,
+            "pass",
+            json!({"project": "PAY", "message": "psst", "to": "alice"}),
+        )
+        .await,
+        "dm",
+    );
+    let unread = |p: &Value| p["unread"]["pot"].as_i64().unwrap();
+
+    // before any read: the default call is the newest 30, unchanged but for `older`
+    let before_all = ok(
+        &app.mcp(
+            &alice,
+            "read_pass",
+            json!({"project": "PAY", "chef": "pot", "limit": 3, "before": 1_000_000}),
+        )
+        .await,
+        "before",
+    );
+    assert_eq!(bodies(&before_all), ["m8", "m9", "m10"], "{before_all}");
+    assert_eq!(before_all["older"], true);
+    assert_eq!(
+        unread(&before_all),
+        10,
+        "reading back marks nothing: {before_all}"
+    );
+    let seq_of_m8 = before_all["messages"][0]["seq"].as_i64().unwrap();
+    let older = ok(
+        &app.mcp(
+            &alice,
+            "read_pass",
+            json!({"project": "PAY", "chef": "pot", "limit": 3, "before": seq_of_m8}),
+        )
+        .await,
+        "older",
+    );
+    assert_eq!(bodies(&older), ["m5", "m6", "m7"]);
+    assert_eq!(older["older"], true);
+    let oldest = ok(
+        &app.mcp(&alice, "read_pass", json!({"project": "PAY", "chef": "pot", "limit": 10, "before": older["messages"][0]["seq"]}))
+            .await,
+        "oldest",
+    );
+    assert_eq!(bodies(&oldest), ["m1", "m2", "m3", "m4"]);
+    assert_eq!(oldest["older"], false);
+    assert_eq!(unread(&oldest), 10, "still unread");
+
+    // the plain read still marks read and says there is more behind it
+    let page = ok(
+        &app.mcp(&alice, "read_pass", json!({"project": "PAY", "limit": 4}))
+            .await,
+        "plain",
+    );
+    assert_eq!(bodies(&page), ["m8", "m9", "m10", "psst"]);
+    assert_eq!(page["older"], true);
+    assert_eq!(unread(&page), 0);
+    // someone else's direct conversation is not reachable with `before`
+    let eve_view = ok(
+        &app.mcp(
+            &alice,
+            "read_pass",
+            json!({"project": "PAY", "before": 1_000_000, "limit": 200}),
+        )
+        .await,
+        "all",
+    );
+    assert_eq!(bodies(&eve_view).len(), 11);
+    let by_bob = ok(
+        &app.mcp(
+            &bob,
+            "read_pass",
+            json!({"project": "PAY", "chef": "pot", "before": 1_000_000, "limit": 200}),
+        )
+        .await,
+        "pot only",
+    );
+    assert_eq!(bodies(&by_bob).len(), 10, "the dm is not on the pot");
+}

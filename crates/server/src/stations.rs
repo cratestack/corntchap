@@ -387,6 +387,58 @@ pub async fn list(
     Ok(Value::Array(rows))
 }
 
+/// A page of cloud runs for the console (`cloudRunPage`), newest first (created_at desc, ref),
+/// ended ones too; same visibility as [`list`] with `kind = cloud-run`.
+pub async fn run_page(
+    db: &PgPool,
+    p: &Principal,
+    project: Option<&str>,
+    cook: Option<&str>,
+    live: Option<bool>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "-created_at,ref",
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let who = admin::acting_or_self(db, p).await?;
+    let sql = format!(
+        "select {STATION_JSON}, array[st.created_at::text, st.ref]
+         from stations st join principals a on a.id = st.agent_id
+         join projects pr on pr.id = st.project_id
+         where ($1 or a.id = $2 or a.owner_id = $2
+                or ($5 and exists (select 1 from team_members m
+                                   where m.team_id = pr.team_id and m.principal_id = $2 and m.role = 'owner')))
+           and ($3::text is null or pr.key = $3)
+           and ($4::text is null or a.name = $4)
+           and st.kind = 'cloud-run'
+           and ($6::bool is null or $6 = (st.ended_at is null))
+           and ($7::text is null or st.created_at < $7::text::timestamptz
+                or (st.created_at = $7::text::timestamptz and st.ref > $8))
+         order by st.created_at desc, st.ref limit $9"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(who.is_super_admin())
+        .bind(who.id)
+        .bind(project.map(|k| k.trim().to_uppercase()))
+        .bind(cook.map(|c| c.trim().to_lowercase()))
+        .bind(who.can_orchestrate())
+        .bind(live)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .fetch_all(db)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 /// Make a station its cook's main one in its pot (the session that answers messages and mentions),
 /// or stop it being the main one. The cook itself, its owner (or a cook acting for them) and
 /// admins may.

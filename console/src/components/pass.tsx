@@ -110,7 +110,7 @@ export function PassView({ potKey }: { potKey: string }) {
 
   const refetchProjects = useRef(projects.refetch);
   refetchProjects.current = projects.refetch;
-  const { page, latest, isLoading, error } = usePass(potKey, withWho, () => void refetchProjects.current());
+  const { page, latest, isLoading, error, hasOlder, loadingOlder, loadOlder } = usePass(potKey, withWho, () => void refetchProjects.current());
   const signals = useWakeSignals(potKey, true);
 
   // the open conversation keeps its own list preview fresh
@@ -268,6 +268,9 @@ export function PassView({ potKey }: { potKey: string }) {
           taskKeys={taskKeys}
           signals={signals}
           actions={{ reply: (text) => setSeed({ text, n: (seed?.n ?? 0) + 1 }), direct: select }}
+          hasOlder={hasOlder}
+          loadingOlder={loadingOlder}
+          onLoadOlder={loadOlder}
         />
         <Composer potKey={potKey} withWho={withWho} chefs={chefs} cook={withCook} seed={seed} />
       </section>

@@ -22,7 +22,8 @@ mutation procedure repoAddMany(project: String, repos: String): ReposAdded
 /// @param project Pot key: marks the repositories already in it, and checks you may add to it. Admins may leave it out.
 /// @param query Keep only repositories whose full name contains this text.
 /// @param installation Only this GitHub App installation (its id, see the Forges page).
-procedure forgeRepos(project: String?, query: String?, installation: Int?): ForgeRepos
+/// @param limit Show at most this many repositories (default and most: all); `total` still counts every match.
+procedure forgeRepos(project: String?, query: String?, installation: Int?, limit: Int?): ForgeRepos
   @allow(auth() != null)
   @mcp(tool: "list_forge_repos", description: "List the repositories the connected GitHub Apps can see, most recently pushed first (archived last), with in_pot marking those already in the pot. Same people as add_repo (owners of the pot's team, super-admins, cooks with `manage`); without a project, super-admins only. Then add some with add_repos. Empty and connected=false: a super-admin connects a GitHub App on the Forges page.")
 

@@ -226,3 +226,143 @@ async fn activity_is_recorded_coalesced_and_private() {
     corntchap::jobs::retain(&app.state).await.unwrap();
     assert_eq!(count(&app, "activity").await, 1);
 }
+
+/// `changes_since` with `before`: the newest `limit` events below a seq, oldest first, with `older`
+/// saying whether more remain; the default call keeps its shape and a person never sees what is
+/// not theirs.
+#[tokio::test]
+async fn changes_since_reads_back_with_before() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
+    let root = tok.unwrap();
+    for u in ["alice", "bob"] {
+        app.add_user(u).await;
+    }
+    for (team, who, key) in [("acme", "alice", "PAY"), ("other", "bob", "OTH")] {
+        app.post(&root, "/teams", json!({"name": team})).await;
+        app.post(
+            &root,
+            &format!("/teams/{team}/members"),
+            json!({"principal": who}),
+        )
+        .await;
+        app.post(
+            &root,
+            "/projects",
+            json!({"team": team, "key": key, "name": key}),
+        )
+        .await;
+    }
+    let alice = admin::operator_token(&app.state.db, "alice", None)
+        .await
+        .unwrap();
+    let bob = admin::operator_token(&app.state.db, "bob", None)
+        .await
+        .unwrap();
+    for i in 0..9 {
+        app.post(
+            &alice,
+            "/projects/PAY/tasks",
+            json!({"title": format!("t{i}")}),
+        )
+        .await;
+    }
+    app.post(&bob, "/projects/OTH/tasks", json!({"title": "secret"}))
+        .await;
+    let all = app
+        .mcp(
+            &alice,
+            "changes_since",
+            json!({"cursor": 0, "project": "PAY", "limit": 500}),
+        )
+        .await;
+    let all = common::TestApp::payload(&all);
+    let seqs: Vec<i64> = all["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["seq"].as_i64().unwrap())
+        .collect();
+    assert_eq!(seqs.len(), 9, "{all}");
+    assert_eq!(
+        all["older"], false,
+        "the default call reads from the start: {all}"
+    );
+
+    // newest 4 before the last one: seqs[4..8], oldest first, with older events remaining
+    let last = *seqs.last().unwrap();
+    let page = common::TestApp::payload(
+        &app.mcp(
+            &alice,
+            "changes_since",
+            json!({"cursor": 0, "project": "PAY", "limit": 4, "before": last}),
+        )
+        .await,
+    );
+    let got: Vec<i64> = page["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["seq"].as_i64().unwrap())
+        .collect();
+    assert_eq!(got, seqs[4..8], "{page}");
+    assert_eq!(page["older"], true);
+    // and the one before that
+    let page = common::TestApp::payload(
+        &app.mcp(
+            &alice,
+            "changes_since",
+            json!({"cursor": 0, "project": "PAY", "limit": 4, "before": got[0]}),
+        )
+        .await,
+    );
+    let got2: Vec<i64> = page["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["seq"].as_i64().unwrap())
+        .collect();
+    assert_eq!(got2, seqs[0..4]);
+    assert_eq!(page["older"], false, "that is the start: {page}");
+    // nothing before the first event
+    let page = common::TestApp::payload(
+        &app.mcp(
+            &alice,
+            "changes_since",
+            json!({"cursor": 0, "project": "PAY", "before": seqs[0]}),
+        )
+        .await,
+    );
+    assert!(page["events"].as_array().unwrap().is_empty());
+    assert_eq!(page["older"], false);
+    // REST takes it too; another team's pot is not found, as without `before`
+    let (st, v) = app
+        .get(
+            &alice,
+            &format!("/changes?project=PAY&limit=2&before={last}"),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["events"].as_array().unwrap().len(), 2);
+    let (st, _) = app.get(&bob, "/changes?project=PAY&before=100").await;
+    assert_eq!(st, 404);
+    // without a project a person reads their own pots' history only
+    let page = common::TestApp::payload(
+        &app.mcp(
+            &bob,
+            "changes_since",
+            json!({"cursor": 0, "limit": 100, "before": 100000}),
+        )
+        .await,
+    );
+    assert!(
+        page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["project"] == "OTH"),
+        "{page}"
+    );
+}

@@ -4,8 +4,10 @@ import type { MenuView, ProjectSummary, TaskView } from "@corntchap/api";
 import type { ViewOut } from "@corntchap/api";
 import { Check, ChevronDown, GitBranch, Pencil, Plus, Settings2, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useProc, useProjects, useQuestions } from "@/lib/data";
-import { useLive } from "@/lib/live";
+import { useProc, useProjects } from "@/lib/data";
+import { useBoardData } from "@/lib/board";
+import { KEEP, useLive } from "@/lib/live";
+import { useOlderEvents } from "@/lib/older-events";
 import { useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { BUCKETS, bucketOf, plural, type Bucket } from "@/lib/format";
@@ -34,7 +36,7 @@ import { PaletteButton } from "@/components/shell";
 import { RefreshButton } from "@/components/refresh-button";
 import { EventFeed } from "@/components/event-feed";
 import { TaskGroup, groupTasks } from "@/components/task-views";
-import { BoardView } from "@/components/board";
+import { BoardView, useColumns } from "@/components/board";
 import { TaskSheet } from "@/components/task-sheet";
 import { NewMemoryDialog, PantryView } from "@/components/pantry";
 import { MenuDialog, MenuStrip, MenusView, useMenus } from "@/components/menus";
@@ -103,19 +105,18 @@ export function KitchenPage() {
   const { openNewTask } = useUi();
   const projects = useProjects();
   const project = projects.data?.find((p) => p.key === potKey);
-  const tasks = useProc("projectTasks", { project: potKey }, { enabled: !!project && !viewKey });
   const saved = useViews(potKey, !!project);
   const savedView = viewKey ? saved.views.find((v) => v.key === viewKey) : undefined;
   const [viewDialog, setViewDialog] = useState<{ open: boolean; view: ViewOut | null }>({ open: false, view: null });
   const [deleting, setDeleting] = useState<ViewOut | null>(null);
   const taskView = !!viewKey || base === "board";
   const { events } = useLive();
-  const me = useSession();
   const filters = readFilters(params);
+  const board = useBoardData(potKey, filters, !!project && !viewKey && base === "board");
   const selected = params.get("task");
   const [newMemory, setNewMemory] = useState(false);
   const [asking, setAsking] = useState(false);
-  const openQuestions = useQuestions(potKey, "open", !!project).data?.length ?? 0;
+  const openQuestions = project?.open_questions ?? 0;
   const [menuDialog, setMenuDialog] = useState<{ open: boolean; menu: MenuView | null }>({ open: false, menu: null });
   const menus = useMenus(potKey, !!project);
 
@@ -182,8 +183,7 @@ export function KitchenPage() {
     );
   }
 
-  const all = tasks.data ?? [];
-  const visible = applyFilters(all, filters, me.name);
+  const all = board.options;
   const potEvents = events.filter((e) => e.project === potKey);
   const selectedMenu = filters.menu ? menus.menus.find((m) => m.key === filters.menu) : undefined;
   // while one menu is selected every row is on it, so the chip would only repeat the strip
@@ -239,8 +239,8 @@ export function KitchenPage() {
             menus={chipNames}
           />
         ) : null}
-        {!viewKey && base === "board" && <BoardView loading={tasks.isLoading} tasks={visible} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} total={all.length} menus={chipNames} />}
-        {!viewKey && base === "activity" && <ActivityView events={potEvents} />}
+        {!viewKey && base === "board" && <BoardView loading={board.loading} columns={board} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} bare={board.bare} menus={chipNames} />}
+        {!viewKey && base === "activity" && <ActivityView potKey={potKey} events={potEvents} />}
         {!viewKey && base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
         {!viewKey && base === "files" && <FilesView potKey={potKey} />}
         {!viewKey && base === "pass" && <PassView potKey={potKey} />}
@@ -855,6 +855,9 @@ function SavedViewBody({
 }) {
   const me = useSession();
   const run = useProc("viewRun", { project: potKey, key: view?.key ?? null }, { enabled: !!view });
+  const tasks = run.data ?? [];
+  const visible = applyFilters(tasks, filters, me.name);
+  const columns = useColumns(visible, true);
   if (loadingViews) return <RowSkeleton rows={4} />;
   if (!view) {
     return (
@@ -863,8 +866,6 @@ function SavedViewBody({
       </EmptyState>
     );
   }
-  const tasks = run.data ?? [];
-  const visible = applyFilters(tasks, filters, me.name);
   if (run.error && !run.isLoading) {
     return (
       <EmptyState band={false} title="This view would not run">
@@ -896,7 +897,7 @@ function SavedViewBody({
       keepOrder
     />
   ) : (
-    <BoardView loading={run.isLoading} tasks={visible} selected={selected} onOpen={onOpen} onNew={() => undefined} total={tasks.length} menus={menus} keepOrder />
+    <BoardView loading={run.isLoading} columns={columns} selected={selected} onOpen={onOpen} onNew={() => undefined} bare={tasks.length === 0} menus={menus} />
   );
 }
 
@@ -993,10 +994,13 @@ const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[
   { id: "edits", label: "New and edited", match: (k) => k === "task.created" || k === "task.updated" },
 ];
 
-function ActivityView({ events }: { events: ReturnType<typeof useLive>["events"] }) {
+function ActivityView({ potKey, events: liveEvents }: { potKey: string; events: ReturnType<typeof useLive>["events"] }) {
   const [kind, setKind] = useState("all");
   const [actor, setActor] = useState<string>("");
-  const { ready } = useLive();
+  const { ready, events: everyEvent } = useLive();
+  // the live feed keeps the latest 400 events of every pot: when it is full, history lies behind it
+  const history = useOlderEvents(potKey, liveEvents, everyEvent.length >= KEEP);
+  const events = history.events;
   const actors = useMemo(() => [...new Set(events.map((e) => e.actor).filter((a): a is string => !!a))].sort(), [events]);
   const filtered = useMemo(() => {
     const m = KIND_GROUPS.find((g) => g.id === kind)!.match;
@@ -1044,7 +1048,7 @@ function ActivityView({ events }: { events: ReturnType<typeof useLive>["events"]
             {events.length === 0 ? "Events show up here as cooks scoop, tick and serve." : plural(events.length, "event") + " hidden by the filters."}
           </EmptyState>
         ) : (
-          <EventFeed events={filtered} />
+          <EventFeed events={filtered} hasOlder={history.hasOlder} loadingOlder={history.loadingOlder} onLoadOlder={history.loadOlder} />
         )}
       </div>
     </div>

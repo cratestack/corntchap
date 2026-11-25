@@ -3,7 +3,8 @@ import type { ChangeView } from "@corntchap/api";
 import { CONSOLE_HEADER, client, errorStatus, redirectToLogin } from "./api";
 import { useInvalidateAll } from "./data";
 
-const KEEP = 400;
+/** How many events the live feed keeps; older ones are read on request (`useOlderEvents`). */
+export const KEEP = 400;
 /** Coalesce bursts of events (a claim emits several) into one refetch. */
 const INVALIDATE_MS = 250;
 
@@ -21,8 +22,8 @@ const Ctx = createContext<LiveState>({ events: [], status: "connecting", ready: 
 /**
  * Catches up once with `changesSince`, then follows `/api/v1/events/stream` (SSE read through `fetch`, so the
  * console header and session cookie go along), resuming from the last seen event after any disconnect. New
- * events extend the activity feed and invalidate every query (all data queries are small, so touching
- * everything is cheaper than mapping event kinds to resources).
+ * events extend the activity feed and refresh every query through `invalidateData` (all data queries are small, so
+ * touching everything is cheaper than mapping event kinds to resources; paging lists refresh their first page).
  */
 export function LiveProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<ChangeView[]>([]);

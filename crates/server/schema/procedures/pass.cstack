@@ -19,6 +19,7 @@ mutation procedure passPost(project: String, message: String, to: String?, task:
 /// @param chef A chef's name for your direct conversation with them, or `pot` for the pass only; leave out for both.
 /// @param after Only messages after this seq (the cursor of your last read).
 /// @param limit How many (default 30, at most 200); the newest ones when `after` is not given.
-procedure passRead(project: String, chef: String?, after: Int?, limit: Int?): PassPage
+/// @param before Only messages before this seq: the newest `limit` of them, oldest first. Reading them does not mark anything read.
+procedure passRead(project: String, chef: String?, after: Int?, limit: Int?, before: Int?): PassPage
   @allow(auth() != null)
   @mcp(tool: "read_pass", description: "Read a pot's pass and your direct messages, oldest first, and what is still unread. Read it when you start on a pot and when a wake says someone wrote to you. What you read counts as read.")

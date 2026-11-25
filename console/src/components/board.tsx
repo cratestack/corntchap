@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from "react";
 import type { TaskView } from "@corntchap/api";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { BucketMore } from "@/lib/board";
 import { BUCKETS, type Bucket } from "@/lib/format";
 import { useIsPhone } from "@/lib/media";
 import { Button } from "@/components/ui/button";
@@ -10,36 +12,48 @@ import { TaskCard, groupTasks } from "./task-views";
 
 const BOARD_COLS: Bucket[] = ["ready", "claimed", "waiting", "done", "cancelled"];
 
+/** What a board shows: the tasks of each column, how many the server counts there, and how to load more. */
+export interface BoardColumns {
+  groups: Record<Bucket, TaskView[]>;
+  totals?: Partial<Record<Bucket, number>>;
+  more?: Partial<Record<Bucket, BucketMore>>;
+}
+
+/** A saved view's tasks, bucketed (`keepOrder`: the view's own order). */
+export function useColumns(tasks: TaskView[], keepOrder: boolean): BoardColumns {
+  const groups = useMemo(() => groupTasks(tasks, keepOrder), [tasks, keepOrder]);
+  return useMemo(() => ({ groups }), [groups]);
+}
+
 export function BoardView({
   loading,
-  tasks,
+  columns,
   selected,
   onOpen,
   onNew,
-  total,
+  bare,
   menus,
-  keepOrder = false,
 }: {
   loading: boolean;
-  tasks: TaskView[];
+  columns: BoardColumns;
   selected: string | null;
   onOpen: (id: string) => void;
   onNew: () => void;
-  total: number;
+  /** Nothing on the board at all. */
+  bare: boolean;
   menus: Record<string, string>;
-  keepOrder?: boolean;
 }) {
-  const groups = useMemo(() => groupTasks(tasks, keepOrder), [tasks, keepOrder]);
+  const groups = columns.groups;
   const phone = useIsPhone();
   if (loading) return <BoardSkeleton phone={phone} />;
-  if (total === 0) {
+  if (bare) {
     return (
       <EmptyState title="The board is bare" action={<Button onClick={onNew}>New task</Button>}>
         Tasks go from ready to scoop, to on the fire, to served; a task waiting on a person or a dependency sits in between, and tossed ones are kept aside.
       </EmptyState>
     );
   }
-  if (phone) return <PhoneBoard groups={groups} selected={selected} onOpen={onOpen} menus={menus} />;
+  if (phone) return <PhoneBoard columns={columns} selected={selected} onOpen={onOpen} menus={menus} />;
   return (
     <div
       role="region"
@@ -51,6 +65,7 @@ export function BoardView({
         {BOARD_COLS.map((id) => {
           const meta = BUCKETS.find((b) => b.id === id)!;
           const col = groups[id];
+          const more = columns.more?.[id];
           return (
             <VirtualColumn
               key={id}
@@ -60,19 +75,32 @@ export function BoardView({
                 <h2 className="flex items-center gap-2 px-4 pt-3.5 pb-2.5 text-[15px]">
                   <span className={cn("size-2.5 rounded-full", BUCKET_DOT[id], id === "claimed" && "live-dot")} aria-hidden="true" />
                   {meta.label}
-                  <span className="font-mono text-[11.5px] font-normal text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
-                    {col.length}
-                  </span>
+                  <span className="font-mono text-[11.5px] font-normal text-muted-foreground">{columns.totals?.[id] ?? col.length}</span>
                 </h2>
               }
               items={col}
               itemKey={(t) => t.id}
               empty={<p className="px-2 py-5 text-center text-[12.5px] text-muted-foreground">Nothing here.</p>}
+              onEndReached={more?.has ? more.load : undefined}
+              footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
               renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
             />
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/** After a column's last card: a spinner while the next page loads, or a button when the end was not reached by scrolling. */
+function MoreFooter({ more, loaded, total }: { more: BucketMore | undefined; loaded: number; total: number | undefined }) {
+  if (!more?.has) return null;
+  return (
+    <div className="flex justify-center px-2 pb-3">
+      <Button type="button" variant="ghost" size="sm" disabled={more.loading} onClick={more.load} className="text-[12.5px] text-muted-foreground">
+        {more.loading && <Loader2 className="animate-spin" />}
+        {more.loading ? "Loading" : total ? `Show more (${loaded} of ${total})` : "Show more"}
+      </Button>
     </div>
   );
 }
@@ -107,16 +135,17 @@ function BoardSkeleton({ phone }: { phone: boolean }) {
 
 /** Phone board: one column per screen (snap scrolling) and a sticky segmented control that jumps between them. */
 function PhoneBoard({
-  groups,
+  columns,
   selected,
   onOpen,
   menus,
 }: {
-  groups: Record<Bucket, TaskView[]>;
+  columns: BoardColumns;
   selected: string | null;
   onOpen: (id: string) => void;
   menus: Record<string, string>;
 }) {
+  const groups = columns.groups;
   const scroller = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
   const start = () => {
@@ -162,7 +191,7 @@ function PhoneBoard({
                 <span className={cn("size-1.5 rounded-full", BUCKET_DOT[id], id === "claimed" && groups[id].length > 0 && "live-dot")} aria-hidden="true" />
                 {BOARD_SHORT[id]}
               </span>
-              <span className="font-mono text-[11px] tabular-nums" style={{ fontFamily: "var(--font-mono)" }}>{groups[id].length}</span>
+              <span className="font-mono text-[11px] tabular-nums">{columns.totals?.[id] ?? groups[id].length}</span>
             </button>
           ))}
         </div>
@@ -177,20 +206,24 @@ function PhoneBoard({
         {BOARD_COLS.map((id) => {
           const meta = BUCKETS.find((b) => b.id === id)!;
           const col = groups[id];
+          const more = columns.more?.[id];
+          const count = columns.totals?.[id] ?? col.length;
           return (
             <VirtualColumn
               key={id}
               scroll="window"
-              aria-label={`${meta.label}, ${col.length}`}
+              aria-label={`${meta.label}, ${count}`}
               className={cn("w-[85vw] shrink-0 snap-start p-2", id === "cancelled" && "opacity-80")}
               header={
                 <h2 className="sr-only">
-                  {meta.label}, {col.length}
+                  {meta.label}, {count}
                 </h2>
               }
               items={col}
               itemKey={(t) => t.id}
               empty={<p className="px-2 py-8 text-center text-[13px] text-muted-foreground">{BOARD_EMPTY[id]}</p>}
+              onEndReached={more?.has ? more.load : undefined}
+              footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
               renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
             />
           );

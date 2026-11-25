@@ -74,3 +74,10 @@ mutation procedure questionNote(id: String, note: String): QuestionView
 mutation procedure questionDismiss(id: String, reason: String?): QuestionView
   @allow(auth() != null)
   @mcp(tool: "dismiss_question", description: "Close a question without an answer (people, or the cook that asked it). A parked task goes back to its cook.")
+
+/// A page of a pot's question pool, for the console (not an MCP tool).
+/// @param project Pot key, e.g. PAY.
+/// @param status open (default, oldest first), answered, dismissed or all (newest first).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure questionPage(project: String, status: String?, page: CursorPageInput): CursorPage<QuestionView>
+  @allow(auth() != null)

@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useCallback, useMemo } from "react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ActivityView, PassMessageView, PassPage, StationView, WokenRef } from "@corntchap/api";
 import { client } from "@/lib/api";
 import { useAgents, useProc, type AgentRow } from "@/lib/data";
@@ -19,24 +19,62 @@ export function wokenName(w: WokenRef): string {
 
 export const isEveryone = (body: string) => /(^|\s)@(all|everyone)\b/i.test(body);
 
+/** Older messages asked for at a time when scrolling back. */
+const OLDER_PAGE = 50;
+
+/** Messages by seq, once each, oldest first. */
+function bySeq(a: PassMessageView[], b: PassMessageView[]): PassMessageView[] {
+  const m = new Map<number, PassMessageView>();
+  for (const x of a) m.set(x.seq, x);
+  for (const x of b) m.set(x.seq, x);
+  return [...m.values()].sort((x, y) => x.seq - y.seq);
+}
+
 /**
- * One conversation of a pot's pass, newest 100 messages. Reading marks them read on the server, so the pot
- * summaries (the unread badges) are refreshed after each read. Lives under ["data"], so `pass.posted` live
- * events (which invalidate everything) refetch it.
+ * One conversation of a pot's pass: the newest 100 messages, and older ones on request (`loadOlder`, through
+ * passRead's `before`, which marks nothing read). Reading marks the newest messages read on the server, so the
+ * pot summaries (the unread badges) are refreshed after each read. Lives under ["data"], so `pass.posted` live
+ * events (which invalidate everything) refetch the newest messages; those are merged into what is loaded, so the
+ * older messages already scrolled back to stay.
  */
 export function usePass(pot: string, withWho: string, onRead: () => void) {
+  const qc = useQueryClient();
+  const key = useMemo(() => ["data", "pass", pot, withWho] as const, [pot, withWho]);
   const q = useQuery({
-    queryKey: ["data", "pass", pot, withWho],
+    queryKey: key,
     queryFn: async (): Promise<PassPage> => {
       const page = await client.procedures.passRead({ project: pot, chef: withWho, limit: 100 });
       if (page.messages.length > 0) onRead();
-      return page;
+      const had = qc.getQueryData<PassPage>(key);
+      if (!had || had.messages.length === 0) return page;
+      // older messages loaded earlier stay; whether still older ones exist is the oldest loaded one's answer
+      const reachesBack = (had.messages[0]?.seq ?? Infinity) < (page.messages[0]?.seq ?? Infinity);
+      return { ...page, messages: bySeq(had.messages, page.messages), older: reachesBack ? had.older : page.older };
     },
     staleTime: 1500,
     placeholderData: (prev) => prev,
   });
+  const older = useMutation({
+    mutationFn: async () => {
+      const have = qc.getQueryData<PassPage>(key);
+      const first = have?.messages[0]?.seq;
+      if (!have || first === undefined) return;
+      const page = await client.procedures.passRead({ project: pot, chef: withWho, limit: OLDER_PAGE, before: first });
+      qc.setQueryData<PassPage>(key, (cur) => (cur ? { ...cur, messages: bySeq(page.messages, cur.messages), older: page.older } : cur));
+    },
+  });
+  const loadOlder = older.mutate;
   // while another conversation loads, `latest` still carries the unread counts; the messages are not shown
-  return { page: q.isPlaceholderData ? undefined : q.data, latest: q.data, isLoading: q.isLoading || q.isPlaceholderData, error: q.error as unknown };
+  const shown = q.isPlaceholderData ? undefined : q.data;
+  return {
+    page: shown,
+    latest: q.data,
+    isLoading: q.isLoading || q.isPlaceholderData,
+    error: q.error as unknown,
+    hasOlder: !!shown?.older,
+    loadingOlder: older.isPending,
+    loadOlder: useCallback(() => loadOlder(), [loadOlder]),
+  };
 }
 
 // ---------------------------------------------------------------- previews

@@ -49,3 +49,11 @@ mutation procedure memoryRemember(project: String, title: String?, body: String,
 mutation procedure memoryForget(project: String, key: String, notify: Boolean?, station: String?): OkResult
   @allow(auth() != null)
   @mcp(tool: "forget", description: "Delete a pantry memory that is wrong or obsolete. Agents can only forget memories they saved themselves; otherwise correct it with remember.")
+
+/// A page of a project's pantry, most recently changed first, for the console (not an MCP tool; searching stays memoryRecall).
+/// @param project Project key, e.g. PAY.
+/// @param kind Only this kind.
+/// @param tags Comma-separated tags that must all be present.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure memoryPage(project: String, kind: String?, tags: String?, page: CursorPageInput): CursorPage<MemoryView>
+  @allow(auth() != null)

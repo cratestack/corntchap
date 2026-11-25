@@ -9,17 +9,23 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { errorMessage } from "@/lib/api";
 import { useProc, useProcCall } from "@/lib/data";
+import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 
 /**
  * "Add from GitHub": pick several of a pot's repositories from what the connected GitHub Apps can see.
- * The list is fetched once per opening and filtered here; the server marks those already in the pot.
+ * The search text goes to the server (debounced) with a limit, so a big account does not ship all its repositories at once;
+ * the list is also filtered here while the answer is on its way. The server marks those already in the pot.
  * A full-height sheet on a phone, a dialog beside it.
  */
+/** Repositories asked for at a time. */
+const SHOWN = 100;
+
 export function AddFromGithubDialog({ project, open, onOpenChange }: { project: string; open: boolean; onOpenChange: (o: boolean) => void }) {
   const call = useProcCall();
-  const list = useProc("forgeRepos", { project, query: null, installation: null }, { enabled: open });
   const [q, setQ] = useState("");
+  const query = useDebounced(q.trim(), 300);
+  const list = useProc("forgeRepos", { project, query: query || null, installation: null, limit: SHOWN }, { enabled: open, keepPrevious: true });
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -106,7 +112,9 @@ export function AddFromGithubDialog({ project, open, onOpenChange }: { project: 
               </p>
             ))}
             <div className="flex items-center justify-between gap-3 text-[12.5px] text-muted-foreground">
-              <span aria-live="polite">{visible.length} shown</span>
+              <span aria-live="polite">
+                {visible.length} shown{list.data && list.data.total > repos.length ? ` of ${list.data.total} (type to narrow)` : ""}
+              </span>
               <Button
                 type="button"
                 variant="ghost"

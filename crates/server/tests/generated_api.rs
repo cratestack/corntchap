@@ -677,12 +677,16 @@ async fn files_and_questions_models_follow_the_pot() {
         .await;
     assert_eq!(st, 200, "{v}");
     assert_eq!(rows(&v).len(), 1, "deleted files are not listed: {v}");
+    // the File model is @@paged: a page with its total, and keyset cursors (tests/paging.rs walks them)
+    assert_eq!(v["totalCount"], 1, "{v}");
+    assert_eq!(v["pageInfo"]["hasNextPage"], false, "{v}");
     assert!(
         !v.to_string().contains("storage"),
         "storage keys stay on the server: {v}"
     );
     let (_, v) = w.v2(&w.bob, Method::GET, "/files", None).await;
     assert!(rows(&v).is_empty(), "another team's files: {v}");
+    assert_eq!(v["totalCount"], 0, "{v}");
     let (_, v) = w.v2(&w.alice, Method::GET, "/questions", None).await;
     assert_eq!(rows(&v).len(), 1);
     let (_, v) = w.v2(&w.bob, Method::GET, "/questions", None).await;
