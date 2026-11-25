@@ -184,6 +184,18 @@ const loadsOf = (page) => page.evaluate(() => { const o = document.querySelector
   const loads = await loadsOf(page);
   check("board phone: scrolling Served loads Served", loads.done >= 5, JSON.stringify(loads));
   check("board phone: no other column loads", loads.ready === 0 && loads.claimed === 0 && loads.waiting === 0 && loads.cancelled === 0, JSON.stringify(loads));
+  // Ready's end went by while Served was in view: brought into view, it still loads more; the tab jump slides past
+  // On the fire and Waiting, which do not load
+  await page.getByRole("tab", { name: /^Ready/ }).click();
+  await page.waitForTimeout(800);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  for (let i = 0; i < 25; i++) {
+    await page.evaluate(() => window.scrollBy(0, innerHeight * 0.8));
+    await page.waitForTimeout(150);
+  }
+  const after = await loadsOf(page);
+  check("board phone: a column passed by loads when it comes into view", after.ready >= 1, JSON.stringify(after));
+  check("board phone: still no hidden column loads", after.claimed === 0 && after.waiting === 0 && after.cancelled === 0, JSON.stringify(after));
   check("board phone: no page errors", errors.length === 0, errors.join("|"));
   await page.close();
 }

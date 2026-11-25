@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import type { TaskView } from "@corntchap/api";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -84,7 +84,12 @@ export function BoardView({
               }
               items={col}
               itemKey={(t) => t.id}
-              empty={<p className="px-2 py-5 text-center text-[12.5px] text-muted-foreground">Nothing here.</p>}
+              empty={
+                <>
+                  <p className="px-2 py-5 text-center text-[12.5px] text-muted-foreground">{more?.has ? "Nothing here yet." : "Nothing here."}</p>
+                  <MoreFooter more={more} loaded={0} total={columns.totals?.[id]} />
+                </>
+              }
               onEndReached={more?.has ? more.load : undefined}
               footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
               renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
@@ -96,7 +101,11 @@ export function BoardView({
   );
 }
 
-/** After a column's last card: a spinner while the next page loads, or a button when the end was not reached by scrolling. */
+/**
+ * After a column's last card: a spinner while the next page loads, or a button when the end was not reached by
+ * scrolling. Under an empty column too: a saved view is one list bucketed here, so a column can be empty while the
+ * view has more to load.
+ */
 function MoreFooter({ more, loaded, total }: { more: BucketMore | undefined; loaded: number; total: number | undefined }) {
   if (!more?.has) return null;
   return (
@@ -155,6 +164,22 @@ function PhoneBoard({
   const scroller = useRef<HTMLDivElement>(null);
   // the column in view: only it loads more, however the page is scrolled
   const { value: active, set: setActive } = useStoreValue(0);
+  // Columns whose end came into view while another one was in view. The list says so once per length, so a column
+  // that was passed by (the page is as tall as its longest column) would never load more by scrolling: it loads its
+  // next page when it comes into view instead.
+  const passed = useRef(new Set<Bucket>());
+  const loadPassed = useEffectEvent((id: Bucket) => {
+    if (!passed.current.delete(id)) return;
+    const more = columns.more?.[id];
+    if (more?.has) more.load();
+  });
+  useEffect(() => {
+    const id = BOARD_COLS[active];
+    if (!id) return;
+    // after a moment in view: the columns a tab jump only slides past do not load
+    const t = setTimeout(() => loadPassed(id), 400);
+    return () => clearTimeout(t);
+  }, [active]);
   const start = () => {
     const el = scroller.current;
     return el ? parseFloat(getComputedStyle(el).paddingLeft) || 0 : 0;
@@ -228,8 +253,16 @@ function PhoneBoard({
               }
               items={col}
               itemKey={(t) => t.id}
-              empty={<p className="px-2 py-8 text-center text-[13px] text-muted-foreground">{BOARD_EMPTY[id]}</p>}
-              onEndReached={more?.has && i === active ? more.load : undefined}
+              empty={
+                <>
+                  <p className="px-2 py-8 text-center text-[13px] text-muted-foreground">{more?.has ? "Nothing here yet." : BOARD_EMPTY[id]}</p>
+                  <MoreFooter more={more} loaded={0} total={columns.totals?.[id]} />
+                </>
+              }
+              onEndReached={() => {
+                if (i !== active) passed.current.add(id);
+                else if (more?.has) more.load();
+              }}
               footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
               renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
             />
