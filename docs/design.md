@@ -61,9 +61,11 @@ In JS, `useIsPhone()` and `useIsDesktop()` come from `src/lib/media.ts`. Prefer 
 - Touch targets are at least 44px (`pointer-coarse:` sizes on `Button`). Rows are at least 48px. Never rely on hover alone: a hover-only action needs a visible or long-press path on touch.
 - Inputs are 16px on phones, set globally so iOS doesn't zoom on focus.
 - Anything fixed to the bottom clears the tab bar: use the `bottom-tabbar` and `pb-tabbar` utilities. Respect `env(safe-area-inset-*)`, since the page uses `viewport-fit=cover`.
-- Lists over tables: a table on a phone becomes stacked cards or two-line rows (title on line one, mono meta on line two). Horizontal scroll is only for boards and code.
-- Board: one column per screen width (`snap-x snap-mandatory`, columns about 85vw), with a status segmented control or chips to jump between columns.
+- Lists over tables: a table on a phone becomes stacked cards or two-line rows (title on line one, mono meta on line two). Nothing scrolls sideways but code blocks and wide markdown tables, inside their own box.
+- Board: a tab strip sticky under the top bar (one tab per column, with its total; `?col=` in the URL) and the open column below it; the page scrolls through the column and each tab keeps its scroll position. Tablets and laptops get the same tabs: columns sit side by side only when all five fit.
 - Sheets and dialogs scroll inside themselves (`min-h-0 flex-1 overflow-y-auto`). Keep primary actions in a sticky footer.
+
+**One scroll.** Every page scrolls vertically with the window, at every screen size: no fixed-height panes, no horizontal page scroll. Virtualized lists use `scroll="window"`. The board shows its five columns side by side only when all five fit in one row (17rem each, so a board about 1416px wide: a 1920px desktop), each as tall as its cards and paging when its end comes into view; anywhere narrower it is the tab strip and one column. It never wraps columns onto a second row: a column below one that pages forever could never be reached. The choice is made on the board's own width (a ResizeObserver, `useAtLeastWide`), not the window's. The only inner scrollers are the chat thread (bottom-anchored), popovers and menus, dialogs and sheets over the page, and the app sidebar (navigation chrome). `scripts/ui/page-scroll.mjs` checks this on the Storybook stories at 320, 375, 768, 1280 and 1920 px.
 
 **Tablet.** Use the space for list and detail side by side where it helps (task list plus detail, pass plus thread). Keep desktop density, but with touch-size targets.
 

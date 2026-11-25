@@ -465,7 +465,7 @@ export function PotsAdminPage() {
                   </TD>
                   <TD>
                     {p.name}
-                    {p.repo_url && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{p.repo_url}</span>}
+                    {p.repo_url && <span className="ml-2 font-mono text-[11px] break-all text-muted-foreground">{p.repo_url}</span>}
                   </TD>
                   <TD>{p.team ?? "-"}</TD>
                   <TD className="font-mono text-[12px]">{Math.round(p.lease_ttl_s / 60)} min</TD>
@@ -895,15 +895,18 @@ export function UsersAdminPage() {
             ) : null
           }
           card={(u) => (
-            <div className="flex min-h-16 items-center gap-3 px-4 py-3">
+            // on the narrowest phones the role picker drops under the name rather than squeezing it to a few letters
+            <div className="flex min-h-16 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
               <Avatar name={u.name} className="size-9 rounded-lg text-[16px]" />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-32 flex-1 basis-32">
                 <p className="truncate text-[14.5px] leading-tight">
                   <PersonName name={u.name} displayName={u.display_name} />
                 </p>
                 <p className="mt-0.5 text-[12px] text-muted-foreground">{signIn(u)}</p>
               </div>
-              <RoleSelect u={u} />
+              <div className="ml-auto">
+                <RoleSelect u={u} />
+              </div>
             </div>
           )}
         />

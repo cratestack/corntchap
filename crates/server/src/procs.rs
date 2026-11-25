@@ -238,6 +238,8 @@ impl ProcedureRegistry for Procedures {
                 a.owner.as_deref(),
                 a.repo.as_deref(),
                 a.q.as_deref(),
+                a.holder.as_deref(),
+                a.status.as_deref(),
                 &a.page,
             )
             .await,

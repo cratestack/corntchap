@@ -146,7 +146,7 @@ export function ForgesPage() {
     >
       {publicUrl && !reachable && (
         <p className="mb-4 rounded-lg border border-corn/50 bg-corn/15 p-3 text-[13px]">
-          GitHub sends events to <span className="font-mono">{publicUrl}/webhooks/github</span>. That address is not https, so GitHub on the internet cannot reach it: set PUBLIC_URL to the server's public address.
+          GitHub sends events to <span className="font-mono break-all">{publicUrl}/webhooks/github</span>. That address is not https, so GitHub on the internet cannot reach it: set PUBLIC_URL to the server's public address.
         </p>
       )}
       {forges.isLoading ? (

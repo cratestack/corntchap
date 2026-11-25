@@ -42,7 +42,9 @@ const preview: Preview = {
     viewport: {
       options: {
         phone: { name: "Phone", styles: { width: "390px", height: "844px" }, type: "mobile" },
+        tablet: { name: "Tablet", styles: { width: "768px", height: "1024px" }, type: "tablet" },
         desktop: { name: "Desktop", styles: { width: "1280px", height: "800px" }, type: "desktop" },
+        wide: { name: "Wide desktop", styles: { width: "1920px", height: "1080px" }, type: "desktop" },
       },
     },
   },

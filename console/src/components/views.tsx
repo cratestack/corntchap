@@ -116,7 +116,7 @@ function SqlHelp({ onUse }: { onUse: (where: string, order: string) => void }) {
   );
 }
 
-type Preview = { tasks: TaskView[] } | { error: string } | null;
+type Preview = { tasks: TaskView[]; more: boolean } | { error: string } | null;
 
 /** Create (view = null) or edit a saved view. */
 export function ViewDialog({
@@ -166,8 +166,8 @@ export function ViewDialog({
   async function runPreview() {
     setPreviewing(true);
     try {
-      const tasks = await client.procedures.viewRun({ project: potKey, where: where.trim() || null, orderBy: order.trim() || null });
-      setPreview({ tasks });
+      const page = await client.procedures.viewPage({ project: potKey, key: null, where: where.trim() || null, orderBy: order.trim() || null, page: { limit: 7, cursor: null } });
+      setPreview({ tasks: page.items.slice(0, 6), more: page.items.length > 6 });
     } catch (e) {
       setPreview({ error: errorMessage(e) });
     } finally {
@@ -287,8 +287,8 @@ export function ViewDialog({
               {preview && "tasks" in preview && (
                 <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-[12.5px]">
                   <p className="font-medium">
-                    {preview.tasks.length >= 500 ? "500 or more tasks (the first 500 run)" : plural(preview.tasks.length, "task")} match
-                    {preview.tasks.length === 1 ? "es" : ""}.
+                    {preview.more ? "More than 6 tasks" : plural(preview.tasks.length, "task")} match
+                    {!preview.more && preview.tasks.length === 1 ? "es" : ""}.
                   </p>
                   {preview.tasks.length > 0 && (
                     <ul className="mt-1.5 space-y-0.5">
@@ -298,7 +298,7 @@ export function ViewDialog({
                           <span className="truncate">{t.title}</span>
                         </li>
                       ))}
-                      {preview.tasks.length > 6 && <li className="text-muted-foreground">and {preview.tasks.length - 6} more</li>}
+                      {preview.more && <li className="text-muted-foreground">and more</li>}
                     </ul>
                   )}
                 </div>

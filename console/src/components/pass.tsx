@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ExternalLink, Loader2, PanelLeftClose, PanelLeftOpen, Search, UserPlus, X } from "lucide-react";
@@ -39,15 +39,14 @@ function shortAgo(iso: string, now: number): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-/** Fill the viewport below the page header on tablets and desktops (the phone layout is fixed between the bars). */
-function useFillHeight(ref: React.RefObject<HTMLElement | null>) {
-  const [h, setH] = useState<number | null>(null);
+/** Sets `--pass-h` on the element: the height that fills the viewport below the page header (the thread pane's height). */
+function useFillHeight(ref: RefObject<HTMLElement | null>) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const calc = () => {
       const top = el.getBoundingClientRect().top + window.scrollY;
-      setH(Math.max(420, Math.round(window.innerHeight - top - 20)));
+      el.style.setProperty("--pass-h", `${Math.max(420, Math.round(window.innerHeight - top - 20))}px`);
     };
     calc();
     window.addEventListener("resize", calc);
@@ -58,10 +57,37 @@ function useFillHeight(ref: React.RefObject<HTMLElement | null>) {
       ro.disconnect();
     };
   }, [ref]);
-  return h;
 }
 
-interface Conv {
+/**
+ * The pass screen. Phones: a chat screen fixed between the top bar and the tab bar (the thread is the one thing that
+ * scrolls). Tablets and up: the conversation list and the thread side by side; the page scrolls, so a long list runs
+ * down the page while the thread (a chat pane, scrolling inside itself) stays in view beside it.
+ */
+export function PassFrame({ aside, compact, children, extra }: { aside: ReactNode; compact: boolean; children: ReactNode; extra?: ReactNode }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useFillHeight(rootRef);
+  return (
+    <div
+      ref={rootRef}
+      className={cn(
+        "flex min-w-0 flex-col bg-card",
+        // phones: a real chat screen between the top bar and the tab bar
+        "max-md:fixed max-md:inset-x-0 max-md:top-[calc(3.5rem+1px+env(safe-area-inset-top))] max-md:bottom-[calc(4rem+env(safe-area-inset-bottom))] max-md:z-20",
+        // tablet and up: conversations left (as tall as they are), thread right (as tall as what is left of the viewport)
+        "md:flex-row md:items-start md:overflow-clip md:rounded-[14px] md:border md:border-border",
+      )}
+    >
+      <aside aria-label="Conversations" className={cn("hidden shrink-0 flex-col self-stretch border-r border-border bg-background md:flex", compact ? "w-[4.5rem]" : "w-64 lg:w-80")}>
+        {aside}
+      </aside>
+      {children}
+      {extra}
+    </div>
+  );
+}
+
+export interface Conv {
   key: string;
   name: string;
   channel?: boolean;
@@ -175,10 +201,7 @@ export function PassView({ potKey }: { potKey: string }) {
   const withCook = channel ? undefined : cooks.byName.get(withWho);
 
   const compact = !isPhone && !isDesktop && collapsed;
-  const rootRef = useRef<HTMLDivElement>(null);
-  const fill = useFillHeight(rootRef);
-
-  const list = (compactList: boolean) => (
+  const list = (compactList: boolean, scrolls = false) => (
     <ConvList
       active={withWho}
       select={select}
@@ -190,32 +213,25 @@ export function PassView({ potKey }: { potKey: string }) {
       canManage={canManage}
       compact={compactList}
       now={now}
+      scrolls={scrolls}
     />
   );
 
   return (
-    <div
-      ref={rootRef}
-      style={fill ? ({ "--pass-h": `${fill}px` } as React.CSSProperties) : undefined}
-      className={cn(
-        "flex min-w-0 flex-col bg-card",
-        // phones: a real chat screen between the top bar and the tab bar
-        "max-md:fixed max-md:inset-x-0 max-md:top-[calc(3.5rem+1px+env(safe-area-inset-top))] max-md:bottom-[calc(4rem+env(safe-area-inset-bottom))] max-md:z-20",
-        // tablet and up: conversations left, thread right, filling what is left of the viewport
-        "md:h-[var(--pass-h,40rem)] md:flex-row md:overflow-hidden md:rounded-[14px] md:border md:border-border",
-      )}
+    <PassFrame
+      compact={compact}
+      aside={list(compact)}
+      extra={
+        <Sheet open={switcher} onOpenChange={setSwitcher}>
+          <SheetContent side="bottom" className="h-[88dvh] max-h-[88dvh] gap-0 px-0 pb-0 md:hidden">
+            <SheetTitle className="px-4 pb-2 font-display text-[18px]">Conversations</SheetTitle>
+            <SheetDescription className="sr-only">Pick the pass, or a chef to write to directly</SheetDescription>
+            <div className="flex min-h-0 flex-1 flex-col pb-[env(safe-area-inset-bottom)]">{list(false, true)}</div>
+          </SheetContent>
+        </Sheet>
+      }
     >
-      <aside
-        aria-label="Conversations"
-        className={cn(
-          "hidden shrink-0 flex-col border-r border-border bg-background md:flex",
-          compact ? "w-[4.5rem]" : "w-64 lg:w-80",
-        )}
-      >
-        {list(compact)}
-      </aside>
-
-      <section aria-label={channel ? "The pass" : `Conversation with ${withWho}`} className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <section aria-label={channel ? "The pass" : `Conversation with ${withWho}`} className="flex min-h-0 min-w-0 flex-1 flex-col md:sticky md:top-5 md:h-[var(--pass-h,40rem)]">
         <header className="flex min-h-14 shrink-0 items-center gap-1 border-b border-border bg-card px-2 md:px-3">
           <button
             type="button"
@@ -274,15 +290,7 @@ export function PassView({ potKey }: { potKey: string }) {
         />
         <Composer potKey={potKey} withWho={withWho} chefs={chefs} cook={withCook} seed={seed} />
       </section>
-
-      <Sheet open={switcher} onOpenChange={setSwitcher}>
-        <SheetContent side="bottom" className="h-[88dvh] max-h-[88dvh] gap-0 px-0 pb-0 md:hidden">
-          <SheetTitle className="px-4 pb-2 font-display text-[18px]">Conversations</SheetTitle>
-          <SheetDescription className="sr-only">Pick the pass, or a chef to write to directly</SheetDescription>
-          <div className="flex min-h-0 flex-1 flex-col pb-[env(safe-area-inset-bottom)]">{list(false)}</div>
-        </SheetContent>
-      </Sheet>
-    </div>
+    </PassFrame>
   );
 }
 
@@ -325,7 +333,11 @@ function HeaderSubtitle({
 
 // ---------------------------------------------------------------- the list
 
-function ConvList({
+/**
+ * The conversations, one after another: as tall as they are and carried by the page (beside the thread), or, with
+ * `scrolls`, filling a sheet and scrolling inside it.
+ */
+export function ConvList({
   active,
   select,
   pinned,
@@ -336,6 +348,7 @@ function ConvList({
   canManage,
   compact,
   now,
+  scrolls = false,
 }: {
   active: string;
   select: (w: string) => void;
@@ -347,6 +360,7 @@ function ConvList({
   canManage: boolean;
   compact: boolean;
   now: number;
+  scrolls?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [allOut, setAllOut] = useState(false);
@@ -386,7 +400,7 @@ function ConvList({
           </label>
         </div>
       )}
-      <ul className="scrollbar-thin min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain p-2">
+      <ul className={cn("space-y-0.5 p-2", scrolls && "scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain")}>
         {showPinned && row(pinned)}
         {d.length > 0 && !compact && <SectionHead>Direct</SectionHead>}
         {compact && d.length > 0 && <li className="mx-3 my-1.5 h-px list-none bg-border" aria-hidden="true" />}

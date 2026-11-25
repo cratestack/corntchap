@@ -531,9 +531,41 @@ pub async fn list_tasks(
     Ok(Value::Array(rows))
 }
 
+/// SQL: a task `t` has no unfinished dependency or subtask (the `ready` of a task view).
+const NO_BLOCKERS_SQL: &str = "not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))";
+
+/// The SQL predicate of a board bucket on `t`, and whether it sorts by priority (the tasks in play) or
+/// by last change (the closed ones). Buckets are the console's columns: `ready` (open with nothing in
+/// the way, or claimed with a lapsed lease), `claimed` (live lease), `waiting` (blocked, or open and
+/// waiting on dependencies or subtasks), `done`, `cancelled`, and `active` (the first three together).
+fn bucket_sql(bucket: &str) -> Result<(String, bool)> {
+    let live = "coalesce(t.lease_expires_at > now(), false)";
+    Ok(match bucket {
+        "active" => ("t.status in ('open','claimed','blocked')".into(), true),
+        "ready" => (
+            format!(
+                "((t.status = 'open' and {NO_BLOCKERS_SQL}) or (t.status = 'claimed' and not {live}))"
+            ),
+            true,
+        ),
+        "claimed" => (format!("(t.status = 'claimed' and {live})"), true),
+        "waiting" => (
+            format!("(t.status = 'blocked' or (t.status = 'open' and not ({NO_BLOCKERS_SQL})))"),
+            true,
+        ),
+        "done" => ("t.status = 'done'".into(), false),
+        "cancelled" => ("t.status = 'cancelled'".into(), false),
+        _ => {
+            return invalid("bucket is active, ready, claimed, waiting, done or cancelled");
+        }
+    })
+}
+
 /// One page of a project's tasks for the console board (`taskPage`; `list_tasks` stays the agents'
-/// list). `bucket`: `active` (open, claimed, blocked: priority desc, number), `done` or
-/// `cancelled` (newest change first: updated_at desc, number desc). `total` counts every match.
+/// list). `bucket` is a board column: `ready`, `claimed`, `waiting` (priority desc, number), `done` or
+/// `cancelled` (newest change first: updated_at desc, number desc), or `active` (the first three in
+/// one list). `status` (a bucket too) and `holder` (the claiming cook's name) narrow it further.
+/// `total` counts every match, all pages together.
 #[allow(clippy::too_many_arguments)]
 pub async fn task_page(
     db: &PgPool,
@@ -545,22 +577,30 @@ pub async fn task_page(
     owner: Option<&str>,
     repo: Option<&str>,
     q: Option<&str>,
+    holder: Option<&str>,
+    status: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<Value> {
-    let (statuses, order, default, max): (&[&str], &str, i64, i64) = match bucket {
-        "active" => (
-            &["open", "claimed", "blocked"],
-            "-priority,number",
-            500,
-            500,
-        ),
-        "done" => (&["done"], "-updated_at,-number", 25, 200),
-        "cancelled" => (&["cancelled"], "-updated_at,-number", 25, 200),
-        _ => return invalid("bucket is active, done or cancelled"),
+    let (bucket_pred, active) = bucket_sql(bucket)?;
+    let status = status.map(str::trim).filter(|s| !s.is_empty());
+    let status_pred = match status {
+        Some(s) => bucket_sql(s)?.0,
+        None => "true".to_string(),
+    };
+    let order = if active {
+        "-priority,number"
+    } else {
+        "-updated_at,-number"
     };
     // the cursor is minted per bucket: one for `done` does not fit `cancelled`
     let order = format!("{order}:{bucket}");
-    let paging = crate::paging::paging(page, &order, 2, default, max)?;
+    let paging = crate::paging::paging(
+        page,
+        &order,
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, project).await?;
     let owner = match owner.map(str::trim).filter(|o| !o.is_empty()) {
@@ -577,30 +617,33 @@ pub async fn task_page(
         }
     });
     let q = q.map(str::trim).filter(|q| !q.is_empty());
-    let filters = "t.project_id = $1 and t.status = any($2::text[])
-           and ($3::text is null or $3 = any(t.labels))
-           and ($4::text is null or ($4 = '-' and t.menu_id is null)
-                or exists (select 1 from menus m where m.id = t.menu_id and m.key = $4))
-           and ($5::text is null or ($5 = '-' and t.owner_id is null)
-                or t.owner_id = (select id from principals where name = $5))
-           and ($6::text is null or $6 = any(t.repos))
-           and ($7::text is null or position(lower($7) in lower(t.title)) > 0
-                or position(lower($7) in lower(t.body)) > 0
-                or position(lower($7) in lower(pr.key || '-' || t.number)) > 0)";
-    let statuses: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
+    let holder = holder.map(str::trim).filter(|h| !h.is_empty());
+    let filters = format!(
+        "t.project_id = $1 and {bucket_pred} and {status_pred}
+           and ($2::text is null or $2 = any(t.labels))
+           and ($3::text is null or ($3 = '-' and t.menu_id is null)
+                or exists (select 1 from menus m where m.id = t.menu_id and m.key = $3))
+           and ($4::text is null or ($4 = '-' and t.owner_id is null)
+                or t.owner_id = (select id from principals where name = $4))
+           and ($5::text is null or $5 = any(t.repos))
+           and ($6::text is null or position(lower($6) in lower(t.title)) > 0
+                or position(lower($6) in lower(t.body)) > 0
+                or position(lower($6) in lower(pr.key || '-' || t.number)) > 0)
+           and ($7::text is null or t.claimed_by = (select id from principals where name = $7))"
+    );
     let total: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select count(*) from tasks t join projects pr on pr.id = t.project_id where {filters}"
     )))
     .bind(pr.id)
-    .bind(&statuses)
     .bind(label)
     .bind(menu.as_deref())
     .bind(owner.as_deref())
     .bind(repo)
     .bind(q)
+    .bind(holder)
     .fetch_one(&mut *c)
     .await?;
-    let (keys, after, sort) = if bucket == "active" {
+    let (keys, after, sort) = if active {
         (
             "array[t.priority::text, t.number::text]",
             "(t.priority < $8::text::bigint or (t.priority = $8::text::bigint and t.number > $9::text::bigint))",
@@ -623,12 +666,12 @@ pub async fn task_page(
     );
     let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(pr.id)
-        .bind(&statuses)
         .bind(label)
         .bind(menu.as_deref())
         .bind(owner.as_deref())
         .bind(repo)
         .bind(q)
+        .bind(holder)
         .bind(paging.key(0))
         .bind(paging.key(1))
         .bind(paging.fetch())

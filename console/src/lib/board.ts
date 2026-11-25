@@ -1,10 +1,10 @@
 import { useMemo } from "react";
 import type { TaskPage, TaskView } from "@corntchap/api";
 import type { Bucket } from "./format";
+import { useProc } from "./data";
 import { useProcInfinite } from "./paging";
-import { groupTasks } from "@/components/task-views";
 
-/** The filters the server applies (taskPage); `status` and `holder` are applied to what is loaded. */
+/** The filters the server applies (taskPage): the cook (`holder`) and the column (`status`) too. */
 export interface BoardFilters {
   label?: string;
   menu?: string;
@@ -15,78 +15,120 @@ export interface BoardFilters {
   holder?: string;
 }
 
-/** Tasks per page of the served and tossed columns. */
-const CLOSED_PAGE = 25;
-/** One request holds every task still in play (open, claimed, blocked) up to this many. */
-const ACTIVE_PAGE = 500;
+/** Tasks per page of a column (the server allows up to 200). */
+const PAGE = 25;
+/** Tasks the filter chips are read from: the best of what is in play, unfiltered. */
+const OPTIONS = 200;
 
 export interface BucketMore {
   has: boolean;
   loading: boolean;
   load: () => void;
-  /** The most pages one list keeps are loaded: the rest is not offered (narrow with a filter). */
-  capped?: boolean;
 }
 
 export interface BoardData {
   loading: boolean;
   error: unknown;
   groups: Record<Bucket, TaskView[]>;
-  /** What the server counts per column, for the columns it pages (served, tossed). */
+  /** What the server counts per column, filters applied. */
   totals: Partial<Record<Bucket, number>>;
   more: Partial<Record<Bucket, BucketMore>>;
   /** Nothing on the board at all (and no filter hiding it). */
   bare: boolean;
-  /** Every task loaded without the filters: what the filter chips offer. */
+  /** Tasks the filter chips offer (the board's best, unfiltered, and what the columns hold). */
   options: TaskView[];
 }
 
 const cursorOf = (p: TaskPage) => p.next_cursor;
 
+/** The board's columns, in the order the board shows them. */
+export const COLUMNS: Bucket[] = ["ready", "claimed", "waiting", "done", "cancelled"];
+
+const IN_PLAY = new Set<Bucket>(["ready", "claimed", "waiting"]);
+
+const changedAt = (t: TaskView) => Date.parse(t.updated_at) || 0;
+
 /**
- * A pot's board from `taskPage`: every open, claimed and blocked task in one go, and the served and tossed
- * columns a page at a time (newest first), each with the server's total.
+ * Each task in one column only. The columns are separate lists refreshed one by one, and a served or tossed column
+ * refreshes its head only: a task restored from deep in Tossed is in Ready before it leaves Tossed. The copy changed
+ * last wins (on a tie, the first column in board order).
+ */
+export function oneColumnEach(groups: Record<Bucket, TaskView[]>): Record<Bucket, TaskView[]> {
+  const best = new Map<string, { b: Bucket; at: number }>();
+  for (const b of COLUMNS) {
+    for (const t of groups[b]) {
+      const at = changedAt(t);
+      const cur = best.get(t.id);
+      if (!cur || at > cur.at) best.set(t.id, { b, at });
+    }
+  }
+  const out = {} as Record<Bucket, TaskView[]>;
+  for (const b of COLUMNS) {
+    const list = groups[b];
+    out[b] = list.some((t) => best.get(t.id)?.b !== b) ? list.filter((t) => best.get(t.id)?.b === b) : list;
+  }
+  return out;
+}
+
+/**
+ * A pot's board from `taskPage`: every column is its own infinite query (a page at a time, as far as the reader
+ * scrolls), with the server's total for it. The label, menu, owner, repo, text, cook and status filters are the
+ * server's too, so a count and the cards under it always agree.
  */
 export function useBoardData(pot: string, f: BoardFilters, enabled: boolean): BoardData {
-  const args = (bucket: "active" | "done" | "cancelled", filtered: boolean) => ({
+  const args = (bucket: string) => ({
     project: pot,
     bucket,
-    label: (filtered && f.label) || null,
-    menu: (filtered && f.menu) || null,
-    owner: (filtered && f.owner) || null,
-    repo: (filtered && f.repo) || null,
-    q: (filtered && f.q?.trim()) || null,
+    label: f.label || null,
+    menu: f.menu || null,
+    owner: f.owner || null,
+    repo: f.repo || null,
+    q: f.q?.trim() || null,
+    holder: f.holder || null,
+    status: f.status || null,
   });
-  const opts = (pageSize: number, maxLimit: number) => ({ getCursor: cursorOf, pageSize, maxLimit, enabled });
-  const active = useProcInfinite("taskPage", args("active", true), opts(ACTIVE_PAGE, 500));
-  const done = useProcInfinite("taskPage", args("done", true), opts(CLOSED_PAGE, 200));
-  const cancelled = useProcInfinite("taskPage", args("cancelled", true), opts(CLOSED_PAGE, 200));
-  // the unfiltered active tasks (the same query as `active` while no filter is set)
-  const options = useProcInfinite("taskPage", args("active", false), opts(ACTIVE_PAGE, 500));
+  // a column the status filter rules out is not asked for
+  const on = (b: Bucket) => enabled && (!f.status || f.status === b);
+  // the columns in play are sorted by priority, so a task can leave or join one anywhere in it: a live refresh
+  // re-reads all that is loaded there. Served and tossed take changes at the top (newest change first).
+  const opts = (b: Bucket) => ({ getCursor: cursorOf, pageSize: PAGE, maxLimit: 200, maxPages: Infinity, enabled: on(b), refreshLoaded: IN_PLAY.has(b) });
+  const ready = useProcInfinite("taskPage", args("ready"), opts("ready"));
+  const claimed = useProcInfinite("taskPage", args("claimed"), opts("claimed"));
+  const waiting = useProcInfinite("taskPage", args("waiting"), opts("waiting"));
+  const done = useProcInfinite("taskPage", args("done"), opts("done"));
+  const cancelled = useProcInfinite("taskPage", args("cancelled"), opts("cancelled"));
+  const cols = { ready, claimed, waiting, done, cancelled };
 
-  const { status, holder } = f;
-  const groups = useMemo(() => {
-    const g = groupTasks(active.items);
-    g.done = done.items;
-    g.cancelled = cancelled.items;
-    const keep = (t: TaskView) => !holder || t.claimed_by === holder;
-    for (const b of Object.keys(g) as Bucket[]) g[b] = status && status !== b ? [] : g[b].filter(keep);
-    return g;
-  }, [active.items, done.items, cancelled.items, status, holder]);
+  const unfiltered = useProc(
+    "taskPage",
+    { project: pot, bucket: "active", label: null, menu: null, owner: null, repo: null, q: null, holder: null, status: null, page: { limit: OPTIONS, cursor: null } },
+    { enabled },
+  );
 
-  const anyFilter = !!(f.label || f.menu || f.owner || f.repo || f.q?.trim() || status || holder);
-  const loading = active.isLoading || done.isLoading || cancelled.isLoading;
-  const error = active.error ?? done.error ?? cancelled.error;
-  const counted = !holder && !status;
-  const more = (q: typeof done): BucketMore => ({ has: !!q.hasNextPage, loading: q.isFetchingNextPage, load: () => void (q.hasNextPage && !q.isFetchingNextPage && q.fetchNextPage()), capped: q.capped });
-  const optionTasks = useMemo(() => [...options.items, ...done.items, ...cancelled.items], [options.items, done.items, cancelled.items]);
+  const groups = useMemo(
+    () => oneColumnEach({ ready: ready.items, claimed: claimed.items, waiting: waiting.items, done: done.items, cancelled: cancelled.items }),
+    [ready.items, claimed.items, waiting.items, done.items, cancelled.items],
+  );
+  const anyFilter = !!(f.label || f.menu || f.owner || f.repo || f.q?.trim() || f.status || f.holder);
+  const loading = COLUMNS.some((b) => on(b) && cols[b].isLoading);
+  const error = COLUMNS.map((b) => cols[b].error).find(Boolean);
+  const more = (q: typeof done): BucketMore => ({ has: !!q.hasNextPage, loading: q.isFetchingNextPage, load: () => void (q.hasNextPage && !q.isFetchingNextPage && q.fetchNextPage()) });
+  const totals: Partial<Record<Bucket, number>> = {};
+  for (const b of COLUMNS) {
+    const n = on(b) ? cols[b].total : 0;
+    if (n != null) totals[b] = n;
+  }
+  const optionTasks = useMemo(() => {
+    const all = [...(unfiltered.data?.items ?? []), ...ready.items, ...claimed.items, ...waiting.items, ...done.items, ...cancelled.items];
+    return [...new Map(all.map((t) => [t.id, t])).values()];
+  }, [unfiltered.data, ready.items, claimed.items, waiting.items, done.items, cancelled.items]);
   return {
     loading,
     error,
     groups,
-    totals: counted ? { ...(done.total != null ? { done: done.total } : {}), ...(cancelled.total != null ? { cancelled: cancelled.total } : {}) } : {},
-    more: { ready: more(active), claimed: more(active), waiting: more(active), done: more(done), cancelled: more(cancelled) },
-    bare: !anyFilter && !loading && (active.total ?? 0) === 0 && (done.total ?? 0) === 0 && (cancelled.total ?? 0) === 0,
+    totals,
+    more: { ready: more(ready), claimed: more(claimed), waiting: more(waiting), done: more(done), cancelled: more(cancelled) },
+    bare: !anyFilter && !loading && COLUMNS.every((b) => (cols[b].total ?? 0) === 0),
     options: optionTasks,
   };
 }

@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useMemo } from "react";
 import { BoardView, useColumns, type BoardColumns } from "./board";
-import { makeTasks, usePaged } from "./ui/virtual.fixtures";
+import type { Bucket } from "@/lib/format";
+import { makeColumnTasks, makeTasks, usePaged } from "./ui/virtual.fixtures";
 
 const tasks = makeTasks(10_000);
 
@@ -20,10 +21,22 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Desktop: five columns, each with its own scroller; 2,000 cards each. */
+/**
+ * 2,000 cards a column. Where all five columns fit side by side (a board about 1416px wide or more) they sit side by
+ * side and the page scrolls through them; anywhere narrower, a tab strip and one column at a time.
+ */
 export const TenThousandTasks: Story = {};
 
-/** Phone: snap columns with a tab strip; the page scrolls. */
+/** A wide desktop (1920px): all five columns side by side. */
+export const Wide: Story = { globals: { viewport: { value: "wide", isRotated: false } } };
+
+/** A laptop (1280px): five columns do not fit, so it is the tab strip and one column, as on a phone. */
+export const Laptop: Story = { globals: { viewport: { value: "desktop", isRotated: false } } };
+
+/** A tablet (768px): the tab strip and one column. */
+export const Tablet: Story = { globals: { viewport: { value: "tablet", isRotated: false } } };
+
+/** Phone: a tab strip and one column below it; the page scrolls. */
 export const Phone: Story = { globals: { viewport: { value: "phone", isRotated: false } } };
 
 export const Loading: Story = { args: { loading: true } };
@@ -43,3 +56,43 @@ export const ServedPaged: Story = {
     return <BoardView {...args} columns={columns} />;
   },
 };
+
+const COLUMN_IDS: Bucket[] = ["ready", "claimed", "waiting", "done", "cancelled"];
+const COLUMN_TOTAL = 10_000;
+
+/**
+ * Every column is its own server-paged list of 10,000 tasks (200 a page, like the server's largest): the header
+ * shows the total, a column's end loads its next page, and the output below counts the pages each one asked for.
+ */
+function PagedColumns(args: Parameters<typeof BoardView>[0]) {
+  const ready = usePaged((n) => makeColumnTasks("ready", n), 25, 200, COLUMN_TOTAL, 60);
+  const claimed = usePaged((n) => makeColumnTasks("claimed", n), 25, 200, COLUMN_TOTAL, 60);
+  const waiting = usePaged((n) => makeColumnTasks("waiting", n), 25, 200, COLUMN_TOTAL, 60);
+  const done = usePaged((n) => makeColumnTasks("done", n), 25, 200, COLUMN_TOTAL, 60);
+  const cancelled = usePaged((n) => makeColumnTasks("cancelled", n), 25, 200, COLUMN_TOTAL, 60);
+  const cols = { ready, claimed, waiting, done, cancelled };
+  const columns = useMemo<BoardColumns>(() => {
+    const more: BoardColumns["more"] = {};
+    const groups = { ready: ready.items, claimed: claimed.items, waiting: waiting.items, done: done.items, cancelled: cancelled.items };
+    for (const id of COLUMN_IDS) more[id] = { has: !cols[id].done, loading: cols[id].loading, load: cols[id].loadMore };
+    return { groups, totals: Object.fromEntries(COLUMN_IDS.map((id) => [id, COLUMN_TOTAL])), more };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready.items, ready.loading, claimed.items, claimed.loading, waiting.items, waiting.loading, done.items, done.loading, cancelled.items, cancelled.loading]);
+  return (
+    <>
+      <BoardView {...args} columns={columns} />
+      <output data-testid="loads" data-ready={ready.loads} data-claimed={claimed.loads} data-waiting={waiting.loads} data-done={done.loads} data-cancelled={cancelled.loads} className="sr-only">
+        pages asked for: ready {ready.loads}, on the fire {claimed.loads}, waiting {waiting.loads}, served {done.loads}, tossed {cancelled.loads}
+      </output>
+    </>
+  );
+}
+
+/** 10,000 tasks in every column, each paged on its own as its end is scrolled to (side by side on a wide screen, tabs below). */
+export const PagedTenThousandPerColumn: Story = { render: (args) => <PagedColumns {...args} /> };
+
+/** A laptop (1280px): the same paged columns behind tabs, so the last column pages as far as the first. */
+export const PagedLaptop: Story = { render: (args) => <PagedColumns {...args} />, globals: { viewport: { value: "desktop", isRotated: false } } };
+
+/** Phone: the same paged columns; only the column in the open tab loads more as the page scrolls. */
+export const PagedPhone: Story = { render: (args) => <PagedColumns {...args} />, globals: { viewport: { value: "phone", isRotated: false } } };
