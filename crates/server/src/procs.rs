@@ -120,11 +120,11 @@ fn wake_target_views(v: serde_json::Value) -> serde_json::Value {
                         ),
                     })
                 });
-                // the latest run's page, kept only when the server vetted it (https, the target type's own domain)
-                let session_url = c["session_url"]
-                    .as_str()
-                    .filter(|u| u.starts_with("https://"))
-                    .map(str::to_string);
+                // the latest run's page, kept only when it passes `safe_session_url` for the target's type
+                // (https on the type's own domain): `config` is user-supplied, so it is vetted here again
+                let session_url = c["session_url"].as_str().and_then(|u| {
+                    crate::stations::safe_session_url(w["type"].as_str().unwrap_or_default(), u)
+                });
                 if let Some(o) = w.as_object_mut() {
                     o.remove("config");
                     o.insert("target".into(), serde_json::json!(target));
@@ -216,6 +216,7 @@ impl ProcedureRegistry for Procedures {
                 &p,
                 a.q.as_deref(),
                 a.team.as_deref(),
+                a.cook.as_deref(),
                 &a.page.unwrap_or_default(),
             ))
             .await
@@ -1058,6 +1059,12 @@ impl ProcedureRegistry for Procedures {
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .map(String::from);
+        q.woken_by = a
+            .wokenBy
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(String::from);
         typed(
             Box::pin(admin::dir_page(
                 &self.state.db,
@@ -1092,6 +1099,17 @@ impl ProcedureRegistry for Procedures {
             .await
             .map(|(items, next)| crate::paging::page_json(items, next)),
         )
+    }
+
+    async fn fire_summary(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        _a: fire_summary::Args,
+        _z: fire_summary::Authorized,
+    ) -> Result<fire_summary::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(admin::fire_summary(&self.state.db, &p).await)
     }
 
     async fn admin_add_cook(
@@ -1948,6 +1966,7 @@ impl ProcedureRegistry for Procedures {
                 &self.state.db,
                 &p,
                 a.status.as_deref(),
+                a.project.as_deref(),
                 &a.page.unwrap_or_default(),
             ))
             .await
@@ -2239,7 +2258,7 @@ impl ProcedureRegistry for Procedures {
                 a.project.as_deref(),
                 a.days,
                 a.q.as_deref(),
-                &a.page,
+                &a.page.unwrap_or_default(),
             ))
             .await
             .map(|(items, next)| crate::paging::page_json(items, next)),
@@ -2340,6 +2359,15 @@ impl ProcedureRegistry for Procedures {
                 a.key.as_deref(),
                 a.r#where.as_deref(),
                 a.orderBy.as_deref(),
+                &views::Chips {
+                    label: a.label.as_deref(),
+                    menu: a.menu.as_deref(),
+                    repo: a.repo.as_deref(),
+                    owner: a.owner.as_deref(),
+                    holder: a.holder.as_deref(),
+                    q: a.q.as_deref(),
+                    bucket: a.bucket.as_deref(),
+                },
                 &a.page.unwrap_or_default(),
             ))
             .await

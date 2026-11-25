@@ -41,6 +41,21 @@ export const Paged: Story = {
   },
 };
 
+/** A list with more content below it (not the page's last): the next page is read on a "Show more" button, never on scroll. */
+export const ShowMoreButton: Story = {
+  render: function Render() {
+    const { source } = usePagedSource(people, { match: matchPerson, pageSize: 10 });
+    return (
+      <>
+        <Group title="Chefs">
+          <SourceList<FixturePerson> {...common} source={source} more="button" />
+        </Group>
+        <p className="mt-6 text-[13px] text-muted-foreground">Another section below the list.</p>
+      </>
+    );
+  },
+};
+
 export const Phone: Story = { ...Paged, globals: { viewport: { value: "phone", isRotated: false } } };
 
 export const Loading: Story = {

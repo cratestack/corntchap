@@ -19,6 +19,7 @@ import { useSession } from "@/lib/session";
 import { projectOfTask, useOpenTask } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 import { Avatar, EmptyState, IdChip, SectionLabel } from "./bits";
+import { listFooter, loadMore, type MoreMode } from "./list-footer";
 import { Markdown } from "./markdown";
 
 /**
@@ -180,7 +181,7 @@ function ReviewStrip({ r, showTask, onCancel, cancelling }: { r: ReviewView; sho
  * A pot's reviews with their task (the Questions page: waiting on you, and all of them): a paged read
  * (`useReviewsSource`), virtualized and carried by the page.
  */
-export function ReviewsList({ source }: { source: ListSource<ReviewView> }) {
+export function ReviewsList({ source, more = "scroll" }: { source: ListSource<ReviewView>; more?: MoreMode }) {
   const call = useProcCall();
   const [busy, setBusy] = useState<string | null>(null);
   if (source.isLoading && source.items.length === 0) return <Skeleton className="mt-4 h-24 w-full" />;
@@ -209,22 +210,13 @@ export function ReviewsList({ source }: { source: ListSource<ReviewView> }) {
       setBusy(null);
     }
   }
-  const footer = source.isFetchingNextPage ? (
-    <p role="status" className="flex items-center justify-center gap-2 py-3 text-[12.5px] text-muted-foreground">
-      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Loading more
-    </p>
-  ) : source.capped ? (
-    <p className="py-3 text-center text-[12.5px] text-muted-foreground">That is as far as this goes.</p>
-  ) : null;
   return (
     <VirtualList<ReviewView>
       items={source.items}
       itemKey={(r) => r.id}
       scroll="window"
-      onEndReached={() => {
-        if (source.hasNextPage && !source.isFetchingNextPage) source.fetchNextPage();
-      }}
-      footer={footer}
+      onEndReached={loadMore(source, more)}
+      footer={listFooter(source, more)}
       itemClassName="pb-2.5"
       defaultItemHeight={150}
       aria-label="Reviews"

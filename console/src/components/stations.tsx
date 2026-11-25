@@ -30,6 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import { IdChip, LabelChip, RepoChip } from "./bits";
 import { StationLink } from "./station-link";
+import { listFooter, loadMore, type MoreMode } from "./list-footer";
 
 const RUNTIME: Record<string, string> = {
   opencode: "OpenCode",
@@ -44,18 +45,6 @@ const RUNTIME: Record<string, string> = {
   webhook: "Webhook",
   "github-comment": "GitHub comment",
 };
-
-/** After the last row of a list that pages: loading, or the end of what the filters allow. */
-function ListFooter({ source }: { source: ListSource<unknown> }) {
-  if (source.isFetchingNextPage)
-    return (
-      <p role="status" className="flex items-center justify-center gap-2 py-3 text-[12px] text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Loading more
-      </p>
-    );
-  if (source.capped) return <p className="py-3 text-center text-[12px] text-muted-foreground">That is as far as this goes.</p>;
-  return null;
-}
 
 const shortSession = (s: string) => (s.length > 14 ? `${s.slice(0, 12)}…` : s);
 
@@ -116,7 +105,7 @@ function StationActivity({ station, now }: { station: StationView; now: number }
               onEndReached={() => {
                 if (activity.hasNextPage && !activity.isFetchingNextPage) activity.fetchNextPage();
               }}
-              footer={<ListFooter source={activity} />}
+              footer={listFooter(activity)}
               itemClassName="border-b border-border/60 py-1.5 text-[12px] last:border-b-0"
               aria-label="Recent activity"
               renderItem={(a) => (
@@ -146,11 +135,14 @@ export function StationList({
   source,
   cook,
   kind,
+  more = "scroll",
 }: {
   /** The cook's stations as a paged read (`useStationsSource`). */
   source: ListSource<StationView>;
   cook?: string;
   kind?: string | null;
+  /** `"scroll"` for the page's last list, `"button"` (a "Show more" button) for one with more below it. */
+  more?: MoreMode;
 }) {
   const list = source;
   const call = useProcCall();
@@ -232,10 +224,8 @@ export function StationList({
             items={list.items}
             itemKey={(s) => s.id}
             scroll="window"
-            onEndReached={() => {
-              if (list.hasNextPage && !list.isFetchingNextPage) list.fetchNextPage();
-            }}
-            footer={<ListFooter source={list} />}
+            onEndReached={loadMore(list, more)}
+            footer={listFooter(list, more)}
             itemClassName="pb-2"
             defaultItemHeight={120}
             aria-label="Stations"
@@ -363,7 +353,8 @@ function StartSessionDialog({
   const newest = useStationsSource({ cook, kind: "session", enabled: open });
   const firstPot = newest.items.find((s) => !!s.directory)?.project ?? "";
   const activePot = pot || firstPot;
-  const pots = usePotsSource({ q: potQuery.value, enabled: open });
+  // only the pots where the cook has a session station (a folder to start in)
+  const pots = usePotsSource({ cook, q: potQuery.value, enabled: open });
   // the folders: where the cook has a station in that pot, the main station's first (as far as they are loaded)
   const inPot = useStationsSource({ project: activePot, cook, kind: "session", q: dirQuery.value, enabled: open && !!activePot });
   const dirs = useMemo<ListSource<StationView>>(() => {
@@ -473,7 +464,7 @@ function StartSessionDialog({
 }
 
 /** A cook's cloud runs, newest first: one station per Claude routine run, Devin or Coder session, webhook or GitHub-comment run. */
-export function CloudRunList({ source }: { source: ListSource<StationView> }) {
+export function CloudRunList({ source, more = "scroll" }: { source: ListSource<StationView>; more?: MoreMode }) {
   const now = useNow();
   const list = source;
   if (list.items.length === 0) {
@@ -484,10 +475,8 @@ export function CloudRunList({ source }: { source: ListSource<StationView> }) {
       items={list.items}
       itemKey={(s) => s.id}
       scroll="window"
-      onEndReached={() => {
-        if (list.hasNextPage && !list.isFetchingNextPage) list.fetchNextPage();
-      }}
-      footer={<ListFooter source={list} />}
+      onEndReached={loadMore(list, more)}
+      footer={listFooter(list, more)}
       itemClassName="pb-2"
       defaultItemHeight={110}
       aria-label="Cloud runs"

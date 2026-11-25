@@ -56,7 +56,7 @@ function navClass(active: boolean) {
 function FireCard() {
   const { status } = useLive();
   const now = useNow();
-  const { rows, lit, newest, more } = useFireSummary(now);
+  const { total, lit, newest, more } = useFireSummary();
   return (
     <NavLink
       to="/fires"
@@ -65,15 +65,15 @@ function FireCard() {
       <div className="flex items-center gap-2">
         <Flame className={cn("size-4", lit.length ? "text-corn" : "text-sidebar-muted")} aria-hidden="true" />
         <span className="font-display text-[14px] text-sidebar-foreground">
-          {lit.length ? (lit.length === 1 && !more ? "Fire is lit" : `${lit.length}${more ? "+" : ""} fires lit`) : "No fire lit"}
+          {lit.length ? (more ? "Fires lit" : "Fire is lit") : "No fire lit"}
         </span>
         {lit.length > 0 && <span className="live-dot ml-auto size-2 rounded-full bg-corn" aria-hidden="true" />}
       </div>
       <p className="mt-1 text-[11.5px] leading-snug text-sidebar-muted">
-        {rows.length === 0
+        {total === 0
           ? "No relay enrolled yet. A fire wakes your local cooks."
           : lit.length
-            ? `${lit.map((l) => l.name).join(", ")} · seen ${fmtAgo(newest, now)}`
+            ? `${lit.map((l) => l.name).join(", ")}${more ? " and more" : ""} · seen ${fmtAgo(newest, now)}`
             : `Last relay seen ${fmtAgo(newest, now)}`}
       </p>
       <p className="mt-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-sidebar-muted">

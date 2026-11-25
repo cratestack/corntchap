@@ -71,6 +71,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   return <Ctx.Provider value={q.data}>{children}</Ctx.Provider>;
 }
 
+/** A signed-in person that is given, not read from the server: for Storybook stories of components that ask who you are. */
+export function StaticSession({ user, children }: { user: SessionUser; children: ReactNode }) {
+  return <Ctx.Provider value={user}>{children}</Ctx.Provider>;
+}
+
 export function useSession(): SessionUser {
   const s = useContext(Ctx);
   if (!s) throw new Error("useSession outside SessionProvider");

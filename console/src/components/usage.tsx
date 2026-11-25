@@ -1,6 +1,7 @@
 import type { UsageCook, UsageReport } from "@corntchap/api";
 import { cn } from "@/lib/utils";
 import type { ListSource } from "@/lib/listbox";
+import type { MoreMode } from "./list-footer";
 import { SourceList } from "./source-list";
 
 /** Estimated tokens, short: 850, 12k, 1.2M. */
@@ -60,7 +61,7 @@ const cookKey = (c: UsageCook) => c.cook;
  * tokens ~ characters / 4. `cooks` (the `usageCookPage` source: the biggest senders first) adds the per-cook bars,
  * paged as they scroll.
  */
-export function UsagePanel({ report, cooks }: { report: UsageReport | undefined; cooks?: ListSource<UsageCook> | undefined }) {
+export function UsagePanel({ report, cooks, more = "button" }: { report: UsageReport | undefined; cooks?: ListSource<UsageCook> | undefined; more?: MoreMode }) {
   if (!report) return <p className="text-[13px] text-muted-foreground">Counting...</p>;
   const top = report.top.slice(0, 3);
   // the biggest sender comes first, so its bar is the full width
@@ -81,6 +82,7 @@ export function UsagePanel({ report, cooks }: { report: UsageReport | undefined;
           <p className="label-caps mb-2">By cook</p>
           <SourceList<UsageCook>
             source={cooks}
+            more={more}
             itemKey={cookKey}
             label="Usage by cook"
             empty="Nobody was sent anything."

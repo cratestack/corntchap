@@ -14,6 +14,16 @@ type UserView {
   disabled Boolean?
 }
 
+/// The fires you own in one line, for the sidebar: how many, how many are lit, and when one was last seen.
+type FireSummary {
+  /// How many fires (relays) you own (super-admins: all).
+  total Int
+  /// How many are lit (seen in the last five minutes, not put out).
+  lit Int
+  /// When any of them was last seen.
+  last_seen_at String?
+}
+
 /// A team you can see.
 type TeamView {
   name String

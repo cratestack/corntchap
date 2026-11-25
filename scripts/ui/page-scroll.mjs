@@ -38,6 +38,12 @@ const PAGES = [
   ["console-listpage--loading", "[aria-busy=true]"],
   ["console-listpage--empty", "text=No cooks yet."],
   ["console-filterbar--ten-thousand", "[role=search]"],
+  ["console-stations--sessions", "[role=listitem]"],
+  ["console-stations--sessions-show-more", "[role=listitem]"],
+  ["console-stations--cloud-runs-show-more", "[role=listitem]"],
+  ["console-reviewslist--ten-thousand", "[role=listitem]"],
+  ["console-reviewslist--show-more", "[role=listitem]"],
+  ["console-sourcelist--show-more-button", "[role=listitem]"],
 ];
 // Inner scrollers that are the point: the chat thread (VirtualThread inside the pass's `role=log`).
 const ALLOWED = "[role=log], [role=log] *";

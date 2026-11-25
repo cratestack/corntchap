@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { EmptyState, RowSkeleton } from "./bits";
 import { FilterBar } from "./filter-bar";
-import { listFooter, loadMore } from "./list-footer";
+import { listFooter, loadMore, type MoreMode } from "./list-footer";
 import { VirtualList } from "./ui/virtual-list";
 
 /**
@@ -157,16 +157,16 @@ export function MenuStrip({ menu }: { menu: MenuView }) {
 
 const NO_FILTERS = {};
 
-/** A list of menu cards that scrolls with the page and pages as its end comes into view. */
-export function MenuCards({ label, source, render }: { label: string; source: ListSource<MenuView>; render: (m: MenuView) => React.ReactNode }) {
+/** A list of menu cards that scrolls with the page; it pages as its end comes into view when it is the page's last list, else on a "Show more" button. */
+export function MenuCards({ label, source, render, more = "scroll" }: { label: string; source: ListSource<MenuView>; render: (m: MenuView) => React.ReactNode; more?: MoreMode }) {
   return (
     <VirtualList<MenuView>
       items={source.items}
       itemKey={(m) => m.key}
       renderItem={render}
       scroll="window"
-      onEndReached={loadMore(source)}
-      footer={listFooter(source)}
+      onEndReached={loadMore(source, more)}
+      footer={listFooter(source, more)}
       aria-label={label}
       itemClassName="pb-2.5"
       defaultItemHeight={120}
@@ -231,7 +231,7 @@ export function MenusView({ potKey, onNew, onEdit }: { potKey: string; onNew: ()
             </Button>
           </div>
           <div className="mt-3">
-            <MenuCards label="Menus cooking" source={open} render={(m) => <MenuCard potKey={potKey} menu={m} onEdit={() => onEdit(m)} onServe={() => setServing(m)} />} />
+            <MenuCards label="Menus cooking" source={open} more={served.items.length > 0 ? "button" : "scroll"} render={(m) => <MenuCard potKey={potKey} menu={m} onEdit={() => onEdit(m)} onServe={() => setServing(m)} />} />
           </div>
           {served.items.length > 0 && (
             <section className="mt-7" aria-labelledby="served-menus">

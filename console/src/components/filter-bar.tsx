@@ -30,6 +30,8 @@ export interface FacetDef {
   /** Whether the menu has a search box (default true). */
   searchable?: boolean | undefined;
   disabled?: boolean | undefined;
+  /** The chip's menu opened or closed: a server-backed source reads its options only while it is open. */
+  onOpenChange?: ((open: boolean) => void) | undefined;
 }
 
 export type FacetValue = string | string[] | undefined;
@@ -147,6 +149,7 @@ function Facet({ f, chosen, onChange }: { f: FacetDef; chosen: string[]; onChang
       onClear={() => onChange({ [f.id]: f.multiple ? [] : "" })}
       source={f.source}
       onQuery={f.onQuery}
+      onOpenChange={f.onOpenChange}
       itemText={(o) => `${o.label} ${o.hint ?? ""}`}
       itemKey={(o) => o.value}
       searchable={f.searchable}

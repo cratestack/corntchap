@@ -5,6 +5,7 @@ import { CircleHelp, ClipboardCheck, Flame, Loader2, MessageSquare, Hourglass } 
 import { PageShell } from "@/components/page";
 import { Avatar, BUCKET_DOT, EmptyState, IdChip, RowSkeleton } from "@/components/bits";
 import { PrChip } from "@/components/forge-prs";
+import { ShowMore, loadMore, type MoreMode } from "@/components/list-footer";
 import { ReviewChip } from "@/components/reviews";
 import { VirtualCombobox } from "@/components/ui/virtual-combobox";
 import { VirtualList } from "@/components/ui/virtual-list";
@@ -30,8 +31,11 @@ const dotOf = (status: string) => (status === "claimed" ? BUCKET_DOT.claimed : s
 
 const ROW = "flex min-h-14 w-full items-start gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50 active:bg-muted/70 focus-visible:bg-muted/50 focus-visible:outline-none";
 
-/** The rows of a section read from a page source: virtualized, carried by the page, paging as the end comes into view. */
-function WorkList<T>({ source, itemKey, renderItem, empty, label }: { source: ListSource<T>; itemKey: (item: T, index: number) => Key; renderItem: (item: T) => ReactNode; empty: ReactNode; label: string }) {
+/**
+ * The rows of a section read from a page source: virtualized, carried by the page. The page's last list pages as its
+ * end comes into view (`more: "scroll"`); every list above another section reads on a "Show more" button.
+ */
+function WorkList<T>({ source, itemKey, renderItem, empty, label, more = "button" }: { source: ListSource<T>; itemKey: (item: T, index: number) => Key; renderItem: (item: T) => ReactNode; empty: ReactNode; label: string; more?: MoreMode }) {
   if (source.isLoading && source.items.length === 0) return <RowSkeleton rows={3} />;
   if (source.error && source.items.length === 0) {
     return (
@@ -41,10 +45,12 @@ function WorkList<T>({ source, itemKey, renderItem, empty, label }: { source: Li
     );
   }
   if (source.items.length === 0) return <>{empty}</>;
-  const footer = source.isFetchingNextPage ? (
+  const footer = source.isFetchingNextPage && more === "scroll" ? (
     <p role="status" className="flex items-center justify-center gap-2 py-3 text-[12.5px] text-muted-foreground">
       <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Loading more
     </p>
+  ) : more === "button" && source.hasNextPage && !source.capped ? (
+    <ShowMore source={source} />
   ) : source.capped ? (
     <p className="py-3 text-center text-[12.5px] text-muted-foreground">That is as far as this goes. Narrow it to one pot to see more.</p>
   ) : null;
@@ -54,9 +60,7 @@ function WorkList<T>({ source, itemKey, renderItem, empty, label }: { source: Li
         items={source.items}
         itemKey={itemKey}
         scroll="window"
-        onEndReached={() => {
-          if (source.hasNextPage && !source.isFetchingNextPage) source.fetchNextPage();
-        }}
+        onEndReached={loadMore(source, more)}
         footer={footer}
         itemClassName="border-b border-border last:border-b-0"
         defaultItemHeight={72}
@@ -233,9 +237,9 @@ export function MyWorkPage() {
   const owned = useWorkSection("owned", pot);
   const holding = useWorkSection("holding", pot);
   const blocked = useWorkSection("blocked", pot);
-  const asked = useMyQuestionsSource({ status: "open" });
 
   const potArg = pot ? { project: pot } : {};
+  const asked = useMyQuestionsSource({ status: "open", ...potArg });
   const questions = useMyWorkQuestionsSource(potArg);
   const reviews = useMyWorkReviewsSource(potArg);
   const comments = useMyWorkCommentsSource(potArg);
@@ -362,6 +366,7 @@ export function MyWorkPage() {
         <Section id="my-asked" title="Asked by me" count={nums.asked} hint="Questions you asked that are still open.">
           <WorkList
             source={asked}
+            more="scroll"
             label="Questions I asked"
             itemKey={(q) => q.id}
             renderItem={(q) => <AskedRow q={q} />}

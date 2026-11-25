@@ -481,7 +481,7 @@ Everything corntchap sends into an agent's context is counted, so you can see it
 
 Each send is added to a per-day counter by cook, pot, kind and name (the `usage_daily` table, kept 90 days). **This is an estimate**: tokens are `ceil(characters / 4)` of the text corntchap sends. It is not what the agent uses: corntchap cannot see the agent's own prompts, reasoning or model usage.
 
-See it in the console on the Cooks page (a "Tokens sent (7 days)" line, and a Usage section in each cook card with a per-day bar row and its top three tools), or ask for the `usage_report` tool (`usageReport(project?, cook?, days?)`): totals, per day, and the top tools and wake reasons (narrow it to one cook with `cook`; the console lists the cooks by their usage through the paged `usageCookPage`). A person sees their own cooks (super-admins all; an orchestrator also the usage in the pots they own), a cook sees itself, and a cook granted `manage` sees its owner's view.
+See it in the console on the Cooks page (a "Tokens sent (7 days)" line, and a Usage section in each cook card with a per-day bar row and its top three tools), or ask for the `usage_report` tool (`usageReport(project?, cook?, days?)`): totals, per day, and the top tools and wake reasons (narrow it to one cook with `cook`), and the `usage_by_cook` tool (`usageCookPage(project?, days?, q?, page?)`, also what the console lists) for the per-cook breakdown: the biggest receivers first, a page at a time. A person sees their own cooks (super-admins all; an orchestrator also the usage in the pots they own), a cook sees itself, and a cook granted `manage` sees its owner's view.
 
 ## Mobile app
 

@@ -5,8 +5,7 @@ import { BookMarked, ChefHat, GitBranch, MessageCircleQuestion, Soup, Flame, Fol
 import { useUi } from "@/lib/ui";
 import { useProjects } from "@/lib/data";
 import { useMenusSource, usePotsSource, useTasksSource } from "@/lib/sources";
-import { useStaticSource } from "@/lib/listbox";
-import { useMappedSource } from "@/lib/pot-pickers";
+import { useMappedSource, useStaticSource } from "@/lib/listbox";
 import { useStoreValue } from "@/lib/use-store-value";
 import { useTheme } from "@/lib/theme";
 import { canOrchestrate, isSuperAdmin, logout, useSession } from "@/lib/session";

@@ -2,6 +2,7 @@ import { useCallback, type Key, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import type { ListSource } from "@/lib/listbox";
 
+import { ShowMore, loadMore, type MoreMode } from "./list-footer";
 import { VirtualList } from "./ui/virtual-list";
 
 /**
@@ -46,6 +47,11 @@ export interface SourceListProps<T> {
   skeletonRows?: number;
   /** On every row's wrapper (default: a hairline between rows). */
   itemClassName?: string;
+  /**
+   * How it reads its next page: `"scroll"` (default) as its end scrolls into view, for the last list on a page;
+   * `"button"` with a "Show more" button, for any list with more content below it (docs/design.md "Lists").
+   */
+  more?: MoreMode;
 }
 
 /**
@@ -53,7 +59,7 @@ export interface SourceListProps<T> {
  * end comes into view, with its loading, empty, error, loading-more, capped and end states. `ListPage` is the same
  * for a whole page.
  */
-export function SourceList<T>({ source, itemKey, renderItem, empty, label, skeletonRows = 2, itemClassName = "border-b border-border/70 last:border-b-0" }: SourceListProps<T>) {
+export function SourceList<T>({ source, itemKey, renderItem, empty, label, skeletonRows = 2, itemClassName = "border-b border-border/70 last:border-b-0", more = "scroll" }: SourceListProps<T>) {
   const { items } = source;
   if (source.isLoading && items.length === 0) {
     return (
@@ -72,10 +78,12 @@ export function SourceList<T>({ source, itemKey, renderItem, empty, label, skele
     );
   }
   if (items.length === 0) return <div className="px-4 py-3 text-[13px] text-muted-foreground">{empty}</div>;
-  const footer = source.isFetchingNextPage ? (
+  const footer = source.isFetchingNextPage && more === "scroll" ? (
     <p role="status" className="flex items-center justify-center gap-2 py-3 text-[12.5px] text-muted-foreground">
       <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Loading more
     </p>
+  ) : more === "button" && source.hasNextPage && !source.capped ? (
+    <ShowMore source={source} />
   ) : source.capped ? (
     <p className="py-3 text-center text-[12.5px] text-muted-foreground">That is as far as this goes.</p>
   ) : !source.hasNextPage ? (
@@ -88,9 +96,7 @@ export function SourceList<T>({ source, itemKey, renderItem, empty, label, skele
       renderItem={renderItem}
       scroll="window"
       aria-label={label}
-      onEndReached={() => {
-        if (source.hasNextPage && !source.isFetchingNextPage) source.fetchNextPage();
-      }}
+      onEndReached={loadMore(source, more)}
       footer={footer}
       itemClassName={itemClassName}
       defaultItemHeight={56}

@@ -507,8 +507,37 @@ async fn resolve(
     Ok((pr.id, w, o))
 }
 
+/// The chip filters of `viewPage`, applied on top of a view's own condition (the kitchen's chips:
+/// the same values `taskPage` takes). `bucket` is a board column.
+#[derive(Default)]
+pub struct Chips<'a> {
+    pub label: Option<&'a str>,
+    pub menu: Option<&'a str>,
+    pub repo: Option<&'a str>,
+    pub owner: Option<&'a str>,
+    pub holder: Option<&'a str>,
+    pub q: Option<&'a str>,
+    pub bucket: Option<&'a str>,
+}
+
+/// The `v` (view rows) predicate of a board column.
+fn bucket_pred(bucket: &str) -> Result<&'static str> {
+    Ok(match bucket {
+        "ready" => {
+            "((v.status = 'open' and v.ready) or (v.status = 'claimed' and not v.lease_live))"
+        }
+        "claimed" => "(v.status = 'claimed' and v.lease_live)",
+        "waiting" => "(v.status = 'blocked' or (v.status = 'open' and not v.ready))",
+        "done" => "v.status = 'done'",
+        "cancelled" => "v.status = 'cancelled'",
+        _ => return Err(bad("bucket is ready, claimed, waiting, done or cancelled")),
+    })
+}
+
 /// A page of a view's tasks (`viewPage`, the `run_view` tool), or of a condition and order to try
-/// out. The cursor holds the last row number; it is tied to the condition and order it was minted for.
+/// out, narrowed by the chip filters. The cursor holds the last row number; it is tied to the
+/// condition, order and filters it was minted for.
+#[allow(clippy::too_many_arguments)]
 pub async fn page(
     db: &PgPool,
     p: &Principal,
@@ -516,12 +545,35 @@ pub async fn page(
     key: Option<&str>,
     where_sql: Option<&str>,
     order_sql: Option<&str>,
+    chips: &Chips<'_>,
     page: &cratestack::CursorPageInput,
 ) -> Result<(Vec<Value>, Option<String>)> {
     use sha2::{Digest, Sha256};
     let (project, w, o) = resolve(db, p, project, key, where_sql, order_sql).await?;
     let order = o.as_deref().unwrap_or("priority desc, created_at");
-    let sig = hex::encode(&Sha256::digest(format!("{w}\n{order}").as_bytes())[..6]);
+    let norm = |v: Option<&str>| v.map(str::trim).filter(|v| !v.is_empty()).map(String::from);
+    let label = norm(chips.label);
+    let repo = norm(chips.repo);
+    let holder = norm(chips.holder);
+    let q = norm(chips.q);
+    let owner = match norm(chips.owner) {
+        Some(o) if o.eq_ignore_ascii_case("anyone") => None,
+        Some(o) if o.eq_ignore_ascii_case("me") => Some(p.name.clone()),
+        o => o,
+    };
+    let menu = norm(chips.menu).map(|m| if m == "-" { m } else { crate::menus::slug(&m) });
+    let bucket = norm(chips.bucket).map(|b| b.to_lowercase());
+    let bucket_sql = match &bucket {
+        Some(b) => bucket_pred(b)?,
+        None => "true",
+    };
+    // the cursor is tied to the filters too: a row number means something else under other chips
+    let sig = hex::encode(
+        &Sha256::digest(
+            format!("{w}\n{order}\n{label:?}{menu:?}{repo:?}{owner:?}{holder:?}{q:?}{bucket:?}")
+                .as_bytes(),
+        )[..6],
+    );
     let sort = format!("rn:{sig}");
     let paging = crate::paging::paging(
         page,
@@ -543,8 +595,20 @@ pub async fn page(
         .await?;
     let sql = format!(
         "with v as ({VIEW_ROWS}),
+              f as (select v.* from v join tasks ft on ft.id = v._tid
+                    where ($4::text is null or ft.labels @> array[$4::text])
+                      and ($5::text is null or ($5 = '-' and ft.menu_id is null)
+                           or exists (select 1 from menus m where m.id = ft.menu_id and m.key = $5))
+                      and ($6::text is null or ($6 = '-' and ft.owner_id is null)
+                           or ft.owner_id = (select id from principals where name = $6))
+                      and ($7::text is null or $7 = any(ft.repos))
+                      and ($8::text is null or position(lower($8) in lower(v.title)) > 0
+                           or position(lower($8) in lower(v.body)) > 0
+                           or position(lower($8) in lower(v.id)) > 0)
+                      and ($9::text is null or v.claimed_by = $9)
+                      and {bucket_sql}),
               sel as (select _tid, row_number() over (order by {order}, number) as rn
-                      from v where ({w}))
+                      from f v where ({w}))
          select {TASK_JSON}, array[sel.rn::text]
          from sel join tasks t on t.id = sel._tid join projects pr on pr.id = t.project_id
          where sel.rn > $2 order by sel.rn limit $3"
@@ -554,6 +618,12 @@ pub async fn page(
             .bind(project)
             .bind(after)
             .bind(paging.fetch())
+            .bind(label)
+            .bind(menu)
+            .bind(owner)
+            .bind(repo)
+            .bind(q)
+            .bind(holder)
             .fetch_all(&mut *tx)
             .await;
     tx.rollback().await.ok();

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { Link, useParams } from "react-router";
 import type { PrincipalView } from "@corntchap/api";
 import { PageShell } from "@/components/page";
@@ -12,7 +12,7 @@ import { useCooksSource } from "@/lib/sources";
 import { principalState, useFireByName } from "@/lib/people";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useLive } from "@/lib/live";
-import { Crumb, linkClass, useWakeTargetsOf } from "./common";
+import { Crumb, linkClass } from "./common";
 
 export function FireDetailsPage() {
   const { name = "" } = useParams();
@@ -21,18 +21,9 @@ export function FireDetailsPage() {
   const { events } = useLive();
   const now = useNow();
 
-  // the cooks a fire may wake are its owner's: their pages are read as the list is scrolled, and a cook is listed once its wake targets say it has a relay
-  const owner = fire?.owner ?? null;
-  const owned = useCooksSource({ ...(owner ? { owner } : {}), enabled: !!owner });
-  const wake = useWakeTargetsOf(useMemo(() => owned.items.map((a) => a.name), [owned.items]));
-  const wakes = useMemo(() => owned.items.filter((a) => (wake.byCook.get(a.name) ?? []).some((w) => w.type === "relay")), [owned.items, wake.byCook]);
-  // none of the cooks read so far has one: read on, so "none yet" is only said when every cook was looked at
-  const looking = wakes.length === 0 && owned.hasNextPage;
-  const { fetchNextPage, isFetchingNextPage } = owned;
-  useEffect(() => {
-    if (looking && !wake.isLoading && !isFetchingNextPage) fetchNextPage();
-  }, [looking, wake.isLoading, isFetchingNextPage, fetchNextPage]);
-  const wakeSource = useMemo(() => ({ ...owned, items: wakes, isLoading: owned.isLoading || wake.isLoading || looking }), [owned, wakes, wake.isLoading, looking]);
+  // the cooks it wakes: its owner's cooks with a relay wake target, one paged read
+  const wakeSource = useCooksSource({ wokenBy: name, enabled: !!fire });
+  const wakes = wakeSource.items;
 
   // `run.started` / `run.finished` are what the relay reports for each agent it starts
   const runs = useMemo(() => {

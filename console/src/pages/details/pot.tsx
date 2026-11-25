@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ChevronRight, Pencil, Trash2 } from "lucide-react";
-import type { ActivityView, MemberView } from "@corntchap/api";
+import type { ActivityView, MemberView, StationView } from "@corntchap/api";
 import { PageShell } from "@/components/page";
 import { Avatar, EmptyState, Group, GroupRow, IdChip, LabelChip, RowSkeleton } from "@/components/bits";
 import { PotDeleteDialog, PotRenameDialog } from "@/components/pot-options";
@@ -74,16 +74,15 @@ function mcpLines(url: string, key: string) {
 const memberName = (m: MemberView) => m.name;
 const activityKey = (a: ActivityView) => `${a.station}${a.seq}`;
 
-/** A cook's row on a pot's page: its stations in this pot (read for this cook alone, as its row comes into view). */
-function PotCook({ cook, pot }: { cook: string; pot: string }) {
-  const stations = useStationsSource({ project: pot, cook, kind: "session" });
-  const where = stations.items.map((s) => s.label ?? s.directory ?? s.session.slice(0, 8)).join(", ");
+/** A cook's row on a pot's page: its stations in this pot, out of the one read of the pot's stations. */
+function PotCook({ cook, stations, more, loading }: { cook: string; stations: readonly StationView[]; more: boolean; loading: boolean }) {
+  const where = stations.map((s) => s.label ?? s.directory ?? s.session.slice(0, 8)).join(", ");
   return (
     <Link to={`/cooks/${cook}`} className="flex min-h-14 items-center gap-3 px-4 py-2.5 outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted">
       <Avatar name={cook} className="size-8 rounded-lg text-[14px]" />
       <span className="min-w-0 flex-1">
         <span className="block text-[14px] font-medium leading-tight">{cook}</span>
-        <span className="block truncate text-[12px] text-muted-foreground">{stations.isLoading ? "…" : stations.items.length === 0 ? "no station here" : `${where}${stations.hasNextPage ? ", …" : ""}`}</span>
+        <span className="block truncate text-[12px] text-muted-foreground">{loading ? "…" : stations.length === 0 ? (more ? "…" : "no station here") : `${where}${more ? ", …" : ""}`}</span>
       </span>
       <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
     </Link>
@@ -98,6 +97,13 @@ export function PotDetailsPage() {
   const team = project?.team ?? null;
   const cooks = useTeamMembersSource(team ?? "", { kind: "agent", enabled: !!team });
   const people = useTeamMembersSource(team ?? "", { kind: "user", enabled: !!team });
+  // every cook's stations here come from one read (a page of the most rows the server gives), grouped by cook
+  const stations = useStationsSource({ project: potKey, kind: "session", pageSize: 200, enabled: !!project });
+  const byCook = useMemo(() => {
+    const m = new Map<string, StationView[]>();
+    for (const s of stations.items) m.set(s.cook, [...(m.get(s.cook) ?? []), s]);
+    return m;
+  }, [stations.items]);
   const usage = useProc("usageReport", { project: potKey, days: 7 }, { enabled: !!project });
   const usageCooks = useUsageCooksSource({ project: potKey, days: 7, enabled: !!project });
   const activity = useActivitySource(potKey, { enabled: !!project });
@@ -203,16 +209,18 @@ export function PotDetailsPage() {
             <Group title="Cooks who work here" hint={team ? `The cooks of team ${team}, with their stations in ${project.key}.` : "This pot has no team, so no cook sees it."}>
               <SourceList<MemberView>
                 source={cooks}
+                more="button"
                 itemKey={memberName}
                 label="Cooks who work here"
                 empty={<>No cook yet. No cook is in this pot's team.</>}
-                renderItem={(c) => <PotCook cook={c.name} pot={project.key} />}
+                renderItem={(c) => <PotCook cook={c.name} stations={byCook.get(c.name) ?? []} more={!!stations.hasNextPage} loading={stations.isLoading} />}
               />
             </Group>
 
             <Group title="People who work here" hint={team ? `The people of team ${team}.` : undefined}>
               <SourceList<MemberView>
                 source={people}
+                more="button"
                 itemKey={memberName}
                 label="People who work here"
                 empty={<>No one yet.</>}

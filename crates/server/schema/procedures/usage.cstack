@@ -15,5 +15,6 @@ procedure usageReport(project: String?, cook: String?, days: Int?): UsageReport
 /// @param days How many days back, today included (default 7, at most 90).
 /// @param q Only cooks whose name contains this (any case).
 /// @param page limit (default 25, at most 200) and cursor.
-procedure usageCookPage(project: String?, days: Int?, q: String?, page: CursorPageInput): CursorPage<UsageCook>
+procedure usageCookPage(project: String?, days: Int?, q: String?, page: CursorPageInput?): CursorPage<UsageCook>
   @allow(auth() != null)
+  @mcp(tool: "usage_by_cook", description: "The cooks whose usage you may see (yours, or those of the cooks you own), the biggest receivers first, a page at a time (items, nextCursor): calls, characters and estimated tokens (chars / 4) of what corntchap sent each one over the last days. Narrow with project, days or q (a cook's name). usage_report gives the totals, per day and the top tools.")

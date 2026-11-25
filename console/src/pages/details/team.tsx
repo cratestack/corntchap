@@ -88,6 +88,7 @@ export function TeamDetailsPage() {
           <Group title="Chefs" aside={<span className="font-mono text-[11px] text-muted-foreground">{team.members}</span>}>
             <SourceList<MemberView>
               source={members}
+              more="button"
               itemKey={memberKey}
               label="Chefs"
               empty={

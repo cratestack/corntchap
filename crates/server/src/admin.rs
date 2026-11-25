@@ -638,6 +638,8 @@ pub struct DirQuery {
     pub lit: Option<bool>,
     /// People and cooks: only those not in this team.
     pub not_in_team: Option<String>,
+    /// Cooks: only those with a relay wake target that this fire (relay) wakes, its owner's cooks.
+    pub woken_by: Option<String>,
 }
 
 impl DirQuery {
@@ -692,6 +694,20 @@ pub async fn dir_page(
     Ok(crate::paging::finish(by_name(rows), &paging))
 }
 
+/// The id of the team `name` (any case) as `p` may see it: a super-admin sees every team, anyone else
+/// only the teams they belong to; otherwise 404, so the filters by team never reveal a hidden team.
+async fn visible_team(db: &PgPool, p: &Principal, name: &str) -> Result<Uuid> {
+    let row: Option<Uuid> = sqlx::query_scalar(
+        "select t.id from teams t where t.name = lower(trim($1)) and ($2 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $3))",
+    )
+    .bind(name)
+    .bind(p.is_super_admin())
+    .bind(p.id)
+    .fetch_optional(db)
+    .await?;
+    row.ok_or_else(|| Error::NotFound(format!("team {name} not found")))
+}
+
 /// Super-admins see every person with their sign-in state; an orchestrator sees the people directory (handle,
 /// display name and role: no sign-in or contact details) to put people in their teams.
 pub async fn list_users_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Vec<Value>> {
@@ -702,20 +718,24 @@ pub async fn list_users_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Ve
         ));
     }
     let f = dir_filter("name", Some("display_name"), 1);
+    let not_in = match q.not_in_team.as_deref() {
+        Some(t) => Some(visible_team(db, p, t).await?),
+        None => None,
+    };
     let sql = if p.is_super_admin() {
         format!(
             "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role,
             'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals
             where kind = 'user' and {f} and ($4::text is null or role = $4)
               and ($5::bool is null or $5 = (disabled_at is not null))
-              and ($6::text is null or {NOT_IN_TEAM}) order by name limit $3"
+              and ($6::uuid is null or {NOT_IN_TEAM}) order by name limit $3"
         )
     } else {
         format!(
             "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role)
          from principals where kind = 'user' and disabled_at is null and {f}
            and ($4::text is null or role = $4) and ($5::bool is null or $5 = false)
-           and ($6::text is null or {NOT_IN_TEAM}) order by name limit $3"
+           and ($6::uuid is null or {NOT_IN_TEAM}) order by name limit $3"
         )
     };
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
@@ -724,16 +744,14 @@ pub async fn list_users_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Ve
         .bind(q.limit)
         .bind(q.role.as_deref())
         .bind(q.disabled)
-        .bind(q.not_in_team.as_deref())
+        .bind(not_in)
         .fetch_all(db)
         .await?;
     Ok(rows)
 }
 
-/// Not a member of the team named `$6` (for the rows of `principals`, aliased or not as `a`).
-const NOT_IN_TEAM: &str =
-    "not exists (select 1 from team_members nm join teams nt on nt.id = nm.team_id
-       where nm.principal_id = principals.id and nt.name = $6)";
+/// Not a member of the team `$6` (an id from [`visible_team`]).
+const NOT_IN_TEAM: &str = "not exists (select 1 from team_members nm where nm.principal_id = principals.id and nm.team_id = $6)";
 
 pub async fn create_team(db: &PgPool, p: &Principal, name: &str) -> Result<Value> {
     let p = &acting(db, p).await?;
@@ -980,16 +998,7 @@ pub async fn list_members_q(
     q: &MemberQuery,
 ) -> Result<Vec<Value>> {
     let p = &acting_or_self(db, p).await?;
-    let mut c = db.acquire().await?;
-    let row: Option<Uuid> = sqlx::query_scalar(
-        "select t.id from teams t where t.name = $1 and ($2 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $3))",
-    )
-    .bind(team)
-    .bind(p.is_super_admin())
-    .bind(p.id)
-    .fetch_optional(&mut *c)
-    .await?;
-    let tid = row.ok_or_else(|| Error::NotFound(format!("team {team} not found")))?;
+    let tid = visible_team(db, p, team).await?;
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select jsonb_build_object('name', pr.name, 'display_name', pr.display_name, 'kind', pr.kind, 'role', m.role,
                 'mine', pr.kind = 'agent' and pr.owner_id = $7,
@@ -1007,7 +1016,7 @@ pub async fn list_members_q(
     .bind(q.dir.after.as_deref())
     .bind(q.dir.limit)
     .bind(p.id)
-    .fetch_all(&mut *c)
+    .fetch_all(db)
     .await?;
     Ok(rows)
 }
@@ -1193,6 +1202,26 @@ pub async fn list_principals_q(
     q: &DirQuery,
 ) -> Result<Vec<Value>> {
     let p = &acting_or_self(db, p).await?;
+    let not_in = match q.not_in_team.as_deref() {
+        Some(t) => Some(visible_team(db, p, t).await?),
+        None => None,
+    };
+    // the fire's owner (a fire you cannot manage is a 404, as everywhere)
+    let woken_by: Option<Uuid> = match q.woken_by.as_deref() {
+        Some(f) => {
+            let owner: Option<Uuid> = sqlx::query_scalar(
+                "select owner_id from principals where kind = 'relay' and name = lower($1) and ($2 or owner_id = $3)",
+            )
+            .bind(f)
+            .bind(p.is_super_admin())
+            .bind(p.id)
+            .fetch_optional(db)
+            .await?
+            .flatten();
+            Some(owner.ok_or_else(|| Error::NotFound(format!("no fire named {f}")))?)
+        }
+        None => None,
+    };
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select jsonb_build_object('id', a.id, 'name', a.name, 'kind', a.kind, 'agent_kind', a.agent_kind, 'runtime', a.runtime,
             'fireAndForget', {},
@@ -1215,8 +1244,10 @@ pub async fn list_principals_q(
                  when 'cloud' then a.runtime = 'cloud'
                  else a.runtime is distinct from 'cloud' end)
            and ($11::bool is null or $11 = coalesce(a.disabled_at is null and a.last_seen_at > now() - interval '5 minutes', false))
-           and ($12::text is null or not exists (select 1 from team_members m join teams t on t.id = m.team_id
-                                                 where m.principal_id = a.id and t.name = $12))
+           and ($12::uuid is null or not exists (select 1 from team_members m
+                                                 where m.principal_id = a.id and m.team_id = $12))
+           and ($13::uuid is null or (a.owner_id = $13
+                and exists (select 1 from wake_targets w where w.agent_id = a.id and w.type = 'relay')))
          order by a.name limit $6",
         crate::cloud::fire_and_forget_sql("a.id"),
         dir_filter("a.name", None, 4),
@@ -1232,10 +1263,26 @@ pub async fn list_principals_q(
     .bind(q.disabled)
     .bind(q.state.as_deref())
     .bind(q.lit)
-    .bind(q.not_in_team.as_deref())
+    .bind(not_in)
+    .bind(woken_by)
     .fetch_all(db)
     .await?;
     Ok(rows)
+}
+
+/// The fires `p` owns (super-admins: all) in one line: how many, how many are lit, when one was last seen.
+pub async fn fire_summary(db: &PgPool, p: &Principal) -> Result<Value> {
+    let p = &acting_or_self(db, p).await?;
+    Ok(sqlx::query_scalar(
+        "select jsonb_build_object('total', count(*),
+                'lit', count(*) filter (where a.disabled_at is null and a.last_seen_at > now() - interval '5 minutes'),
+                'last_seen_at', max(a.last_seen_at))
+         from principals a where a.kind = 'relay' and ($1 or a.owner_id = $2)",
+    )
+    .bind(p.is_super_admin())
+    .bind(p.id)
+    .fetch_one(db)
+    .await?)
 }
 
 async fn managed(c: &mut PgConnection, p: &Principal, name: &str) -> Result<(Uuid, String)> {

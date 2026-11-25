@@ -35,6 +35,16 @@ export function staticSource<T>(items: readonly T[]): ListSource<T> {
 }
 
 /** `staticSource`, kept stable while `items` is. */
+/** `source` with every row mapped by `fn` (keep `fn` stable: a module-level function or a `useCallback`). The paging state stays the source's. */
+export function useMappedSource<T, U>(source: ListSource<T>, fn: (item: T) => U): ListSource<U> {
+  return useMemo(() => ({ ...source, items: source.items.map(fn) }), [source, fn]);
+}
+
+/** `source` without the rows `keep` rejects (the paging stays the source's). */
+export function useFilteredSource<T>(source: ListSource<T>, keep: (item: T) => boolean): ListSource<T> {
+  return useMemo(() => ({ ...source, items: source.items.filter(keep) }), [source, keep]);
+}
+
 export function useStaticSource<T>(items: readonly T[]): ListSource<T> {
   return useMemo(() => staticSource(items), [items]);
 }

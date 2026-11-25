@@ -793,6 +793,7 @@ pub async fn mine_page(
     db: &PgPool,
     p: &Principal,
     status: Option<&str>,
+    project: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<(Vec<Value>, Option<String>)> {
     let status = status
@@ -815,6 +816,7 @@ pub async fn mine_page(
         "select {QUESTION_JSON}, array[q.created_at::text, q.id::text]
          from questions q join projects pr on pr.id = q.project_id
          where q.asked_by = $1 and ($2 = 'all' or q.status = $2) and {access}
+           and ($7::text is null or pr.key = $7)
            and ($3::text is null or q.created_at < $3::text::timestamptz
                 or (q.created_at = $3::text::timestamptz and q.id::text collate \"C\" < $4::text collate \"C\"))
          order by q.created_at desc, q.id desc limit $5",
@@ -827,6 +829,11 @@ pub async fn mine_page(
         .bind(paging.key(1))
         .bind(paging.fetch())
         .bind(p.is_super_admin())
+        .bind(
+            project
+                .map(|k| k.trim().to_uppercase())
+                .filter(|k| !k.is_empty()),
+        )
         .fetch_all(db)
         .await?;
     let rows = rows

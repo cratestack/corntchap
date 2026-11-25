@@ -7,7 +7,6 @@ import { useProjects } from "@/lib/data";
 import { useBoardData, type BucketMore } from "@/lib/board";
 import { useProcInfinite } from "@/lib/paging";
 import { useLive } from "@/lib/live";
-import { useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { useUrlFilters } from "@/lib/url-filters";
 import { useDebounced } from "@/lib/use-debounced";
@@ -15,7 +14,7 @@ import { QUERY_DEBOUNCE_MS } from "@/lib/list-query";
 import { useStoreValue } from "@/lib/use-store-value";
 import { matchText, useStaticSource, type ListSource } from "@/lib/listbox";
 import { useEventsSource, useSavedViewsSource } from "@/lib/sources";
-import { BUCKETS, bucketOf, type Bucket } from "@/lib/format";
+import { BUCKETS, type Bucket } from "@/lib/format";
 import { forgetView, isBaseView, lastPot, lastView, rememberPot, rememberView, type BaseView, type Filters } from "@/lib/views";
 import { useOpenTask } from "@/lib/nav";
 import { useIsPhone } from "@/lib/media";
@@ -61,20 +60,6 @@ function toFilters(values: Record<keyof typeof TASK_FILTERS, string>, q: string)
   return f;
 }
 
-function applyFilters(tasks: TaskView[], f: Filters, me: string): TaskView[] {
-  const q = f.q?.trim().toLowerCase();
-  return tasks.filter((t) => {
-    if (f.status && bucketOf(t) !== f.status) return false;
-    if (f.label && !t.labels.includes(f.label)) return false;
-    if (f.repo && !t.repos.includes(f.repo)) return false;
-    if (f.holder && t.claimed_by !== f.holder) return false;
-    if (f.owner && (f.owner === "-" ? !!t.owner : t.owner !== (f.owner === "me" ? me : f.owner))) return false;
-    if (f.menu && (f.menu === "-" ? !!t.menu : t.menu !== f.menu)) return false;
-    if (q && !`${t.id} ${t.title}`.toLowerCase().includes(q)) return false;
-    return true;
-  });
-}
-
 export function PotRedirect() {
   const projects = useProjects();
   if (projects.isLoading) {
@@ -117,7 +102,7 @@ export function KitchenPage() {
   const openQuestions = project?.open_questions ?? 0;
   const [menuDialog, setMenuDialog] = useState<{ open: boolean; menu: MenuView | null }>({ open: false, menu: null });
   const selectedMenu = useMenu(potKey, filters.menu).menu;
-  const facets = useTaskFacets(project, selectedMenu);
+  const facets = useTaskFacets(project, selectedMenu, taskView);
 
   useEffect(() => {
     if (project && viewKey) {
@@ -362,10 +347,12 @@ type ViewRow = { kind: "board" } | { kind: "new" } | { kind: "view"; view: ViewO
  * A pot's saved views as a searchable, paged menu (they may be thousands): on a phone the Board and "New view" are
  * in it too, so it is the whole views switcher; on wide screens the Board is a tab beside it.
  */
-function ViewsMenu({ potKey, viewKey, savedName, onNewView, phone }: { potKey: string; viewKey: string | undefined; savedName: string | undefined; onNewView: () => void; phone: boolean }) {
+function ViewsMenu({ potKey, viewKey, savedName, onNewView, phone, search }: { potKey: string; viewKey: string | undefined; savedName: string | undefined; onNewView: () => void; phone: boolean; search: string }) {
   const navigate = useNavigate();
   const q = useStoreValue("");
-  const views = useSavedViewsSource(potKey, q.value);
+  // the saved views are read once the menu is opened (the name of the one showing comes with its own page)
+  const opened = useStoreValue(false);
+  const views = useSavedViewsSource(potKey, q.value, { enabled: opened.value });
   const source = useMemo<ListSource<ViewRow>>(() => {
     const lead: ViewRow[] = phone ? [...(matchText(q.value, "Board") ? [{ kind: "board" as const }] : []), ...(matchText(q.value, "New view") ? [{ kind: "new" as const }] : [])] : [];
     return { ...views, items: [...lead, ...views.items.map((view): ViewRow => ({ kind: "view", view }))] };
@@ -397,7 +384,8 @@ function ViewsMenu({ potKey, viewKey, savedName, onNewView, phone }: { potKey: s
       onQuery={q.set}
       itemKey={(r) => (r.kind === "view" ? r.view.key : r.kind)}
       selected={(r) => (r.kind === "view" ? r.view.key === viewKey : r.kind === "board" && !viewKey)}
-      onSelect={(r) => (r.kind === "new" ? onNewView() : void navigate(r.kind === "board" ? `/pots/${potKey}/board` : `/pots/${potKey}/v/${r.view.key}`))}
+      onOpenChange={opened.set}
+      onSelect={(r) => (r.kind === "new" ? onNewView() : void navigate({ pathname: r.kind === "board" ? `/pots/${potKey}/board` : `/pots/${potKey}/v/${r.view.key}`, search }))}
       renderItem={(r) =>
         r.kind === "new" ? (
           <span className="flex items-center gap-2">
@@ -418,6 +406,7 @@ function ViewsMenu({ potKey, viewKey, savedName, onNewView, phone }: { potKey: s
 
 function PhoneHeader({ project, base, viewKey, savedName, taskView, onNewView, filters, setFilter, clearFilters, facets, q, setQ, onFacets, onNew }: HeaderProps) {
   const [sheet, setSheet] = useState(false);
+  const loc = useLocation();
   const activeCount = Object.values(filters).filter(Boolean).length;
 
   if (!taskView) {
@@ -438,7 +427,7 @@ function PhoneHeader({ project, base, viewKey, savedName, taskView, onNewView, f
 
   return (
     <header className="flex flex-wrap items-center gap-2">
-      <ViewsMenu potKey={project.key} viewKey={viewKey} savedName={savedName} onNewView={onNewView} phone />
+      <ViewsMenu potKey={project.key} viewKey={viewKey} savedName={savedName} onNewView={onNewView} phone search={loc.search} />
       {/* the board has its own status switcher under this line; lists filter by status here */}
       <div className="order-last min-w-0 basis-full">
         {viewKey && <StatusChips project={project} status={filters.status} onPick={(b) => setFilter("status", b)} withLabels={false} />}
@@ -569,7 +558,7 @@ function WideHeader({ project, base, viewKey, savedName, taskView, onNewView, fi
 
       <nav aria-label="Views" className="mt-5 flex w-fit max-w-full flex-wrap items-center gap-1 rounded-xl bg-muted p-1">
         {HEAD_VIEWS.map(tab)}
-        <ViewsMenu potKey={project.key} viewKey={viewKey} savedName={savedName} onNewView={onNewView} phone={false} />
+        <ViewsMenu potKey={project.key} viewKey={viewKey} savedName={savedName} onNewView={onNewView} phone={false} search={taskView ? loc.search : ""} />
         <button
           type="button"
           onClick={onNewView}
@@ -654,17 +643,29 @@ function SavedViewBody({
   onClear: () => void;
   showMenu: boolean;
 }) {
-  const me = useSession();
-  // a view is read a page at a time, as far as the reader scrolls; the chips filter what is loaded
-  const run = useProcInfinite("viewPage", { project: potKey, key: view?.key ?? null, where: null, orderBy: null }, { getCursor: (p) => p.nextCursor, pageSize: 50, maxLimit: 200, maxPages: Infinity, enabled: !!view });
+  // a view is read a page at a time, as far as the reader scrolls; the chips narrow it on the server, on top of its own condition
+  const rested = useDebounced(filters.q ?? "", QUERY_DEBOUNCE_MS).trim();
+  const chips = useMemo(
+    () => ({
+      ...(filters.label ? { label: filters.label } : {}),
+      ...(filters.menu ? { menu: filters.menu } : {}),
+      ...(filters.repo ? { repo: filters.repo } : {}),
+      ...(filters.owner ? { owner: filters.owner } : {}),
+      ...(filters.holder ? { holder: filters.holder } : {}),
+      ...(filters.status ? { bucket: filters.status } : {}),
+      ...(rested ? { q: rested } : {}),
+    }),
+    [filters.label, filters.menu, filters.repo, filters.owner, filters.holder, filters.status, rested],
+  );
+  const run = useProcInfinite("viewPage", { project: potKey, key: view?.key ?? null, where: null, orderBy: null, ...chips }, { getCursor: (p) => p.nextCursor, pageSize: 50, maxLimit: 200, maxPages: Infinity, enabled: !!view, keepPrevious: true });
   const tasks = run.items;
-  const visible = applyFilters(tasks, filters, me.name);
+  const filtered = Object.keys(chips).length > 0 || !!filters.q?.trim();
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = run;
   const more = useMemo<BucketMore>(
     () => ({ has: !!hasNextPage, loading: isFetchingNextPage, load: () => void (hasNextPage && !isFetchingNextPage && fetchNextPage()) }),
     [hasNextPage, isFetchingNextPage, fetchNextPage],
   );
-  const columns = useColumns(visible, true, more);
+  const columns = useColumns(tasks, true, more);
   if (loadingViews) return <RowSkeleton rows={4} />;
   if (!view) {
     return (
@@ -680,6 +681,13 @@ function SavedViewBody({
       </EmptyState>
     );
   }
+  if (!run.isLoading && !run.isPlaceholderData && tasks.length === 0 && filtered) {
+    return (
+      <EmptyState title="No task matches those filters" action={<Button variant="outline" onClick={onClear}>Clear filters</Button>}>
+        Loosen a chip or two and the portions come back.
+      </EmptyState>
+    );
+  }
   if (!run.isLoading && tasks.length === 0) {
     return (
       <EmptyState title="No tasks match this view">
@@ -691,9 +699,9 @@ function SavedViewBody({
     <ListView
       loading={run.isLoading}
       error={null}
-      tasks={visible}
+      tasks={tasks}
       total={tasks.length}
-      filtered={Object.keys(filters).length > 0}
+      filtered={filtered}
       selected={selected}
       onOpen={onOpen}
       events={events}

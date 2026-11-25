@@ -1,12 +1,7 @@
 import { useMemo } from "react";
-import type { ListSource } from "./listbox";
+import { useMappedSource, type ListSource } from "./listbox";
 import { useLabelsSource, useTagsSource, useTasksSource } from "./sources";
 import { useStoreValue } from "./use-store-value";
-
-/** A source with its rows turned into others (the page's own cursor, loading and total state stay). */
-export function useMappedSource<T, U>(source: ListSource<T>, map: (item: T) => U): ListSource<U> {
-  return useMemo(() => ({ ...source, items: source.items.map(map) }), [source, map]);
-}
 
 /** What a `TagInput` takes for server-backed options: the rows as strings, and the typed text to read again with. */
 export interface TagOptions {

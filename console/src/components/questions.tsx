@@ -561,7 +561,7 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
             {waiting.length > 0 && (
               <>
                 <p className="label-caps mt-4 mb-2 px-0.5">{plural(waiting.length, "review")}{waitingReviews.hasNextPage ? "+" : ""} waiting on you</p>
-                <ReviewsList source={waitingReviews} />
+                <ReviewsList source={waitingReviews} more="button" />
               </>
             )}
             {openList.length > 0 && (

@@ -21,7 +21,8 @@ import { VirtualListbox } from "@/components/ui/virtual-listbox";
 import { type VirtualTableColumn } from "@/components/ui/virtual-table";
 import { useProcCall, useV1Call } from "@/lib/data";
 import { useCooksSource, useFiresSource, usePotsSource, useTeamMembersSource, useTeamsSource, useUsersSource } from "@/lib/sources";
-import { DISABLED_OPTIONS, disabledArg, principalState, staticFacet, useFilteredSource, useMappedSource, useTeamFacet } from "@/lib/people";
+import { DISABLED_OPTIONS, disabledArg, principalState, staticFacet, useTeamFacet } from "@/lib/people";
+import { useFilteredSource, useMappedSource } from "@/lib/listbox";
 import { useUrlFilters, type UrlFilterSchema } from "@/lib/url-filters";
 import { useStoreValue } from "@/lib/use-store-value";
 import { errorMessage } from "@/lib/api";
@@ -705,8 +706,12 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
   // people: everything for a super-admin, the directory (handle, name, role) for an orchestrator; a plain chef adds only their own cooks
   const withPeople = canOrchestrate(me) && !ownCooksOnly;
   const [who, setWho] = useState<Candidate | null>(null);
-  const [kind, setKind] = useState<"user" | "cook">("user");
-  const [query, setQuery] = useState("");
+  const kindStore = useStoreValue<"user" | "cook">("user");
+  const queryStore = useStoreValue("");
+  const kind = kindStore.value;
+  const query = queryStore.value;
+  const { set: setKind } = kindStore;
+  const { set: setQuery } = queryStore;
   const [role, setRole] = useState("member");
   const [busy, setBusy] = useState(false);
   const showing = withPeople ? kind : "cook";
@@ -724,7 +729,7 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
       setRole("member");
       setQuery("");
     }
-  }, [open]);
+  }, [open, setKind, setQuery]);
   const principal = who?.principal ?? "";
   const ownerOk = who?.kind === "user" && who.role !== "member";
 

@@ -538,8 +538,8 @@ pub async fn review_page(
          from reviews r join projects pr on pr.id = r.project_id
          where {REVIEW_COND} and {access} and ($3::text is null or pr.key = $3)
            and ($4::text is null
-                or (r.reviewer is null)::int > $4::text::int
-                or ((r.reviewer is null)::int = $4::text::int
+                or (r.reviewer is null)::int > $4::text::bigint
+                or ((r.reviewer is null)::int = $4::text::bigint
                     and (r.created_at > $5::text::timestamptz
                          or (r.created_at = $5::text::timestamptz and r.id::text collate \"C\" > $7::text collate \"C\"))))
          order by (r.reviewer is null)::int, r.created_at, r.id limit $6"

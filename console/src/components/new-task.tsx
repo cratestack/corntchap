@@ -12,6 +12,7 @@ import type { MenuView, ProjectSummary } from "@corntchap/api";
 import { useUi } from "@/lib/ui";
 import { useProcCall, useProjects } from "@/lib/data";
 import { useMenusSource, usePotsSource } from "@/lib/sources";
+import { useMenu } from "./menus";
 import { useStoreValue } from "@/lib/use-store-value";
 import { useLabelOptions, useTaskIdOptions } from "@/lib/pot-pickers";
 import { errorMessage } from "@/lib/api";
@@ -74,6 +75,8 @@ export function NewTaskDialog() {
   const pots = usePotsSource({ q: potQ.value, enabled: newTask.open });
   const menuQ = useStoreValue("");
   const menus = useMenusSource(pot, { q: menuQ.value, enabled: newTask.open && !!pot });
+  // the menu to put the task on is kept only while it is an open one of this pot (a filter in the URL may name a served menu)
+  const chosenMenu = useMenu(pot, newTask.open && menu !== "-" ? menu : undefined).menu;
   const showMenu = menus.items.length > 0 || menus.isLoading || !!menuQ.value.trim() || menus.pending;
   const labelOptions = useLabelOptions(pot, newTask.open);
   const depOptions = useTaskIdOptions(pot, newTask.open);
@@ -92,7 +95,7 @@ export function NewTaskDialog() {
         dependsOn: deps.length ? deps.join(",") : null,
         priority: Number(priority),
         repos: hasRepos && repos.length > 0 ? repos.join(",") : null,
-        menu: menu !== "-" ? menu : null,
+        menu: menu !== "-" && chosenMenu?.status === "open" ? menu : null,
         owner: owner || null,
       });
       toast.success(`${t.id} is in the pot`, {

@@ -13,6 +13,7 @@ import { useListQuery } from "@/lib/list-query";
 import { useIsDesktop, useIsPhone } from "@/lib/media";
 import { isSuperAdmin, useSession } from "@/lib/session";
 import { useCooksSource, useTeamMembersSource } from "@/lib/sources";
+import { useTeamByName } from "@/lib/people";
 import { useStoreValue } from "@/lib/use-store-value";
 import { useUrlFilters } from "@/lib/url-filters";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -144,18 +145,12 @@ export function PassView({ potKey }: { potKey: string }) {
     );
   };
 
-  // the team's chefs as far as they are loaded: who a message author may be written to, and how many there are
-  const members = useTeamMembersSource(team ?? "", { enabled: !!team });
+  const teamRow = useTeamByName(team);
   const cooks = useCooks(now, team, channel ? null : withWho);
   const conversations = useConversations(potKey, { q: filters.values.chat, unread: filters.values.unread });
   const opened = conversations.items.find((c) => c.chef === withWho);
   // a conversation not started yet (picked from "Message a chef"): who it is, by name
   const named = useTeamMembersSource(team ?? "", { q: withWho, enabled: !channel && !!team && !opened });
-  const chefNames = useMemo(() => {
-    const names = new Set<string>([...members.items.map((m) => m.name), ...conversations.items.map((c) => c.chef), ...cooks.byName.keys()]);
-    names.delete(me.name);
-    return names;
-  }, [members.items, conversations.items, cooks.byName, me.name]);
   const withKind = opened?.kind ?? named.items.find((m) => m.name === withWho)?.kind ?? (cooks.byName.has(withWho) ? "agent" : "user");
   const taskKeys = useMemo(() => (projects.data ?? []).map((p) => p.key).sort((a, b) => b.length - a.length), [projects.data]);
 
@@ -270,7 +265,7 @@ export function PassView({ potKey }: { potKey: string }) {
                 <span className="truncate">{channel ? "pass" : withWho}</span>
                 <ChevronDown className="size-4 shrink-0 text-muted-foreground md:hidden" aria-hidden="true" />
               </span>
-              <HeaderSubtitle channel={channel} potKey={potKey} chefCount={members.total ?? members.items.length} who={withWho} cook={withCook} person={!channel && !withCook} />
+              <HeaderSubtitle channel={channel} potKey={potKey} chefCount={teamRow.item?.members ?? 0} who={withWho} cook={withCook} person={!channel && !withCook} />
             </span>
             {unreadElsewhere > 0 && (
               <span className="absolute top-2 left-9 size-2.5 rounded-full bg-primary ring-2 ring-card md:hidden">
@@ -297,7 +292,6 @@ export function PassView({ potKey }: { potKey: string }) {
           me={me.name}
           who={channel ? null : withWho}
           cooks={cooks.byName}
-          chefNames={chefNames}
           taskKeys={taskKeys}
           signals={signals}
           actions={{ reply: (text) => setSeed({ text, n: (seed?.n ?? 0) + 1 }), direct: select }}
@@ -579,8 +573,7 @@ function OutsideCooks({ team, canManage }: { team: string | null; canManage: boo
   const me = useSession();
   const call = useV1Call();
   const query = useStoreValue("");
-  const cooks = useCooksSource({ owner: me.name, q: query.value, enabled: !!team });
-  const source = useMemo(() => ({ ...cooks, items: cooks.items.filter((c) => !!team && !c.teams.includes(team) && c.name !== me.name) }), [cooks, team, me.name]);
+  const source = useCooksSource({ owner: me.name, notInTeam: team, q: query.value, enabled: !!team });
   if (!team) return null;
   async function add(cook: string) {
     try {

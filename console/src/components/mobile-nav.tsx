@@ -182,14 +182,14 @@ function ThemeSwitch() {
 function FireLine({ onPick }: { onPick: () => void }) {
   const { status } = useLive();
   const now = useNow();
-  const { rows, lit, newest, more } = useFireSummary(now);
+  const { total, lit, newest, more } = useFireSummary();
   return (
     <NavLink to="/fires" onClick={onPick} className="flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-2.5">
       <Flame className={cn("size-5", lit.length ? "text-corn" : "text-muted-foreground")} aria-hidden="true" />
       <span className="min-w-0 flex-1">
-        <span className="block font-display text-[15px]">{lit.length ? (lit.length === 1 && !more ? "Fire is lit" : `${lit.length}${more ? "+" : ""} fires lit`) : "No fire lit"}</span>
+        <span className="block font-display text-[15px]">{lit.length ? (more ? "Fires lit" : "Fire is lit") : "No fire lit"}</span>
         <span className="block truncate text-[12px] text-muted-foreground">
-          {rows.length === 0 ? "No relay enrolled yet" : `Last relay seen ${fmtAgo(newest, now)}`}
+          {total === 0 ? "No relay enrolled yet" : `Last relay seen ${fmtAgo(newest, now)}`}
         </span>
       </span>
       <span className="flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-muted-foreground uppercase">

@@ -278,6 +278,7 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
     >
       <SourceList<WakeTargetView>
         source={targets}
+        more="button"
         itemKey={wakeKey}
         label="Wake targets"
         empty={
@@ -606,7 +607,7 @@ export function CookDetailsPage() {
                   <RowSkeleton rows={2} />
                 ) : (
                   <>
-                    <StationList source={sessions} cook={cook.name} kind={cook.agent_kind ?? null} />
+                    <StationList source={sessions} cook={cook.name} kind={cook.agent_kind ?? null} more="button" />
                   </>
                 )}
               </div>
@@ -619,7 +620,7 @@ export function CookDetailsPage() {
                 aside={<span className="font-mono text-[11px] text-muted-foreground">{cloudRuns.items.length}{cloudRuns.hasNextPage ? "+" : ""}</span>}
               >
                 <div className="p-3.5">
-                  <CloudRunList source={cloudRuns} />
+                  <CloudRunList source={cloudRuns} more="button" />
                 </div>
               </Group>
             )}

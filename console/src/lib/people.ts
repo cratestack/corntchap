@@ -2,19 +2,10 @@ import { useEffect, useMemo } from "react";
 import type { PrincipalView, TeamView, UserView } from "@corntchap/api";
 import { cookState, type CookState } from "@/components/bits";
 import type { FacetDef, FacetOption } from "@/components/filter-bar";
-import { staticSource, type ListSource } from "./listbox";
+import { staticSource, useMappedSource, type ListSource } from "./listbox";
+import { useProc } from "./data";
 import { useCooksSource, useFiresSource, useTeamsSource, useUsersSource } from "./sources";
 import { useStoreValue } from "./use-store-value";
-
-/** `source` with every row mapped by `fn` (keep `fn` stable: a module-level function or a `useCallback`). */
-export function useMappedSource<T, U>(source: ListSource<T>, fn: (item: T) => U): ListSource<U> {
-  return useMemo(() => ({ ...source, items: source.items.map(fn) }), [source, fn]);
-}
-
-/** `source` without the rows `keep` rejects (the paging stays the source's). */
-export function useFilteredSource<T>(source: ListSource<T>, keep: (item: T) => boolean): ListSource<T> {
-  return useMemo(() => ({ ...source, items: source.items.filter(keep) }), [source, keep]);
-}
 
 /**
  * The row named `name` (any case) out of a source searched for that name: while it is not among the rows loaded and
@@ -51,18 +42,15 @@ export function principalState(p: Pick<PrincipalView, "disabled" | "busy" | "las
   return cookState({ disabled: p.disabled, busy: p.busy, last_seen_at: p.last_seen_at ?? null }, now);
 }
 
-const LIT_MS = 5 * 60_000;
-
-/** Whether a fire is lit: awake within five minutes and not put out. */
-const isLit = (f: Pick<PrincipalView, "disabled" | "last_seen_at">, now: number) => !f.disabled && !!f.last_seen_at && now - new Date(f.last_seen_at).getTime() < LIT_MS;
-
-/** The fires in one line for the sidebar and the More sheet: which are lit (among those loaded: `more` when there are further pages) and when one was last seen. */
-export function useFireSummary(now: number) {
-  const fires = useFiresSource();
-  const rows = fires.items;
-  const lit = useMemo(() => rows.filter((r) => isLit(r, now)), [rows, now]);
-  const newest = useMemo(() => rows.map((r) => r.last_seen_at).filter(Boolean).sort().at(-1) ?? null, [rows]);
-  return { rows, lit, newest, more: fires.hasNextPage, isLoading: fires.isLoading };
+/**
+ * The fires in one line for the sidebar and the More sheet, from two small reads whatever the number of fires: the lit
+ * ones (the first, by `firePage`'s `lit` filter; `more` when there are further ones) and the summary (how many fires,
+ * and when one was last seen).
+ */
+export function useFireSummary() {
+  const lit = useFiresSource("", { lit: true }, { pageSize: 1 });
+  const summary = useProc("fireSummary", {});
+  return { lit: lit.items, more: !!lit.hasNextPage, total: summary.data?.total ?? 0, newest: summary.data?.last_seen_at ?? null, isLoading: lit.isLoading || summary.isLoading };
 }
 
 const teamOption = (t: TeamView): FacetOption => ({ value: t.name, label: t.name, hint: `${t.members} ${t.members === 1 ? "chef" : "chefs"}` });

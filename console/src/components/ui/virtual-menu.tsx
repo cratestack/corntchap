@@ -29,6 +29,8 @@ export interface VirtualMenuProps<T> {
   isDisabled?: ((item: T) => boolean) | undefined;
   empty?: ReactNode;
   defaultOpen?: boolean | undefined;
+  /** The menu opened or closed (to read its rows only while it is open). */
+  onOpenChange?: ((open: boolean) => void) | undefined;
   align?: "start" | "center" | "end" | undefined;
   className?: string | undefined;
 }
@@ -38,7 +40,7 @@ export interface VirtualMenuProps<T> {
  * `DropdownMenu` where the items come from the server. Options are `role="option"` in a listbox (`aria-selected`),
  * not `menuitem`s, because the list is searched and selected like a combobox's.
  */
-export function VirtualMenu<T>({ trigger, label, source, onQuery, itemText, itemKey, renderItem, mode, selected, onSelect, header, searchable = true, isDisabled, empty, defaultOpen, align, className }: VirtualMenuProps<T>) {
+export function VirtualMenu<T>({ trigger, label, source, onQuery, itemText, itemKey, renderItem, mode, selected, onSelect, header, searchable = true, isDisabled, empty, defaultOpen, onOpenChange, align, className }: VirtualMenuProps<T>) {
   const filter = useCallback((item: T, q: string) => !itemText || itemText(item).toLowerCase().includes(q.trim().toLowerCase()), [itemText]);
   return (
     <Picker<T>
@@ -57,6 +59,7 @@ export function VirtualMenu<T>({ trigger, label, source, onQuery, itemText, item
       header={header}
       empty={empty}
       defaultOpen={defaultOpen}
+      onOpenChange={onOpenChange}
       align={align}
       className={className}
     />
