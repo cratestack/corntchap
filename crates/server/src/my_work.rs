@@ -43,6 +43,36 @@ fn task_from(sql_tail: &str) -> String {
     )
 }
 
+/// A question row of the waiting lists (aliases `q` questions, `pr` projects).
+const QUESTION_ROW: &str =
+    "jsonb_build_object('id', pr.key || '-Q' || q.number, 'project', pr.key, 'title', q.title,
+        'task', (select pr.key || '-' || t.number from tasks t where t.id = q.task_id),
+        'from', (select name from principals where id = q.asked_by), 'at', q.created_at)";
+
+/// A review row (aliases `r` reviews, `pr` projects).
+const REVIEW_ROW: &str = "jsonb_build_object('id', pr.key || '-R' || r.number, 'project', pr.key,
+                 'task', (select pr.key || '-' || t.number from tasks t where t.id = r.task_id),
+                 'task_title', (select t.title from tasks t where t.id = r.task_id),
+                 'from', (select name from principals where id = r.requested_by),
+                 'note', r.note, 'round', r.round, 'at', r.created_at)";
+
+/// A comment row (aliases `cm` comments, `t` tasks, `pr` projects).
+const COMMENT_ROW: &str = "jsonb_build_object('id', cm.id, 'task', pr.key || '-' || t.number, 'project', pr.key,
+                     'author', (select name from principals where id = cm.author_id),
+                     'author_kind', (select kind from principals where id = cm.author_id),
+                     'excerpt', case when char_length(cm.body) > 160 then left(cm.body, 160) || '…' else cm.body end,
+                     'at', cm.created_at)";
+
+/// A review waits on the caller (aliases `r`, `pr`).
+const REVIEW_COND: &str = "r.state = 'requested' and (r.reviewer = $2
+                    or (r.reviewer is null and r.requested_by is distinct from $2 and exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = $2)))";
+
+/// A person's comment on a task the cook holds that nobody answered (aliases `cr`, `cm`, `t`).
+const COMMENT_COND: &str = "cr.agent_id = $2 and cr.answered_at is null and t.status <> 'cancelled'
+                   and not exists (select 1 from events e where e.task_id = cr.task_id and e.actor_id = cr.agent_id
+                     and e.seq > cr.since_seq
+                     and e.kind in ('task.commented', 'task.completed', 'task.released', 'task.blocked'))";
+
 /// The caller is on the pot's team (aliases `pr`; `$2` is the caller).
 const MEMBER: &str =
     "exists (select 1 from team_members tm where tm.team_id = pr.team_id and tm.principal_id = $2)";
@@ -91,6 +121,18 @@ fn blocked_sql(question_sel: &str, dep_sel: &str, extra: &str, access: &str, tai
              and {access} and ($3::text is null or pr.key = $3)
          ) b {tail}"
     )
+}
+
+/// The pot key a page is limited to, upper-cased; an unknown or unseen pot is an error, not an empty page.
+async fn scoped(db: &PgPool, p: &Principal, project: Option<&str>) -> Result<Option<String>> {
+    let project = project
+        .map(|k| k.trim().to_uppercase())
+        .filter(|k| !k.is_empty());
+    if let Some(k) = &project {
+        let mut c = db.acquire().await?;
+        project_by_key(&mut c, p, k).await?;
+    }
+    Ok(project)
 }
 
 /// What the principal owns, holds and is waited on for (see the module text).
@@ -182,10 +224,7 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
     );
 
     // waiting on me
-    let question =
-        "jsonb_build_object('id', pr.key || '-Q' || q.number, 'project', pr.key, 'title', q.title,
-        'task', (select pr.key || '-' || t.number from tasks t where t.id = q.task_id),
-        'from', (select name from principals where id = q.asked_by), 'at', q.created_at)";
+    let question = QUESTION_ROW;
     let questions = rows(
         db,
         format!(
@@ -200,15 +239,9 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
     let reviews = rows(
         db,
         format!(
-            "select jsonb_build_object('id', pr.key || '-R' || r.number, 'project', pr.key,
-                 'task', (select pr.key || '-' || t.number from tasks t where t.id = r.task_id),
-                 'task_title', (select t.title from tasks t where t.id = r.task_id),
-                 'from', (select name from principals where id = r.requested_by),
-                 'note', r.note, 'round', r.round, 'at', r.created_at)
+            "select {REVIEW_ROW}
              from reviews r join projects pr on pr.id = r.project_id
-             where r.state = 'requested' and {access} and {scope}
-               and (r.reviewer = $2
-                    or (r.reviewer is null and r.requested_by is distinct from $2 and {MEMBER}))
+             where {REVIEW_COND} and {access} and {scope}
              order by r.reviewer is null, r.created_at limit {TOP}"
         ),
         p,
@@ -219,17 +252,10 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
         rows(
             db,
             format!(
-                "select jsonb_build_object('task', pr.key || '-' || t.number, 'project', pr.key,
-                     'author', (select name from principals where id = cm.author_id),
-                     'author_kind', (select kind from principals where id = cm.author_id),
-                     'excerpt', case when char_length(cm.body) > 160 then left(cm.body, 160) || '…' else cm.body end,
-                     'at', cm.created_at)
+                "select {COMMENT_ROW}
                  from comment_replies cr join comments cm on cm.id = cr.comment_id
                    join tasks t on t.id = cr.task_id join projects pr on pr.id = t.project_id
-                 where cr.agent_id = $2 and cr.answered_at is null and t.status <> 'cancelled' and {access} and {scope}
-                   and not exists (select 1 from events e where e.task_id = cr.task_id and e.actor_id = cr.agent_id
-                     and e.seq > cr.since_seq
-                     and e.kind in ('task.commented', 'task.completed', 'task.released', 'task.blocked'))
+                 where {COMMENT_COND} and {access} and {scope}
                  order by cm.created_at limit {TOP}"
             ),
             p,
@@ -300,7 +326,22 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
     )
     .await?;
 
-    let waiting = (questions.len() + reviews.len() + comments.len()) as i64;
+    // the true totals: the lists above are the first rows only
+    let waiting = count(
+        db,
+        format!(
+            "select (select count(*) from questions q join projects pr on pr.id = q.project_id
+                     where q.status = 'open' and q.to_principal = $2 and {access} and {scope})
+                  + (select count(*) from reviews r join projects pr on pr.id = r.project_id
+                     where {REVIEW_COND} and {access} and {scope})
+                  + (select count(*) from comment_replies cr join comments cm on cm.id = cr.comment_id
+                       join tasks t on t.id = cr.task_id join projects pr on pr.id = t.project_id
+                     where {COMMENT_COND} and {access} and {scope})"
+        ),
+        p,
+        project,
+    )
+    .await?;
     let mut counts = Map::new();
     counts.insert("owned".into(), json!(owned_total));
     counts.insert("holding".into(), json!(holding.len()));
@@ -345,14 +386,7 @@ pub async fn page(
         crate::paging::DEFAULT_LIMIT,
         crate::paging::MAX_LIMIT,
     )?;
-    let project = project
-        .map(|k| k.trim().to_uppercase())
-        .filter(|k| !k.is_empty());
-    if let Some(k) = &project {
-        // an unknown or unseen pot is an error, not an empty page
-        let mut c = db.acquire().await?;
-        project_by_key(&mut c, p, k).await?;
-    }
+    let project = scoped(db, p, project).await?;
     let access = access_sql("$1", "$2");
     let scope = "($3::text is null or pr.key = $3)";
     // after the last row: higher priority, or the same priority and a later (pot, number)
@@ -408,4 +442,153 @@ pub async fn page(
         .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
         .collect();
     Ok(crate::paging::finish(rows, &paging))
+}
+
+/// Run a keyset page query of the waiting lists: `$1` super admin, `$2` me, `$3` pot, `$4` and `$5`
+/// the cursor keys, `$6` the row count.
+async fn waiting_rows(
+    db: &PgPool,
+    p: &Principal,
+    sql: String,
+    project: Option<&str>,
+    paging: &crate::paging::Paging,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(p.is_super_admin())
+        .bind(p.id)
+        .bind(project)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .fetch_all(db)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, paging))
+}
+
+/// A page of the questions waiting on me (`myWorkQuestionPage`), oldest first: those addressed to
+/// me, or with `pool` (people only) the open ones in my pots that nobody picked.
+pub async fn question_page(
+    db: &PgPool,
+    p: &Principal,
+    project: Option<&str>,
+    pool: bool,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    if pool && !p.is_user() {
+        return Ok((vec![], None));
+    }
+    let order = if pool {
+        "created_at,id:pool"
+    } else {
+        "created_at,id:mine"
+    };
+    let paging = crate::paging::paging(
+        page,
+        order,
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let project = scoped(db, p, project).await?;
+    let access = access_sql("$1", "$2");
+    let cond = if pool {
+        format!(
+            "q.status = 'open' and q.to_principal is null and q.asked_by is distinct from $2
+             and (q.picked_by is null or q.pick_expires_at < now()) and {MEMBER}"
+        )
+    } else {
+        "q.status = 'open' and q.to_principal = $2".to_string()
+    };
+    // the id is compared as text (a uuid's canonical text sorts as the uuid does)
+    let sql = format!(
+        "select {QUESTION_ROW}, array[q.created_at::text, q.id::text]
+         from questions q join projects pr on pr.id = q.project_id
+         where {cond} and {access} and ($3::text is null or pr.key = $3)
+           and ($4::text is null or q.created_at > $4::text::timestamptz
+                or (q.created_at = $4::text::timestamptz and q.id::text collate \"C\" > $5::text collate \"C\"))
+         order by q.created_at, q.id limit $6"
+    );
+    waiting_rows(db, p, sql, project.as_deref(), &paging).await
+}
+
+/// A page of the reviews waiting on me (`myWorkReviewPage`): those named to me first, then those
+/// asked of anyone on the team, each oldest first.
+pub async fn review_page(
+    db: &PgPool,
+    p: &Principal,
+    project: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "rn,created_at,id:reviews",
+        3,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let project = scoped(db, p, project).await?;
+    let access = access_sql("$1", "$2");
+    // the cursor keys are (anyone-flag, created_at, id): `$4` flag, `$5` created_at, `$7` id
+    let sql = format!(
+        "select {REVIEW_ROW}, array[(r.reviewer is null)::int::text, r.created_at::text, r.id::text]
+         from reviews r join projects pr on pr.id = r.project_id
+         where {REVIEW_COND} and {access} and ($3::text is null or pr.key = $3)
+           and ($4::text is null
+                or (r.reviewer is null)::int > $4::text::int
+                or ((r.reviewer is null)::int = $4::text::int
+                    and (r.created_at > $5::text::timestamptz
+                         or (r.created_at = $5::text::timestamptz and r.id::text collate \"C\" > $7::text collate \"C\"))))
+         order by (r.reviewer is null)::int, r.created_at, r.id limit $6"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(p.is_super_admin())
+        .bind(p.id)
+        .bind(project.as_deref())
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .bind(paging.key(2))
+        .fetch_all(db)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
+/// A page of the people's comments a cook has not answered (`myWorkCommentPage`), oldest first;
+/// empty for a person.
+pub async fn comment_page(
+    db: &PgPool,
+    p: &Principal,
+    project: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "created_at,id:comments",
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let project = scoped(db, p, project).await?;
+    if !p.is_agent() {
+        return Ok((vec![], None));
+    }
+    let access = access_sql("$1", "$2");
+    let sql = format!(
+        "select {COMMENT_ROW}, array[cm.created_at::text, cm.id::text]
+         from comment_replies cr join comments cm on cm.id = cr.comment_id
+           join tasks t on t.id = cr.task_id join projects pr on pr.id = t.project_id
+         where {COMMENT_COND} and {access} and ($3::text is null or pr.key = $3)
+           and ($4::text is null or cm.created_at > $4::text::timestamptz
+                or (cm.created_at = $4::text::timestamptz and cm.id::text collate \"C\" > $5::text collate \"C\"))
+         order by cm.created_at, cm.id limit $6"
+    );
+    waiting_rows(db, p, sql, project.as_deref(), &paging).await
 }

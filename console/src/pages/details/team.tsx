@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { Minus, Pencil, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import { AddMember } from "@/pages/admin";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api";
 import { useProcCall, useV1Call } from "@/lib/data";
-import { useCooksSource, usePotsSource, useTeamMembersSource } from "@/lib/sources";
+import { usePotsSource, useTeamMembersSource } from "@/lib/sources";
 import { useTeamByName } from "@/lib/people";
 import { canManageTeam, useSession } from "@/lib/session";
 import { Crumb, linkClass } from "./common";
@@ -33,9 +33,6 @@ export function TeamDetailsPage() {
 
   const members = useTeamMembersSource(team?.name ?? "", { enabled: !!team });
   const pots = usePotsSource({ team: team?.name ?? "", enabled: !!team });
-  // a chef may remove the cooks they own (the ones of theirs loaded so far)
-  const mine = useCooksSource({ owner: me.name, enabled: !!team });
-  const ownCooks = useMemo(() => new Set(mine.items.map((a) => a.name)), [mine.items]);
   const canManage = !!team && canManageTeam(me, team.role);
 
   const crumb = <Crumb to="/teams" parent="Teams" here={name} />;
@@ -117,7 +114,7 @@ export function TeamDetailsPage() {
                       {m.fireAndForget && " · fire and forget"}
                     </p>
                   </div>
-                  {(canManage || ownCooks.has(m.name)) && (
+                  {(canManage || m.mine) && (
                     <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${m.name} from ${team.name}`} onClick={() => setRemoving(m)}>
                       <Minus />
                     </Button>

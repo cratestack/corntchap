@@ -19,6 +19,29 @@ fn text_chars(result: &Value) -> i64 {
         .count() as i64
 }
 
+/// The cooks (and people) whose usage `token` may see, by name: `usageCookPage` with these `args`.
+async fn cooks_seen(app: &common::TestApp, token: &str, mut args: Value) -> Vec<String> {
+    args["page"] = json!({"limit": 200});
+    let r = app
+        .http
+        .post(format!("{}/api/v2/$procs/usageCookPage", app.base))
+        .bearer_auth(token)
+        .json(&args)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let v: Value = r.json().await.unwrap();
+    let mut names: Vec<String> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["cook"].as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
 /// A handshake-era tools/call or tools/list; `url` is `/mcp` or `/mcp/<POT>`.
 async fn legacy(
     app: &common::TestApp,
@@ -304,7 +327,7 @@ async fn usage_is_counted_per_cook_pot_and_kind_and_shown_to_its_owner_only() {
     let total = me["totals"]["chars"].as_i64().unwrap();
     assert_eq!(me["totals"]["tokens"].as_i64().unwrap(), (total + 3) / 4);
     assert_eq!(me["by_day"].as_array().unwrap().len(), 7);
-    assert_eq!(me["by_cook"][0]["cook"], "c1");
+    assert_eq!(cooks_seen(&app, &c1, json!({})).await[0], "c1");
     let top: Vec<(&str, &str)> = me["top"]
         .as_array()
         .unwrap()
@@ -323,40 +346,29 @@ async fn usage_is_counted_per_cook_pot_and_kind_and_shown_to_its_owner_only() {
     assert_eq!(ops["totals"]["calls"], 2, "{ops}");
 
     // --- alice owns c1 (and her own calls count under her name) ---
-    let cooks_in = |r: &Value| -> Vec<String> {
-        let mut v: Vec<String> = r["by_cook"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| c["cook"].as_str().unwrap().to_string())
-            .collect();
-        v.sort();
-        v
-    };
-    let a = ok(&call(&alice, "usage_report", json!({})).await, "alice");
-    assert_eq!(cooks_in(&a), ["alice", "c1"], "{a}");
+    assert_eq!(cooks_seen(&app, &alice, json!({})).await, ["alice", "c1"]);
     // bob sees himself and b1, never alice's cook: asking for c1 by name finds nothing
-    let b = ok(&call(&bob, "usage_report", json!({})).await, "bob");
-    assert_eq!(cooks_in(&b), ["b1", "bob"], "{b}");
+    assert_eq!(cooks_seen(&app, &bob, json!({})).await, ["b1", "bob"]);
     let peek = ok(
         &call(&bob, "usage_report", json!({"cook": "c1"})).await,
         "bob peeks",
     );
     assert_eq!(peek["totals"]["calls"], 0, "{peek}");
-    assert!(peek["by_cook"].as_array().unwrap().is_empty());
+    assert!(cooks_seen(&app, &bob, json!({"q": "c1"})).await.is_empty());
     let peek = ok(
         &call(&bob, "usage_report", json!({"project": "PAY"})).await,
         "bob peeks at the pot",
     );
     assert_eq!(peek["totals"]["calls"], 0, "{peek}");
     // and b1 (a cook) sees only itself
-    let own = ok(&call(&b1, "usage_report", json!({})).await, "b1");
-    assert_eq!(cooks_in(&own), ["b1"], "{own}");
+    assert_eq!(cooks_seen(&app, &b1, json!({})).await, ["b1"]);
     // an admin sees everyone
-    let all = ok(&call(&root, "usage_report", json!({})).await, "root");
-    let everyone = cooks_in(&all);
+    let everyone = cooks_seen(&app, &root, json!({})).await;
     for who in ["alice", "b1", "bob", "c1"] {
-        assert!(everyone.iter().any(|c| c == who), "{who} missing: {all}");
+        assert!(
+            everyone.iter().any(|c| c == who),
+            "{who} missing: {everyone:?}"
+        );
     }
 
     // --- retention: usage older than 90 days is pruned ---

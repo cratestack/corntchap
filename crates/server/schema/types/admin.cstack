@@ -42,6 +42,8 @@ type MemberView {
   /// A cook with cloud wake targets only: it takes ready work, opens a pull request and stops.
   /// Do not message, ask or assign reviews to it; give it a task (its owner may message it).
   fireAndForget Boolean
+  /// A cook you own (you may remove it from the team whatever your role).
+  mine Boolean
 }
 
 type MemberAdded {
@@ -112,6 +114,8 @@ type WakeTargetView {
   labels String[]
   /// Where it goes: the webhook URL or owner/repo#issue (secrets are never shown).
   target String?
+  /// The page of the latest session this target started (claude-routine and devin), when there is one.
+  session_url String?
 }
 
 type WakeTargetAdded {

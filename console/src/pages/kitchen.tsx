@@ -35,7 +35,7 @@ import { TaskGroup, groupTasks } from "@/components/task-views";
 import { BoardView, useColumns } from "@/components/board";
 import { TaskSheet } from "@/components/task-sheet";
 import { NewMemoryDialog, PantryView } from "@/components/pantry";
-import { MenuDialog, MenuStrip, MenusView, useMenu, useMenuNames } from "@/components/menus";
+import { MenuDialog, MenuStrip, MenusView, useMenu } from "@/components/menus";
 import { FilesView } from "@/components/files";
 import { PassView } from "@/components/pass";
 import { AskQuestionDialog, QuestionsView } from "@/components/questions";
@@ -117,7 +117,6 @@ export function KitchenPage() {
   const openQuestions = project?.open_questions ?? 0;
   const [menuDialog, setMenuDialog] = useState<{ open: boolean; menu: MenuView | null }>({ open: false, menu: null });
   const selectedMenu = useMenu(potKey, filters.menu).menu;
-  const menuNames = useMenuNames(potKey, !!project);
   const facets = useTaskFacets(project, selectedMenu);
 
   useEffect(() => {
@@ -168,7 +167,7 @@ export function KitchenPage() {
 
   const potEvents = events.filter((e) => e.project === potKey);
   // while one menu is selected every row is on it, so the chip would only repeat the strip
-  const chipNames = filters.menu ? {} : menuNames;
+  const showMenu = !filters.menu;
 
   return (
     <div className="px-4 pt-3 pb-6 md:px-5 md:pt-6 md:pb-16 lg:px-8">
@@ -219,10 +218,10 @@ export function KitchenPage() {
             onOpen={openTask}
             events={potEvents}
             onClear={clearFilters}
-            menus={chipNames}
+            showMenu={showMenu}
           />
         ) : null}
-        {!viewKey && base === "board" && <BoardView loading={board.loading} columns={board} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} bare={board.bare} menus={chipNames} />}
+        {!viewKey && base === "board" && <BoardView loading={board.loading} columns={board} selected={selected} onOpen={openTask} onNew={() => openNewTask(potKey, filters.menu)} bare={board.bare} showMenu={showMenu} />}
         {!viewKey && base === "activity" && <ActivityView project={project} />}
         {!viewKey && base === "pantry" && <PantryView potKey={potKey} onNew={() => setNewMemory(true)} />}
         {!viewKey && base === "files" && <FilesView potKey={potKey} />}
@@ -643,7 +642,7 @@ function SavedViewBody({
   onOpen,
   events,
   onClear,
-  menus,
+  showMenu,
 }: {
   potKey: string;
   view: ViewOut | undefined;
@@ -653,7 +652,7 @@ function SavedViewBody({
   onOpen: (id: string) => void;
   events: ReturnType<typeof useLive>["events"];
   onClear: () => void;
-  menus: Record<string, string>;
+  showMenu: boolean;
 }) {
   const me = useSession();
   // a view is read a page at a time, as far as the reader scrolls; the chips filter what is loaded
@@ -701,12 +700,12 @@ function SavedViewBody({
       potKey={potKey}
       onClear={onClear}
       onNew={() => undefined}
-      menus={menus}
+      showMenu={showMenu}
       keepOrder
       more={more}
     />
   ) : (
-    <BoardView loading={run.isLoading} columns={columns} selected={selected} onOpen={onOpen} onNew={() => undefined} bare={tasks.length === 0} menus={menus} />
+    <BoardView loading={run.isLoading} columns={columns} selected={selected} onOpen={onOpen} onNew={() => undefined} bare={tasks.length === 0} showMenu={showMenu} />
   );
 }
 
@@ -724,7 +723,7 @@ function ListView({
   potKey,
   onClear,
   onNew,
-  menus,
+  showMenu,
   keepOrder = false,
   more,
 }: {
@@ -739,7 +738,7 @@ function ListView({
   potKey: string;
   onClear: () => void;
   onNew: () => void;
-  menus: Record<string, string>;
+  showMenu: boolean;
   keepOrder?: boolean;
   /** The list goes on past what is loaded: the end of a group, or the button below, loads the next page. */
   more?: BucketMore;
@@ -769,7 +768,7 @@ function ListView({
                 tasks={groups[b.id]}
                 selected={selected}
                 onOpen={onOpen}
-                menus={menus}
+                showMenu={showMenu}
                 defaultOpen={b.id !== "cancelled"}
                 onEndReached={more?.has ? more.load : undefined}
               />

@@ -17,7 +17,6 @@ function priorityTag(p: number) {
   return null;
 }
 
-type MenuNames = Record<string, string>;
 
 
 /** Lease countdown only (saffron, live), for the tight meta lines. The epoch stays in the task detail. */
@@ -60,9 +59,9 @@ function PrioTag({ prio }: { prio: string | null }) {
 }
 
 /** Two-line row for phones (Linear style): status dot and title, then mono id, holder, progress and labels. */
-function PhoneRow({ task, selected, onOpen, menus }: { task: TaskView; selected: boolean; onOpen: (id: string) => void; menus?: MenuNames | undefined }) {
+function PhoneRow({ task, selected, onOpen, showMenu }: { task: TaskView; selected: boolean; onOpen: (id: string) => void; showMenu?: boolean | undefined }) {
   const bucket = bucketOf(task);
-  const menuName = task.menu ? (menus?.[task.menu] ?? undefined) : undefined;
+  const menuName = showMenu === false ? undefined : (task.menu_name ?? undefined);
   const done = task.total_items - task.open_items;
   const live = bucket === "claimed";
   return (
@@ -115,14 +114,14 @@ function PhoneRow({ task, selected, onOpen, menus }: { task: TaskView; selected:
   );
 }
 
-export function TaskRow({ task, selected, onOpen, menus }: { task: TaskView; selected: boolean; onOpen: (id: string) => void; menus?: MenuNames | undefined }) {
-  const menuName = task.menu ? (menus?.[task.menu] ?? undefined) : undefined;
+export function TaskRow({ task, selected, onOpen, showMenu }: { task: TaskView; selected: boolean; onOpen: (id: string) => void; showMenu?: boolean | undefined }) {
+  const menuName = showMenu === false ? undefined : (task.menu_name ?? undefined);
   const note = taskNote(task);
   const prio = priorityTag(task.priority);
   const live = task.status === "claimed" && task.lease_live;
   const phone = useIsPhone();
   const done = task.total_items - task.open_items;
-  if (phone) return <PhoneRow task={task} selected={selected} onOpen={onOpen} menus={menus} />;
+  if (phone) return <PhoneRow task={task} selected={selected} onOpen={onOpen} showMenu={showMenu} />;
   return (
     <button
       type="button"
@@ -187,7 +186,7 @@ export function TaskGroup({
   tasks,
   selected,
   onOpen,
-  menus,
+  showMenu,
   defaultOpen = true,
   onEndReached,
 }: {
@@ -195,7 +194,7 @@ export function TaskGroup({
   tasks: TaskView[];
   selected: string | null;
   onOpen: (id: string) => void;
-  menus?: MenuNames | undefined;
+  showMenu?: boolean | undefined;
   defaultOpen?: boolean;
   /** The group's last row came into view: load the next page of the list it is cut from. */
   onEndReached?: (() => void) | undefined;
@@ -233,7 +232,7 @@ export function TaskGroup({
           itemClassName={phone ? undefined : "pb-1.5"}
           renderItem={(t, i) => (
             <div className={cn(phone && i > 0 && "border-t border-border")}>
-              <TaskRow task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />
+              <TaskRow task={t} selected={selected === t.id} onOpen={onOpen} showMenu={showMenu} />
             </div>
           )}
         />
@@ -242,8 +241,8 @@ export function TaskGroup({
   );
 }
 
-export function TaskCard({ task, selected, onOpen, menus }: { task: TaskView; selected: boolean; onOpen: (id: string) => void; menus?: MenuNames | undefined }) {
-  const menuName = task.menu ? (menus?.[task.menu] ?? undefined) : undefined;
+export function TaskCard({ task, selected, onOpen, showMenu }: { task: TaskView; selected: boolean; onOpen: (id: string) => void; showMenu?: boolean | undefined }) {
+  const menuName = showMenu === false ? undefined : (task.menu_name ?? undefined);
   const live = task.status === "claimed" && task.lease_live;
   const done = task.total_items - task.open_items;
   const note = taskNote(task);

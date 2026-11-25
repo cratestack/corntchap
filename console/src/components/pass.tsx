@@ -487,7 +487,7 @@ function ConvRow({ c, active, compact, now, fresh, onClick }: { c: Conv; active:
   const newCount = c.unread;
   let sub: React.ReactNode;
   if (newCount > 0) sub = <span className="font-medium text-foreground">{newCount === 1 ? "1 new message" : `${newCount} new messages`}</span>;
-  else if (c.preview) sub = <>{c.preview.from && c.preview.from !== c.name && !c.channel ? "you: " : c.channel && c.preview.from ? `${c.preview.from}: ` : ""}{oneLine(c.preview.body)}</>;
+  else if (c.preview) sub = <>{c.preview.mine ? "you: " : c.channel && c.preview.from ? `${c.preview.from}: ` : ""}{oneLine(c.preview.body)}</>;
   else if (c.channel) sub = "Everyone in the pot";
   else if (cook) sub = `${cook.agentKind} · ${cook.cloud ? "cloud" : "local"} · ${cook.cloud ? "fire and forget" : cook.state}`;
   else sub = fresh ? "No messages yet" : "";

@@ -632,6 +632,12 @@ pub struct DirQuery {
     pub disabled: Option<bool>,
     pub team: Option<String>,
     pub owner: Option<String>,
+    /// Cooks: `awake` (cooking or seen in the last five minutes, not disabled), `cloud` or `local`.
+    pub state: Option<String>,
+    /// Fires: true only the lit ones (seen in the last five minutes, not disabled), false the others.
+    pub lit: Option<bool>,
+    /// People and cooks: only those not in this team.
+    pub not_in_team: Option<String>,
 }
 
 impl DirQuery {
@@ -664,6 +670,11 @@ pub async fn dir_page(
     mut q: DirQuery,
     page: &cratestack::CursorPageInput,
 ) -> Result<(Vec<Value>, Option<String>)> {
+    if let Some(st) = &q.state
+        && !["awake", "cloud", "local"].contains(&st.as_str())
+    {
+        return invalid("state: awake, cloud or local");
+    }
     let paging = crate::paging::paging(
         page,
         "name",
@@ -696,13 +707,15 @@ pub async fn list_users_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Ve
             "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role,
             'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals
             where kind = 'user' and {f} and ($4::text is null or role = $4)
-              and ($5::bool is null or $5 = (disabled_at is not null)) order by name limit $3"
+              and ($5::bool is null or $5 = (disabled_at is not null))
+              and ($6::text is null or {NOT_IN_TEAM}) order by name limit $3"
         )
     } else {
         format!(
             "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role)
          from principals where kind = 'user' and disabled_at is null and {f}
-           and ($4::text is null or role = $4) and ($5::bool is null or $5 = false) order by name limit $3"
+           and ($4::text is null or role = $4) and ($5::bool is null or $5 = false)
+           and ($6::text is null or {NOT_IN_TEAM}) order by name limit $3"
         )
     };
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
@@ -711,10 +724,16 @@ pub async fn list_users_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Ve
         .bind(q.limit)
         .bind(q.role.as_deref())
         .bind(q.disabled)
+        .bind(q.not_in_team.as_deref())
         .fetch_all(db)
         .await?;
     Ok(rows)
 }
+
+/// Not a member of the team named `$6` (for the rows of `principals`, aliased or not as `a`).
+const NOT_IN_TEAM: &str =
+    "not exists (select 1 from team_members nm join teams nt on nt.id = nm.team_id
+       where nm.principal_id = principals.id and nt.name = $6)";
 
 pub async fn create_team(db: &PgPool, p: &Principal, name: &str) -> Result<Value> {
     let p = &acting(db, p).await?;
@@ -973,6 +992,7 @@ pub async fn list_members_q(
     let tid = row.ok_or_else(|| Error::NotFound(format!("team {team} not found")))?;
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select jsonb_build_object('name', pr.name, 'display_name', pr.display_name, 'kind', pr.kind, 'role', m.role,
+                'mine', pr.kind = 'agent' and pr.owner_id = $7,
                 'fireAndForget', {}) from team_members m
          join principals pr on pr.id = m.principal_id where m.team_id = $1
            and ($2::text is null or pr.kind = $2) and ($3::text is null or m.role = $3) and {}
@@ -986,6 +1006,7 @@ pub async fn list_members_q(
     .bind(q.dir.q.as_deref())
     .bind(q.dir.after.as_deref())
     .bind(q.dir.limit)
+    .bind(p.id)
     .fetch_all(&mut *c)
     .await?;
     Ok(rows)
@@ -1188,6 +1209,14 @@ pub async fn list_principals_q(
                                             where m.principal_id = a.id and t.name = $7))
            and ($8::text is null or exists (select 1 from principals o where o.id = a.owner_id and o.name = $8))
            and ($9::bool is null or $9 = (a.disabled_at is not null))
+           and ($10::text is null or case $10
+                 when 'awake' then a.disabled_at is null and (a.last_seen_at > now() - interval '5 minutes'
+                      or exists (select 1 from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()))
+                 when 'cloud' then a.runtime = 'cloud'
+                 else a.runtime is distinct from 'cloud' end)
+           and ($11::bool is null or $11 = coalesce(a.disabled_at is null and a.last_seen_at > now() - interval '5 minutes', false))
+           and ($12::text is null or not exists (select 1 from team_members m join teams t on t.id = m.team_id
+                                                 where m.principal_id = a.id and t.name = $12))
          order by a.name limit $6",
         crate::cloud::fire_and_forget_sql("a.id"),
         dir_filter("a.name", None, 4),
@@ -1201,6 +1230,9 @@ pub async fn list_principals_q(
     .bind(q.team.as_deref())
     .bind(q.owner.as_deref())
     .bind(q.disabled)
+    .bind(q.state.as_deref())
+    .bind(q.lit)
+    .bind(q.not_in_team.as_deref())
     .fetch_all(db)
     .await?;
     Ok(rows)

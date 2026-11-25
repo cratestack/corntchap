@@ -165,6 +165,7 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
   'open_items', (select count(*) from items i where i.task_id = t.id and not i.done),
   'total_items', (select count(*) from items i where i.task_id = t.id),
   'menu', (select m.key from menus m where m.id = t.menu_id),
+  'menu_name', (select m.name from menus m where m.id = t.menu_id),
   'result', t.result, 'created_at', t.created_at, 'updated_at', t.updated_at,
   'pr', (select jsonb_build_object('repo', x.repo, 'number', x.number, 'url', x.url, 'state', x.state,
       'draft', x.draft, 'checks', x.checks, 'review', x.review, 'conflict', x.mergeable = 'false',

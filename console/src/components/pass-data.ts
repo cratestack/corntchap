@@ -129,6 +129,8 @@ export interface Preview {
   at: string;
   from: string | null;
   body: string;
+  /** The last message of a direct conversation is the viewer's own. */
+  mine?: boolean;
 }
 
 export const previewKey = (pot: string, conv: string) => ["pass-prev", pot, conv] as const;
@@ -136,7 +138,7 @@ export const previewKey = (pot: string, conv: string) => ["pass-prev", pot, conv
 export const toPreview = (m: PassMessageView | undefined): Preview | null => (m ? { at: m.at, from: m.from ?? null, body: m.body } : null);
 
 /** A conversation row's preview, from the list's own page (the last message cut to one line, and its time). */
-export const conversationPreview = (c: PassConversationView): Preview | null => (c.preview ? { at: c.last_at, from: null, body: c.preview } : null);
+export const conversationPreview = (c: PassConversationView): Preview | null => (c.preview ? { at: c.last_at, from: null, body: c.preview, mine: c.last_mine } : null);
 
 /**
  * The last message of the pot's own pass, for the list (the direct conversations come with theirs). A read marks

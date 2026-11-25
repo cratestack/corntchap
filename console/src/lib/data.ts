@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { keepPreviousData, useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
 import type { CorntchapApiClient, ProjectSummary, TaskView } from "@corntchap/api";
-import { client, v1 } from "./api";
+import { v1 } from "./api";
 import { invalidateData } from "./paging";
 
 type Procs = CorntchapApiClient["procedures"];
@@ -71,30 +71,6 @@ export function useV1<T>(path: string, opts: { enabled?: boolean } = {}) {
   return { data: q.data, isLoading: q.isLoading, error: q.error as unknown, refetch: q.refetch };
 }
 
-/**
- * Read a generated model (`/api/v2/<model>`): the server applies the model's read policy, so these
- * lists hold only what the signed-in person may see. Lives under ["data"] like every other query.
- */
-function useModel<T>(key: unknown[], fn: () => Promise<T>, enabled = true) {
-  const q = useQuery({ queryKey: ["data", "model", ...key], queryFn: fn, enabled, staleTime: 1500 });
-  return { data: q.data, isLoading: q.isLoading, error: q.error as unknown, refetch: q.refetch };
-}
-
-/** A team's chefs (people and cooks) with their role, from the TeamMember model. */
-export function useTeamChefs(team: string | null | undefined, opts: { enabled?: boolean } = {}) {
-  return useModel(
-    ["team-members", team],
-    async (): Promise<MemberRow[]> => {
-      const rows = await client.teamMembers.list({ query: { filters: { "team.name": team ?? "" }, include: ["principal"] } });
-      return rows
-        .filter((m) => m.principal?.name)
-        .map((m) => ({ name: m.principal!.name!, display_name: m.principal!.displayName ?? null, kind: m.principal!.kind ?? "user", role: m.role ?? "member" }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-    },
-    !!team && (opts.enabled ?? true),
-  );
-}
-
 /** POST/DELETE/... on /api/v1, then refresh everything. */
 export function useV1Call() {
   const invalidate = useInvalidateAll();
@@ -146,49 +122,6 @@ export function useClaimedTasks(projects: ProjectSummary[] | undefined) {
   });
   const tasks: TaskView[] = results.flatMap((r) => r.data ?? []);
   return { tasks, isLoading: results.some((r) => r.isLoading) };
-}
-
-// ---- /api/v1 shapes (hand-written endpoints; no generated types) ----
-
-export interface AgentRow {
-  id: string;
-  name: string;
-  kind: string;
-  agent_kind: string | null;
-  runtime: string | null;
-  max_leases: number;
-  owner: string | null;
-  /** Cooks: what a person granted beyond working tasks (plan, manage, admin). */
-  grants?: string[];
-  /** Repositories the cook handles per pot (a pot not listed: all of its repositories). */
-  repo_scopes?: { project: string; repos: string[] }[];
-  /** Teams the cook is in (empty: it sees no pot). */
-  teams?: string[];
-  disabled: boolean;
-  last_seen_at: string | null;
-  busy: number;
-  /** Cloud targets only: takes ready work, opens a pull request and stops (see the README). */
-  fireAndForget?: boolean;
-}
-
-export interface TeamRow {
-  name: string;
-  role: string | null;
-  members: number;
-  projects: string[];
-}
-
-export interface MemberRow {
-  name: string;
-  display_name?: string | null;
-  kind: string;
-  role: string;
-  /** Cloud targets only: takes ready work, opens a pull request and stops. */
-  fireAndForget?: boolean;
-}
-
-export function useAgents() {
-  return useV1<AgentRow[]>("/agents");
 }
 
 /** Open-question counts per pot, for the sidebar badges (from the pot summaries, no extra requests). */

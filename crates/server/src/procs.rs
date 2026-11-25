@@ -120,9 +120,15 @@ fn wake_target_views(v: serde_json::Value) -> serde_json::Value {
                         ),
                     })
                 });
+                // the latest run's page, kept only when the server vetted it (https, the target type's own domain)
+                let session_url = c["session_url"]
+                    .as_str()
+                    .filter(|u| u.starts_with("https://"))
+                    .map(str::to_string);
                 if let Some(o) = w.as_object_mut() {
                     o.remove("config");
                     o.insert("target".into(), serde_json::json!(target));
+                    o.insert("session_url".into(), serde_json::json!(session_url));
                     if let Some(id) = o.get("id").and_then(|x| x.as_str()).map(str::to_string) {
                         o.insert("id".into(), serde_json::json!(id));
                     }
@@ -214,29 +220,6 @@ impl ProcedureRegistry for Procedures {
             ))
             .await
             .map(|(items, next)| crate::paging::page_json(items, next)),
-        )
-    }
-
-    async fn project_tasks(
-        &self,
-        _db: &Db,
-        ctx: &CratestackContext,
-        a: project_tasks::Args,
-        _z: project_tasks::Authorized,
-    ) -> Result<project_tasks::Output, CratestackError> {
-        let p = principal(ctx)?;
-        typed(
-            service::list_tasks(
-                &self.state.db,
-                &p,
-                &a.project.to_uppercase(),
-                a.status.as_deref(),
-                a.label.as_deref(),
-                a.readyOnly.unwrap_or(false),
-                a.menu.as_deref(),
-                a.owner.as_deref(),
-            )
-            .await,
         )
     }
 
@@ -816,25 +799,6 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
-    async fn menu_list(
-        &self,
-        _db: &Db,
-        ctx: &CratestackContext,
-        a: menu_list::Args,
-        _z: menu_list::Authorized,
-    ) -> Result<menu_list::Output, CratestackError> {
-        let p = principal(ctx)?;
-        typed(
-            menus::list(
-                &self.state.db,
-                &p,
-                &a.project,
-                a.includeServed.unwrap_or(false),
-            )
-            .await,
-        )
-    }
-
     async fn menu_page(
         &self,
         _db: &Db,
@@ -910,6 +874,12 @@ impl ProcedureRegistry for Procedures {
             .filter(|r| !r.is_empty())
             .map(String::from);
         q.disabled = a.disabled;
+        q.not_in_team = a
+            .notInTeam
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(String::from);
         typed(
             Box::pin(admin::dir_page(
                 &self.state.db,
@@ -1077,6 +1047,17 @@ impl ProcedureRegistry for Procedures {
             .map(|o| o.trim().to_lowercase())
             .filter(|o| !o.is_empty());
         q.disabled = a.disabled;
+        q.state = a
+            .state
+            .as_deref()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
+        q.not_in_team = a
+            .notInTeam
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(String::from);
         typed(
             Box::pin(admin::dir_page(
                 &self.state.db,
@@ -1098,7 +1079,8 @@ impl ProcedureRegistry for Procedures {
         _z: fire_page::Authorized,
     ) -> Result<fire_page::Output, CratestackError> {
         let p = principal(ctx)?;
-        let q = admin::DirQuery::text(a.q.as_deref());
+        let mut q = admin::DirQuery::text(a.q.as_deref());
+        q.lit = a.lit;
         typed(
             Box::pin(admin::dir_page(
                 &self.state.db,
@@ -1667,6 +1649,67 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn my_work_question_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: my_work_question_page::Args,
+        _z: my_work_question_page::Authorized,
+    ) -> Result<my_work_question_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            Box::pin(crate::my_work::question_page(
+                &self.state.db,
+                &p,
+                a.project.as_deref(),
+                a.pool.unwrap_or(false),
+                &a.page,
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
+    }
+
+    async fn my_work_review_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: my_work_review_page::Args,
+        _z: my_work_review_page::Authorized,
+    ) -> Result<my_work_review_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            Box::pin(crate::my_work::review_page(
+                &self.state.db,
+                &p,
+                a.project.as_deref(),
+                &a.page,
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
+    }
+
+    async fn my_work_comment_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: my_work_comment_page::Args,
+        _z: my_work_comment_page::Authorized,
+    ) -> Result<my_work_comment_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            Box::pin(crate::my_work::comment_page(
+                &self.state.db,
+                &p,
+                a.project.as_deref(),
+                &a.page,
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
+    }
+
     async fn set_pot_guide(
         &self,
         _db: &Db,
@@ -1676,53 +1719,6 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<set_pot_guide::Output, CratestackError> {
         let p = principal(ctx)?;
         typed(crate::what_now::set_guide(&self.state.db, &p, &a.project, &a.guide).await)
-    }
-
-    async fn station_list(
-        &self,
-        _db: &Db,
-        ctx: &CratestackContext,
-        a: station_list::Args,
-        _z: station_list::Authorized,
-    ) -> Result<station_list::Output, CratestackError> {
-        let p = principal(ctx)?;
-        let db = &self.state.db;
-        typed(
-            stations::list(
-                db,
-                &p,
-                a.project.as_deref(),
-                a.cook.as_deref(),
-                a.kind.as_deref(),
-                a.live,
-                a.limit,
-            )
-            .await,
-        )
-    }
-
-    async fn cloud_run_page(
-        &self,
-        _db: &Db,
-        ctx: &CratestackContext,
-        a: cloud_run_page::Args,
-        _z: cloud_run_page::Authorized,
-    ) -> Result<cloud_run_page::Output, CratestackError> {
-        let p = principal(ctx)?;
-        typed(
-            Box::pin(stations::page(
-                &self.state.db,
-                &p,
-                a.project.as_deref(),
-                a.cook.as_deref(),
-                Some("cloud-run"),
-                a.live,
-                None,
-                &a.page,
-            ))
-            .await
-            .map(|(items, next)| crate::paging::page_json(items, next)),
-        )
     }
 
     async fn station_page(
@@ -1781,27 +1777,6 @@ impl ProcedureRegistry for Procedures {
                     checkpoint: a.checkpoint,
                     summary: a.summary,
                 },
-            )
-            .await,
-        )
-    }
-
-    async fn activity_list(
-        &self,
-        _db: &Db,
-        ctx: &CratestackContext,
-        a: activity_list::Args,
-        _z: activity_list::Authorized,
-    ) -> Result<activity_list::Output, CratestackError> {
-        let p = principal(ctx)?;
-        typed(
-            activity::list(
-                &self.state.db,
-                &p,
-                &a.project,
-                a.station.as_deref(),
-                a.task.as_deref(),
-                a.limit,
             )
             .await,
         )

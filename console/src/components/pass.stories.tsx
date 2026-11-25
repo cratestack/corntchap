@@ -14,7 +14,7 @@ function convs(count: number): Conv[] {
     name: `chef-${i + 1}`,
     kind: i % 2 ? "agent" : "user",
     unread: i % 7 === 0 ? 2 : 0,
-    preview: { at: new Date(NOW - i * 3_600_000).toISOString(), from: `chef-${i + 1}`, body: `A message from chef ${i + 1} about the thing they are cooking` },
+    preview: { at: new Date(NOW - i * 3_600_000).toISOString(), from: `chef-${i + 1}`, body: `A message from chef ${i + 1} about the thing they are cooking`, mine: i % 3 === 1 },
   }));
 }
 

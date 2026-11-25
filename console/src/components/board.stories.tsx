@@ -15,7 +15,7 @@ function Fixture(args: Parameters<typeof BoardView>[0] & { source: typeof tasks 
 const meta = {
   title: "Console/Board",
   component: Fixture,
-  args: { loading: false, source: tasks, columns: { groups: { ready: [], claimed: [], waiting: [], done: [], cancelled: [] } } satisfies BoardColumns, bare: false, selected: null, onOpen: () => undefined, onNew: () => undefined, menus: {} },
+  args: { loading: false, source: tasks, columns: { groups: { ready: [], claimed: [], waiting: [], done: [], cancelled: [] } } satisfies BoardColumns, bare: false, selected: null, onOpen: () => undefined, onNew: () => undefined, showMenu: true },
   decorators: [(Story) => <div className="min-h-dvh bg-background px-4 pt-4 md:px-5 lg:px-8"><Story /></div>],
 } satisfies Meta<typeof Fixture>;
 export default meta;

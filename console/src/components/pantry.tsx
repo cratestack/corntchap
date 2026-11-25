@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import type { MemoryRememberArgs, MemoryView, TagCount } from "@corntchap/api";
-import { ChevronDown, ChevronRight, Link2, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { ChevronRight, Link2, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useProc, useProcCall } from "@/lib/data";
-import { useProcInfinite } from "@/lib/paging";
-import { useTagsSource } from "@/lib/sources";
+import { QUERY_DEBOUNCE_MS } from "@/lib/list-query";
+import type { ListSource } from "@/lib/listbox";
+import { staticFacet, useMappedSource } from "@/lib/people";
+import { useMemoriesSource, useTagsSource } from "@/lib/sources";
+import { useUrlFilters, type UrlFilterSchema } from "@/lib/url-filters";
+import { useDebounced } from "@/lib/use-debounced";
 import { useStoreValue } from "@/lib/use-store-value";
 import { useTagOptions } from "@/lib/pot-pickers";
 import { errorMessage, errorStatus } from "@/lib/api";
-import { fmtAgo, plural, useNow } from "@/lib/format";
+import { fmtAgo, useNow } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,11 +33,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Avatar, EmptyState, LabelChip, RowSkeleton, SectionLabel } from "./bits";
+import { Avatar, LabelChip, SectionLabel } from "./bits";
 import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
-import { VirtualMenu } from "./ui/virtual-menu";
+import { FilterBar, type FacetDef, type FacetOption } from "./filter-bar";
+import { ListPage } from "./list-page";
 
 // ---------------------------------------------------------------- kinds
 
@@ -65,175 +70,95 @@ function plainExcerpt(md: string): string {
 
 // ---------------------------------------------------------------- the view
 
+/** The most memories a search answers (it is ranked by relevance, not paged). */
 const LIMIT = 100;
-/** Memories per page of the unfiltered pantry. */
-const PAGE = 100;
+
+/** The pantry's filters in the URL: the search text (`q`), a kind and the tags a memory must all carry. */
+const PANTRY_FILTERS = { kind: { type: "string" }, tag: { type: "list" } } as const satisfies UrlFilterSchema;
+const KIND_FACET = staticFacet("kind", "Kind", KINDS.map((k) => ({ value: k.id, label: k.label, hint: k.hint })));
+const memoryKey = (m: MemoryView) => m.key;
 
 export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => void }) {
   const [params, setParams] = useSearchParams();
   const loc = useLocation();
-  const q = params.get("q") ?? "";
-  const kind = params.get("kind") ?? "";
-  const tags = useMemo(() => (params.get("tag") ?? "").split(",").filter(Boolean), [params]);
+  const f = useUrlFilters(PANTRY_FILTERS);
+  const tags = f.values.tag;
+  const kind = f.values.kind;
   const selected = params.get("memory");
-  const filtered = !!(q.trim() || kind || tags.length);
-
-  const [text, setText] = useState(q);
+  const searching = !!f.q.trim();
   const searchRef = useRef<HTMLInputElement>(null);
-  useEffect(() => setText(q), [q]);
   useEffect(() => {
     if ((loc.state as { focus?: boolean } | null)?.focus) searchRef.current?.focus();
   }, [loc.state]);
 
-  const setParam = (k: string, v: string | undefined) =>
-    setParams(
-      (p) => {
-        const n = new URLSearchParams(p);
-        if (v) n.set(k, v);
-        else n.delete(k);
-        return n;
-      },
-      { replace: true },
-    );
-
-  // debounce the search box into the URL
-  useEffect(() => {
-    if (text === q) return;
-    const t = setTimeout(() => setParam("q", text.trim() ? text : undefined), 280);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text]);
-
-  const clear = () => {
-    setText("");
-    setParams(
-      (p) => {
-        const n = new URLSearchParams(p);
-        for (const k of ["q", "kind", "tag"]) n.delete(k);
-        return n;
-      },
-      { replace: true },
-    );
-  };
-
-  // The unfiltered pantry (newest change first, a page at a time) feeds the list, the tag list and the "is it empty at all" check;
-  // the search runs only with a filter.
-  const all = useProcInfinite("memoryPage", { project: potKey, kind: null, tags: null }, { getCursor: (p) => p.nextCursor, pageSize: PAGE });
-  const res = useProc(
+  // Without a search the pantry is read a page at a time, newest change first (kind and tags narrow it on the server);
+  // a search is ranked by relevance and answers its best matches.
+  const paged = useMemoriesSource(potKey, { kind: kind || null, tags: tags.length ? tags.join(",") : null, enabled: !searching });
+  const query = useDebounced(f.q, QUERY_DEBOUNCE_MS).trim();
+  const found = useProc(
     "memoryRecall",
-    { project: potKey, query: q.trim() || null, kind: kind || null, tags: tags.length ? tags.join(",") : null, limit: LIMIT },
-    { enabled: filtered },
+    { project: potKey, query: query || null, kind: kind || null, tags: tags.length ? tags.join(",") : null, limit: LIMIT },
+    { enabled: searching && !!query },
   );
-  const rows = filtered ? (res.data ?? []) : all.items;
+  const recalled = useMemo<ListSource<MemoryView>>(() => {
+    const items = found.data ?? [];
+    return { items, hasNextPage: false, fetchNextPage: () => {}, isLoading: found.isLoading, isFetchingNextPage: false, error: found.error, capped: items.length >= LIMIT, pending: f.q.trim() !== query };
+  }, [found.data, found.isLoading, found.error, f.q, query]);
+  const source = searching ? recalled : paged;
 
-  const openMemory = (key: string) => setParam("memory", key);
-  const closeSheet = () =>
+  const setMemory = (key: string | null, push: boolean) =>
     setParams(
       (p) => {
         const n = new URLSearchParams(p);
-        n.delete("memory");
+        if (key) n.set("memory", key);
+        else n.delete("memory");
         return n;
       },
-      { replace: false },
+      { replace: !push },
     );
 
-  const empty = !all.isLoading && !all.error && all.items.length === 0;
+  const tagFacet = useTagFacet(potKey);
+  const filtered = f.active > 0 || searching;
 
   return (
-    <div className="max-w-5xl">
-      <div role="search" aria-label="Search the pantry" className="space-y-2.5">
-        <div className="relative min-w-0 sm:max-w-md">
-          <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-          <Input
-            ref={searchRef}
-            type="search"
-            aria-label="Search the pantry"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Search keys, titles and bodies…"
-            className="h-11 rounded-full pr-3 pl-10 text-[14px] md:h-9 md:text-[13px]"
+    <>
+      <ListPage<MemoryView>
+        embedded
+        title="Pantry"
+        className="max-w-5xl max-md:pb-16"
+        filters={
+          <FilterBar
+            q={f.q}
+            onQ={f.setQ}
+            searchRef={searchRef}
+            facets={[KIND_FACET, tagFacet]}
+            values={{ kind: f.values.kind, tag: f.values.tag }}
+            onChange={(p) => f.set(p as never)}
+            onClear={f.clear}
+            searchPlaceholder="Search keys, titles and bodies…"
           />
-        </div>
-        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Kinds">
-          <KindChip active={!kind} onClick={() => setParam("kind", undefined)} count={all.items.length}>
-            All
-          </KindChip>
-          {KINDS.map((k) => (
-            <KindChip
-              key={k.id}
-              active={kind === k.id}
-              onClick={() => setParam("kind", kind === k.id ? undefined : k.id)}
-              count={all.items.filter((r) => r.kind === k.id).length}
-            >
-              <KindDot kind={k.id} className="size-2" /> {k.label}
-            </KindChip>
-          ))}
-          <TagFilter
-            pot={potKey}
-            selected={tags}
-            onChange={(next) => setParam("tag", next.length ? next.join(",") : undefined)}
-          />
-          {filtered && (
-            <button type="button" onClick={clear} className="shrink-0 px-1 text-[12.5px] whitespace-nowrap text-primary hover:underline">
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-2">
-        {all.isLoading && <RowSkeleton rows={5} />}
-        {!!all.error && !all.isLoading && (
-          <EmptyState band={false} title="The pantry would not open">
-            {errorMessage(all.error)}
-          </EmptyState>
-        )}
-        {empty && (
-          <EmptyState title="Nothing in the pantry yet" action={<Button onClick={onNew}>Stock the pantry</Button>}>
-            Agents stock it as they learn the codebase: conventions, gotchas, how to run things. The next cook reads it before
-            starting, so nobody works out the same thing twice. You can put the first jar on the shelf yourself.
-          </EmptyState>
-        )}
-        {filtered && !res.isLoading && !res.error && !empty && rows.length === 0 && (
-          <EmptyState
-            band={false}
-            title="Nothing on the shelf matches that"
-            action={
-              <Button variant="outline" onClick={clear}>
+        }
+        source={source}
+        itemKey={memoryKey}
+        renderItem={(m) => <MemoryRow m={m} selected={selected === m.key} onOpen={(key) => setMemory(key, false)} />}
+        empty={
+          filtered ? (
+            <>
+              Nothing on the shelf matches that. Try fewer words, or loosen a kind or tag. Search looks at keys, titles and bodies.{" "}
+              <Button variant="link" className="h-auto p-0" onClick={f.clear}>
                 Clear filters
               </Button>
-            }
-          >
-            Try fewer words, or loosen a kind or tag. Search looks at keys, titles and bodies.
-          </EmptyState>
-        )}
-        {filtered && !!res.error && <EmptyState band={false} title="That search failed">{errorMessage(res.error)}</EmptyState>}
-        {filtered && res.isLoading && <RowSkeleton rows={3} />}
-        {rows.length > 0 && (
-          <>
-            <p className="label-caps px-0.5" aria-live="polite">
-              {plural(rows.length, "memory", "memories")}
-              {filtered && rows.length >= LIMIT && ` (showing the first ${LIMIT})`}
-              {filtered && ` · ${all.items.length}${all.hasNextPage ? "+" : ""} in the pantry`}
-            </p>
-            <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5 max-md:pb-16 lg:grid-cols-2">
-              {rows.map((m) => (
-                <li key={m.key}>
-                  <MemoryRow m={m} selected={selected === m.key} onOpen={openMemory} />
-                </li>
-              ))}
-            </ul>
-            {!filtered && all.hasNextPage && (
-              <div className="flex justify-center pt-1">
-                <Button type="button" variant="outline" disabled={all.isFetchingNextPage} onClick={() => void all.fetchNextPage()}>
-                  {all.isFetchingNextPage && <Loader2 className="animate-spin" />}
-                  Show more memories
-                </Button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+            </>
+          ) : (
+            <>
+              Nothing in the pantry yet. Agents stock it as they learn the codebase: conventions, gotchas, how to run things. The next cook reads it before starting, so nobody works out the same thing twice.{" "}
+              <Button variant="link" className="h-auto p-0" onClick={onNew}>
+                Stock the pantry
+              </Button>
+            </>
+          )
+        }
+      />
 
       <Button
         type="button"
@@ -244,67 +169,18 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
         <Plus /> Stock
       </Button>
 
-      <MemorySheet potKey={potKey} memoryKey={selected} onClose={closeSheet} />
-    </div>
-  );
-}
-
-function KindChip({ active, count, onClick, children }: { active: boolean; count: number; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] whitespace-nowrap transition-colors md:h-8 md:px-3 md:text-[12.5px]",
-        active ? "border-primary/60 bg-primary/10 font-medium text-foreground" : "border-input bg-card text-muted-foreground hover:border-foreground/30",
-      )}
-    >
-      {children}
-      <span className="font-mono text-[10.5px] text-muted-foreground">{count}</span>
-    </button>
+      <MemorySheet potKey={potKey} memoryKey={selected} onClose={() => setMemory(null, true)} />
+    </>
   );
 }
 
 /** The pantry's tags (with how many memories carry each), searched and paged by the server; a memory must have all that are chosen. */
-function TagFilter({ pot, selected, onChange }: { pot: string; selected: string[]; onChange: (t: string[]) => void }) {
+function useTagFacet(pot: string): FacetDef {
   const q = useStoreValue("");
-  const source = useTagsSource(pot, { q: q.value });
-  const value = selected.join(", ");
-  return (
-    <VirtualMenu<TagCount>
-      label="Tag"
-      mode="multi"
-      source={source}
-      onQuery={q.set}
-      itemKey={(t) => t.tag}
-      selected={(t) => selected.includes(t.tag)}
-      onSelect={(t) => onChange(selected.includes(t.tag) ? selected.filter((x) => x !== t.tag) : [...selected, t.tag])}
-      header={<p className="label-caps px-3 pt-2 pb-1">Memories with all of</p>}
-      renderItem={(t) => (
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate">{t.tag}</span>
-          <span className="font-mono text-[11px] text-muted-foreground">{t.count}</span>
-        </span>
-      )}
-      empty="No tags yet."
-      trigger={
-        <button
-          type="button"
-          aria-label={value ? `Tag: ${value}` : "Tag"}
-          className={cn(
-            "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] whitespace-nowrap transition-colors md:h-8 md:px-3 md:text-[12.5px]",
-            value ? "border-primary/60 bg-primary/10" : "border-input bg-card hover:border-foreground/30",
-          )}
-        >
-          <span className="text-muted-foreground">Tag</span>
-          {value && <span className="max-w-40 truncate font-medium">{value}</span>}
-          <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
-        </button>
-      }
-    />
-  );
+  const source = useMappedSource(useTagsSource(pot, { q: q.value }), tagOption);
+  return { id: "tag", label: "Tag", source, onQuery: q.set, multiple: true };
 }
+const tagOption = (t: TagCount): FacetOption => ({ value: t.tag, label: t.tag, hint: String(t.count) });
 
 function MemoryRow({ m, selected, onOpen }: { m: MemoryView; selected: boolean; onOpen: (key: string) => void }) {
   const now = useNow();
@@ -317,9 +193,8 @@ function MemoryRow({ m, selected, onOpen }: { m: MemoryView; selected: boolean; 
       aria-label={`${m.title} (${kindOf(m.kind).label}, ${m.key})`}
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "group block w-full min-w-0 rounded-[14px] border bg-card px-3.5 py-3 text-left transition-colors active:bg-muted/60 md:px-4",
-        "hover:border-foreground/25 focus-visible:border-foreground/40",
-        selected ? "border-primary ring-1 ring-primary/40" : "border-border",
+        "group block w-full min-w-0 px-3.5 py-3 text-left transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted/70 md:px-4",
+        selected && "bg-primary/5",
       )}
     >
       <div className="flex items-center gap-2">

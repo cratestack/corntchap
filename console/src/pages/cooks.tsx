@@ -27,7 +27,13 @@ import { fmtAgo, useNow } from "@/lib/format";
 import { KIND_LABEL } from "@/lib/snippets";
 import { canOrchestrate, isSuperAdmin, useSession } from "@/lib/session";
 
-const COOK_FILTERS = { team: { type: "string" }, owner: { type: "string" }, disabled: { type: "string" } } as const satisfies UrlFilterSchema;
+const COOK_FILTERS = { team: { type: "string" }, owner: { type: "string" }, disabled: { type: "string" }, state: { type: "string" } } as const satisfies UrlFilterSchema;
+/** Which cooks: awake (cooking or seen in the last five minutes), cloud ones or local ones. */
+const STATE_OPTIONS = [
+  { value: "awake", label: "Awake" },
+  { value: "cloud", label: "Cloud" },
+  { value: "local", label: "Local" },
+] as const;
 const cookPk = (a: PrincipalView) => a.name;
 const teamPk = (t: TeamView) => t.name;
 
@@ -36,11 +42,12 @@ export function CooksPage() {
   const f = useUrlFilters(COOK_FILTERS);
   const teamFacet = useTeamFacet();
   const ownerFacet = usePersonFacet("owner", "Owner", canOrchestrate(me));
-  const facets = [teamFacet, ...(canOrchestrate(me) ? [ownerFacet] : []), staticFacet("disabled", "State", DISABLED_OPTIONS)];
+  const facets = [teamFacet, ...(canOrchestrate(me) ? [ownerFacet] : []), staticFacet("state", "Runs", STATE_OPTIONS), staticFacet("disabled", "State", DISABLED_OPTIONS)];
   const cooks = useCooksSource({
     q: f.q,
     ...(f.values.team ? { team: f.values.team } : {}),
     ...(f.values.owner ? { owner: f.values.owner } : {}),
+    ...(f.values.state ? { state: f.values.state } : {}),
     ...disabledArg(f.values.disabled),
   });
   const projects = useProjects();
@@ -151,7 +158,7 @@ export function CooksPage() {
               q={f.q}
               onQ={f.setQ}
               facets={facets}
-              values={{ team: f.values.team, owner: f.values.owner, disabled: f.values.disabled }}
+              values={{ team: f.values.team, owner: f.values.owner, state: f.values.state, disabled: f.values.disabled }}
               onChange={(p) => f.set(p as never)}
               onClear={f.clear}
               searchPlaceholder="Find a cook"

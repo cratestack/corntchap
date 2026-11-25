@@ -387,7 +387,7 @@ pub async fn list(
     Ok(Value::Array(rows))
 }
 
-/// A page of stations (`stationPage`, and `cloudRunPage` with `kind = cloud-run`), newest first
+/// A page of stations (`stationPage`), newest first
 /// (created_at desc, ref). Same visibility and `kind` rules as [`list`]: without a kind the sessions
 /// and the cloud runs that have not ended. `q` matches the label, directory and session id (any case).
 #[allow(clippy::too_many_arguments)]

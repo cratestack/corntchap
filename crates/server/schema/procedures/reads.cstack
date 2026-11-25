@@ -20,16 +20,6 @@ procedure potPage(q: String?, team: String?, page: CursorPageInput?): CursorPage
   @allow(auth() != null)
   @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts, by key, a page at a time (items, nextCursor). Narrow with q (key or name) or team.")
 
-/// Tasks in a project, all at once, for the console's pickers (not an MCP tool).
-/// @param project Project key, e.g. PAY.
-/// @param status Only tasks in this status: open, claimed, blocked, done or cancelled.
-/// @param label Only tasks carrying this label.
-/// @param readyOnly Only tasks you could claim now (open, dependencies and subtasks done).
-/// @param menu Only tasks on this menu (key, e.g. mvp); - for tasks on no menu.
-/// @param owner Only tasks owned by this handle; me for yours; - for tasks nobody owns.
-procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?, menu: String?, owner: String?): TaskView[]
-  @allow(auth() != null)
-
 /// A page of a project's tasks (the console's board and the `list_tasks` tool).
 /// @param project Project key, e.g. PAY.
 /// @param bucket A board column: ready (open with nothing in the way, or a lapsed lease), claimed (on the fire), waiting (blocked or waiting on other tasks): priority, then number; done (served) or cancelled (tossed): newest change first; active (ready, claimed and waiting together; the default); or all (every status, newest change first).

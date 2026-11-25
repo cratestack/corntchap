@@ -8,7 +8,7 @@ part of "../corntchap.cstack"
 /// @param days How many days back, today included (default 7, at most 90).
 procedure usageReport(project: String?, cook: String?, days: Int?): UsageReport
   @allow(auth() != null)
-  @mcp(tool: "usage_report", description: "How much text corntchap sent to agents (yours, or those of the cooks you own): calls, characters and estimated tokens (chars / 4) for the last days, per day, per cook, and the top tools and wake reasons. It counts what corntchap sends, not what the agent itself uses.")
+  @mcp(tool: "usage_report", description: "How much text corntchap sent to agents (yours, or those of the cooks you own): calls, characters and estimated tokens (chars / 4) for the last days, per day, and the top tools and wake reasons. It counts what corntchap sends, not what the agent itself uses.")
 
 /// A page of the cooks whose usage you may see, the biggest senders first.
 /// @param project Only this pot (key, e.g. PAY).

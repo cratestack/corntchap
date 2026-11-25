@@ -4,7 +4,7 @@ import type { ActivityView, StationView } from "@corntchap/api";
 import { Activity, AppWindow, ChevronDown, Hourglass, Loader2, Play, SquareTerminal, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useProcCall } from "@/lib/data";
-import { staticSource, useStaticSource, type ListSource } from "@/lib/listbox";
+import type { ListSource } from "@/lib/listbox";
 import { useActivitySource, usePotsSource, useStationsSource } from "@/lib/sources";
 import { useStoreValue } from "@/lib/use-store-value";
 import { errorMessage } from "@/lib/api";
@@ -55,21 +55,6 @@ function ListFooter({ source }: { source: ListSource<unknown> }) {
     );
   if (source.capped) return <p className="py-3 text-center text-[12px] text-muted-foreground">That is as far as this goes.</p>;
   return null;
-}
-
-const NO_STATIONS: StationView[] = [];
-
-/**
- * The stations to show: the paged `source` (stationPage), or, from a caller that still reads them whole, `stations`
- * (with `hasMore` / `onMore` for its own paging).
- */
-function useStationSource(source: ListSource<StationView> | undefined, stations: StationView[] | undefined, more: { hasMore?: boolean | undefined; loadingMore?: boolean | undefined; onMore?: (() => void) | undefined }) {
-  const fixed = useStaticSource(stations ?? NO_STATIONS);
-  const { hasMore = false, loadingMore = false, onMore } = more;
-  return useMemo<ListSource<StationView>>(
-    () => source ?? (hasMore ? { ...staticSource(stations ?? NO_STATIONS), hasNextPage: true, isFetchingNextPage: loadingMore, fetchNextPage: () => onMore?.() } : fixed),
-    [source, stations, fixed, hasMore, loadingMore, onMore],
-  );
 }
 
 const shortSession = (s: string) => (s.length > 14 ? `${s.slice(0, 12)}…` : s);
@@ -159,24 +144,15 @@ function StationActivity({ station, now }: { station: StationView; now: number }
 /** A cook's registered agent sessions. Registration happens in the CLI; the console shows and removes them. */
 export function StationList({
   source,
-  stations,
-  hasMore,
-  loadingMore,
-  onMore,
   cook,
   kind,
 }: {
   /** The cook's stations as a paged read (`useStationsSource`). */
-  source?: ListSource<StationView>;
-  /** Or already read whole, with `hasMore` / `loadingMore` / `onMore` when the caller pages them itself. */
-  stations?: StationView[];
-  hasMore?: boolean;
-  loadingMore?: boolean;
-  onMore?: () => void;
+  source: ListSource<StationView>;
   cook?: string;
   kind?: string | null;
 }) {
-  const list = useStationSource(source, stations, { hasMore, loadingMore, onMore });
+  const list = source;
   const call = useProcCall();
   const now = useNow();
   const [removing, setRemoving] = useState<StationView | null>(null);
@@ -497,23 +473,9 @@ function StartSessionDialog({
 }
 
 /** A cook's cloud runs, newest first: one station per Claude routine run, Devin or Coder session, webhook or GitHub-comment run. */
-export function CloudRunList({
-  source,
-  stations,
-  hasMore = false,
-  loadingMore = false,
-  onMore,
-}: {
-  /** The cook's cloud runs as a paged read (`useStationsSource` with `kind: "cloud-run"`). */
-  source?: ListSource<StationView>;
-  /** Or the runs already read, with `hasMore` / `loadingMore` / `onMore` when the caller pages them itself. */
-  stations?: StationView[];
-  hasMore?: boolean;
-  loadingMore?: boolean;
-  onMore?: () => void;
-}) {
+export function CloudRunList({ source }: { source: ListSource<StationView> }) {
   const now = useNow();
-  const list = useStationSource(source, stations, { hasMore, loadingMore, onMore });
+  const list = source;
   if (list.items.length === 0) {
     return <p className="text-[12.5px] text-muted-foreground">No cloud runs yet. Each wake of a cloud target opens one, and what the run does is attributed to it.</p>;
   }

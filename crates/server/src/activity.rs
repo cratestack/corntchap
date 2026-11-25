@@ -166,38 +166,6 @@ const ACTIVITY_JSON: &str = "jsonb_build_object('seq', e.seq, 'at', e.at, 'stati
             'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
             'count', coalesce((e.payload->>'count')::bigint, 1))";
 
-/// Recent activity of a pot, newest first.
-pub async fn list(
-    db: &PgPool,
-    p: &Principal,
-    project: &str,
-    station: Option<&str>,
-    task: Option<&str>,
-    limit: Option<i64>,
-) -> Result<Value> {
-    let mut c = db.acquire().await?;
-    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
-    let task_id = match task.map(str::trim).filter(|t| !t.is_empty()) {
-        Some(t) => Some(task_by_ref(&mut c, p, t).await?.id),
-        None => None,
-    };
-    let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select {ACTIVITY_JSON}
-         from events e
-         where e.kind = 'activity' and e.project_id = $1
-           and ($2::text is null or e.payload->>'station' = $2)
-           and ($3::uuid is null or e.task_id = $3)
-         order by e.seq desc limit $4"
-    )))
-    .bind(pr.id)
-    .bind(station.map(str::trim).filter(|s| !s.is_empty()))
-    .bind(task_id)
-    .bind(limit.unwrap_or(50).clamp(1, 200))
-    .fetch_all(&mut *c)
-    .await?;
-    Ok(Value::Array(rows))
-}
-
 /// A page of a pot's activity, newest first (seq desc): [`list`] with the cook too (`cook` is a cook's name).
 pub async fn page(
     db: &PgPool,

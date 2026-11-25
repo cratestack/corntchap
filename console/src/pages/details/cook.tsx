@@ -20,7 +20,7 @@ import {
   formSheetClass,
 } from "@/components/bits";
 import { CloudRunList, StationList } from "@/components/stations";
-import { LoadMore, SourceList } from "@/components/source-list";
+import { SourceList } from "@/components/source-list";
 import { VirtualMenu } from "@/components/ui/virtual-menu";
 import { CookRepoScopes } from "@/components/repos";
 import { UsagePanel } from "@/components/usage";
@@ -296,6 +296,11 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
               hint={
                 <>
                   <span className="block truncate font-mono text-[11px]">{wakeDetail(w)}</span>
+                  {w.session_url && (
+                    <a href={w.session_url} target="_blank" rel="noreferrer" className="block truncate text-[11.5px] underline underline-offset-2">
+                      Latest session
+                    </a>
+                  )}
                   {(w.projects.length > 0 || w.labels.length > 0) && (
                     <span className="block text-[11.5px]">
                       {w.projects.length > 0 && <>pots {w.projects.join(", ")} </>}
@@ -470,7 +475,6 @@ export function CookDetailsPage() {
   const [token, setToken] = useState<{ token: string; title: string; hint?: string } | null>(null);
 
   const cook = found.item;
-  const stations = useMemo(() => [...sessions.items], [sessions.items]);
 
   const myTeams = useMemo(() => cook?.teams ?? [], [cook]);
   const pots = useMemo(() => (projects.data ?? []).filter((p) => p.team && myTeams.includes(p.team)), [projects.data, myTeams]);
@@ -488,8 +492,8 @@ export function CookDetailsPage() {
     return out;
   }, [events, name]);
 
-  // what the cook's stations reported last, a page for each pot they are in (the latest few: `activityPage` has the rest)
-  const stationPots = useMemo(() => [...new Set(stations.map((s) => s.project))], [stations]);
+  // what the cook's stations reported last, a page for each pot of its teams (the latest few: `activityPage` has the rest)
+  const stationPots = useMemo(() => pots.map((p) => p.key), [pots]);
   const activity = useQueries({
     queries: stationPots.map((project) => ({
       queryKey: ["data", "activity", project, "cook", name],
@@ -596,14 +600,13 @@ export function CookDetailsPage() {
           </div>
 
           <div className="space-y-6">
-            <Group title="Sessions" aside={<span className="font-mono text-[11px] text-muted-foreground">{stations.length}{sessions.hasNextPage ? "+" : ""}</span>}>
+            <Group title="Sessions" aside={<span className="font-mono text-[11px] text-muted-foreground">{sessions.items.length}{sessions.hasNextPage ? "+" : ""}</span>}>
               <div className="p-3.5">
                 {sessions.isLoading ? (
                   <RowSkeleton rows={2} />
                 ) : (
                   <>
-                    <StationList stations={stations} cook={cook.name} kind={cook.agent_kind ?? null} />
-                    <LoadMore source={sessions} />
+                    <StationList source={sessions} cook={cook.name} kind={cook.agent_kind ?? null} />
                   </>
                 )}
               </div>
@@ -616,8 +619,7 @@ export function CookDetailsPage() {
                 aside={<span className="font-mono text-[11px] text-muted-foreground">{cloudRuns.items.length}{cloudRuns.hasNextPage ? "+" : ""}</span>}
               >
                 <div className="p-3.5">
-                  <CloudRunList stations={[...cloudRuns.items]} />
-                  <LoadMore source={cloudRuns} />
+                  <CloudRunList source={cloudRuns} />
                 </div>
               </Group>
             )}
@@ -665,8 +667,8 @@ export function CookDetailsPage() {
 
             <Group title="Recent activity" hint={`What its stations' hooks reported last (the latest ${RECENT}).`}>
               <div className="p-3.5">
-                {stations.length === 0 ? (
-                  <Quiet>No stations, so no activity is reported.</Quiet>
+                {stationPots.length === 0 ? (
+                  <Quiet>The cook is in no pot, so no activity is reported.</Quiet>
                 ) : activity.some((r) => r.isLoading) && recent.length === 0 ? (
                   <RowSkeleton rows={2} />
                 ) : recent.length === 0 ? (

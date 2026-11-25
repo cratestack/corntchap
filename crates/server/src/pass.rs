@@ -599,6 +599,7 @@ pub async fn conversation_page(
          agg as (
            select c.peer, max(c.seq) as last_seq, max(c.created_at) as last_at,
                   (array_agg(c.body order by c.seq desc))[1] as last_body,
+                  (array_agg(c.author_id = $2 or c.relayed_by = $2 order by c.seq desc))[1] as last_mine,
                   count(*) filter (where c.seq > coalesce(r.last_seq, 0)
                                      and c.author_id is distinct from $2 and c.relayed_by is distinct from $2) as unread
            from conv c left join pass_reads r
@@ -608,7 +609,7 @@ pub async fn conversation_page(
          select jsonb_build_object('chef', x.name, 'display_name', x.display_name, 'kind', x.kind,
                   'last_seq', a.last_seq, 'last_at', a.last_at,
                   'preview', case when char_length(a.last_body) > 140 then left(a.last_body, 140) || '…' else a.last_body end,
-                  'unread', a.unread),
+                  'last_mine', coalesce(a.last_mine, false), 'unread', a.unread),
                 array[a.last_seq::text, x.name]
          from agg a join principals x on x.id = a.peer
          where ($3::text is null or position(lower($3) in lower(x.name || ' ' || coalesce(x.display_name, ''))) > 0)

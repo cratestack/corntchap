@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode, type Ref } from "react";
 import { ChevronDown, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ListSource } from "@/lib/listbox";
@@ -86,13 +86,15 @@ export interface FilterBarProps {
   searchPlaceholder?: string | undefined;
   /** No search box (a list with no text to search): just the chips and "Clear filters". */
   hideSearch?: boolean | undefined;
+  /** The search box's element, to focus it from outside. */
+  searchRef?: Ref<HTMLInputElement> | undefined;
   className?: string | undefined;
 }
 
 const toList = (v: FacetValue): string[] => (Array.isArray(v) ? v : v ? [v] : []);
 
 /** A list page's filters: a search box and one chip per facet. The values live with the caller (`useUrlFilters`). */
-export function FilterBar({ q, onQ, facets, values, onChange, onClear, searchPlaceholder = "Search", hideSearch = false, className }: FilterBarProps) {
+export function FilterBar({ q, onQ, facets, values, onChange, onClear, searchPlaceholder = "Search", hideSearch = false, searchRef, className }: FilterBarProps) {
   const anyActive = !!q.trim() || facets.some((f) => toList(values[f.id]).length > 0);
   return (
     <div role="search" className={cn("flex flex-wrap items-center gap-2", className)}>
@@ -101,6 +103,7 @@ export function FilterBar({ q, onQ, facets, values, onChange, onClear, searchPla
         <span className="sr-only">{searchPlaceholder}</span>
         <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
         <input
+          ref={searchRef}
           type="search"
           value={q}
           onChange={(e) => onQ(e.target.value)}

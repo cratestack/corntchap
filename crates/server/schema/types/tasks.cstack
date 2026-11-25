@@ -123,6 +123,8 @@ type TaskView {
   total_items Int
   /// The menu (milestone) key the task is on, e.g. mvp.
   menu String?
+  /// That menu's name, e.g. MVP.
+  menu_name String?
   /// The summary passed to complete.
   result String?
   created_at String
@@ -187,6 +189,8 @@ type TaskDetail {
   total_items Int
   /// The menu (milestone) key the task is on, e.g. mvp.
   menu String?
+  /// That menu's name, e.g. MVP.
+  menu_name String?
   /// The summary passed to complete.
   result String?
   created_at String

@@ -19,7 +19,7 @@ export const useTeamsSource = (q = "", opts: O = {}) => useListQuery("teamPage",
 export const useTeamMembersSource = (team: string, f: Omit<F<"teamMemberPage">, "team"> & Q = {}) =>
   useListQuery("teamMemberPage", { team, ...own(f) }, f);
 export const useCooksSource = (f: F<"cookPage"> & Q = {}) => useListQuery("cookPage", own(f), f);
-export const useFiresSource = (q = "") => useListQuery("firePage", {}, { q });
+export const useFiresSource = (q = "", f: F<"firePage"> = {}) => useListQuery("firePage", f, { q });
 export const useWakeTargetsSource = (cook: string, opts: O = {}) => useListQuery("wakeTargetPage", { cook }, opts);
 export const useForgeUnfollowedSource = (q = "") => useListQuery("forgeUnfollowedPage", {}, { q });
 export const useStationsSource = (f: F<"stationPage"> & Q = {}) =>
@@ -36,20 +36,16 @@ export const useTasksSource = (project: string, f: Omit<F<"taskPage">, "project"
   useListQuery("taskPage", { project, ...own(f) }, f);
 export const useMenusSource = (project: string, f: Omit<F<"menuPage">, "project"> & Q = {}) => useListQuery("menuPage", { project, ...own(f) }, f);
 export const useSavedViewsSource = (project: string, q = "") => useListQuery("savedViewPage", { project }, { q });
-export const useViewSource = (project: string, f: Omit<F<"viewPage">, "project"> & O = {}) =>
-  useListQuery("viewPage", { project, ...own(f) }, f);
 export const useLabelsSource = (project: string, f: { q?: string; bucket?: string | null; enabled?: boolean } = {}) =>
   useListQuery("labelPage", { project, ...own(f) }, f);
 export const useTagsSource = (project: string, f: { q?: string; kind?: string | null; enabled?: boolean } = {}) =>
   useListQuery("tagPage", { project, ...own(f) }, f);
 export const useReposSource = (project: string, q = "") => useListQuery("repoPage", { project }, { q });
-export const usePassConversationsSource = (project: string, f: { q?: string; unread?: boolean | null; enabled?: boolean } = {}) =>
-  useListQuery("passConversationPage", { project, ...own(f) }, f);
 export const useCommentsSource = (task: string, opts: O = {}) => useListQuery("commentPage", { task }, opts);
-export const useQuestionsSource = (project: string, f: Omit<F<"questionPage">, "project"> & O = {}) =>
-  useListQuery("questionPage", { project, ...own(f) }, f);
 export const useMyQuestionsSource = (f: F<"questionMinePage"> & O = {}) => useListQuery("questionMinePage", own(f), f);
 export const useReviewsSource = (project: string, f: Omit<F<"reviewPage">, "project"> & O = {}) =>
   useListQuery("reviewPage", { project, ...own(f) }, f);
-export const useMyWorkSource = (section: string, f: { project?: string | null; enabled?: boolean } = {}) =>
-  useListQuery("myWorkPage", { section, ...own(f) }, f);
+export const useMyWorkQuestionsSource = (f: F<"myWorkQuestionPage"> & O = {}) => useListQuery("myWorkQuestionPage", own(f), { refreshLoaded: true, ...f });
+export const useMyWorkReviewsSource = (f: F<"myWorkReviewPage"> & O = {}) => useListQuery("myWorkReviewPage", own(f), { refreshLoaded: true, ...f });
+export const useMyWorkCommentsSource = (f: F<"myWorkCommentPage"> & O = {}) => useListQuery("myWorkCommentPage", own(f), { refreshLoaded: true, ...f });
+export const useMemoriesSource = (project: string, f: Omit<F<"memoryPage">, "project"> & O = {}) => useListQuery("memoryPage", { project, ...own(f) }, f);

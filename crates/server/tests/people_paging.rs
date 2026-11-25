@@ -243,6 +243,15 @@ async fn teams_and_their_chefs() {
         .await;
     assert_eq!(names(&v["items"]), ["pk-a1", "pk-a2"]);
     assert_eq!(v["items"][0]["fireAndForget"], false);
+    assert_eq!(v["items"][0]["mine"], true, "alice owns pk-a1: {v}");
+    let v = w
+        .ok(
+            &w.carol,
+            "teamMemberPage",
+            json!({"team": "acme", "kind": "agent"}),
+        )
+        .await;
+    assert_eq!(v["items"][0]["mine"], false, "carol does not: {v}");
     let v = w
         .ok(
             &w.alice,
@@ -353,6 +362,53 @@ async fn people_cooks_and_fires() {
         )
         .await;
     assert_eq!(v["items"].as_array().unwrap().len(), 5);
+    // state: awake (seen lately, not disabled), cloud, local
+    sqlx::query("update principals set last_seen_at = now() where name in ('ck-a1', 'ck-a4')")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    sqlx::query("update principals set runtime = 'cloud' where name = 'ck-a2'")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    let v = w.ok(&w.alice, "cookPage", json!({"state": "awake"})).await;
+    assert_eq!(
+        names(&v["items"]),
+        ["ck-a1"],
+        "a disabled cook is not awake"
+    );
+    let v = w.ok(&w.alice, "cookPage", json!({"state": "cloud"})).await;
+    assert_eq!(names(&v["items"]), ["ck-a2"]);
+    let v = w
+        .ok(&w.alice, "cookPage", json!({"state": "local", "q": "ck-a"}))
+        .await;
+    assert!(!names(&v["items"]).contains(&"ck-a2".to_string()), "{v}");
+    assert_eq!(v["items"].as_array().unwrap().len(), 5, "{v}");
+    let (st, _) = w
+        .proc(&w.alice, "cookPage", json!({"state": "asleep"}))
+        .await;
+    assert_eq!(st, 400);
+    // notInTeam: the cooks and the people that are not in the team yet
+    let v = w
+        .ok(
+            &w.root,
+            "cookPage",
+            json!({"notInTeam": "other", "q": "ck-"}),
+        )
+        .await;
+    assert!(!names(&v["items"]).contains(&"ck-b1".to_string()), "{v}");
+    assert_eq!(v["items"].as_array().unwrap().len(), 6, "{v}");
+    let v = w
+        .ok(&w.root, "userPage", json!({"notInTeam": "acme"}))
+        .await;
+    let outside = names(&v["items"]);
+    assert!(outside.contains(&"bob".to_string()), "{outside:?}");
+    assert!(!outside.contains(&"alice".to_string()), "{outside:?}");
+    assert!(!outside.contains(&"carol".to_string()), "{outside:?}");
+    let v = w
+        .ok(&w.alice, "userPage", json!({"notInTeam": "acme"}))
+        .await;
+    assert!(!names(&v["items"]).contains(&"carol".to_string()), "{v}");
     // a person with no cooks sees none
     let v = w.ok(&w.carol, "cookPage", json!({})).await;
     assert!(v["items"].as_array().unwrap().is_empty(), "{v}");
@@ -370,6 +426,15 @@ async fn people_cooks_and_fires() {
         .await;
     let seen = w.walk_plain(&w.alice, "firePage", json!({}), 3, name).await;
     assert_eq!(seen, ["fr-1", "fr-2", "fr-3", "fr-4"]);
+    // lit: seen lately and not put out
+    sqlx::query("update principals set last_seen_at = now() where name = 'fr-2'")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    let v = w.ok(&w.alice, "firePage", json!({"lit": true})).await;
+    assert_eq!(names(&v["items"]), ["fr-2"]);
+    let v = w.ok(&w.alice, "firePage", json!({"lit": false})).await;
+    assert_eq!(names(&v["items"]), ["fr-1", "fr-3", "fr-4"]);
     let v = w.ok(&w.alice, "firePage", json!({"q": "FR-3"})).await;
     assert_eq!(names(&v["items"]), ["fr-3"]);
     let v = w.ok(&w.root, "firePage", json!({"q": "bob"})).await;
@@ -422,6 +487,29 @@ async fn wake_targets_and_unfollowed_repos() {
         )
         .await;
     assert_eq!(v["items"][0]["type"], "relay");
+    assert!(v["items"][0].get("config").is_none(), "no secrets: {v}");
+    assert!(v["items"][0]["session_url"].is_null(), "no run yet: {v}");
+    // the page of the latest session a target started (only an https address)
+    sqlx::query(
+        "insert into coder_runs (target_id, project, api, remote_id, session_url)
+         select id, 'PAY', 'devin', 'r1', 'https://app.devin.ai/sessions/r1' from wake_targets
+         where id = $1::uuid",
+    )
+    .bind(v["items"][0]["id"].as_str().unwrap())
+    .execute(&w.app.state.db)
+    .await
+    .unwrap();
+    let v = w
+        .ok(
+            &w.alice,
+            "wakeTargetPage",
+            json!({"cook": "wk-1", "page": {"limit": 1}}),
+        )
+        .await;
+    assert_eq!(
+        v["items"][0]["session_url"], "https://app.devin.ai/sessions/r1",
+        "{v}"
+    );
     assert!(v["items"][0].get("config").is_none(), "no secrets: {v}");
     // somebody else's cook, and one that does not exist
     let (st, _) = w
@@ -593,11 +681,15 @@ async fn stations_activity_and_the_feed() {
         .proc(&w.alice, "stationPage", json!({"kind": "tmux", "page": {}}))
         .await;
     assert_eq!(st, 400);
-    // bob sees none of acme's, a person without cooks none at all; cloudRunPage is the same list
+    // bob sees none of acme's, a person without cooks none at all
     let v = w.ok(&w.bob, "stationPage", json!({"project": "PAY"})).await;
     assert!(v["items"].as_array().unwrap().is_empty(), "{v}");
     let v = w
-        .ok(&w.root, "cloudRunPage", json!({"page": {"limit": 100}}))
+        .ok(
+            &w.root,
+            "stationPage",
+            json!({"kind": "cloud-run", "page": {"limit": 100}}),
+        )
         .await;
     assert_eq!(v["items"].as_array().unwrap().len(), 3);
 

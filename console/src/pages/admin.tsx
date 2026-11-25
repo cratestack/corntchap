@@ -222,11 +222,17 @@ export function FireManage({ fire }: { fire: Pick<PrincipalView, "name" | "disab
 }
 
 const NO_FILTERS: UrlFilterSchema = {};
+const FIRE_FILTERS = { lit: { type: "string" } } as const satisfies UrlFilterSchema;
+/** Lit: seen in the last five minutes and not put out; Out: the others. */
+const LIT_OPTIONS = [
+  { value: "true", label: "Lit" },
+  { value: "false", label: "Out" },
+] as const;
 const firePk = (r: PrincipalView) => r.name;
 
 export function FiresPage() {
-  const f = useUrlFilters(NO_FILTERS);
-  const fires = useFiresSource(f.q);
+  const f = useUrlFilters(FIRE_FILTERS);
+  const fires = useFiresSource(f.q, f.values.lit ? { lit: f.values.lit === "true" } : {});
   const call = useV1Call();
   const now = useNow();
   const [creating, setCreating] = useState(false);
@@ -265,7 +271,15 @@ export function FiresPage() {
             <p className="max-w-2xl text-[13.5px] text-muted-foreground">
               A fire is a relay running on your laptop: it listens for work and wakes your local cooks. Cloud cooks are woken by a routine, a GitHub comment or a webhook instead.
             </p>
-            <FilterBar q={f.q} onQ={f.setQ} facets={[]} values={{}} onChange={() => {}} onClear={f.clear} searchPlaceholder="Find a fire" />
+            <FilterBar
+              q={f.q}
+              onQ={f.setQ}
+              facets={[staticFacet("lit", "Fire", LIT_OPTIONS)]}
+              values={{ lit: f.values.lit }}
+              onChange={(p) => f.set(p as never)}
+              onClear={f.clear}
+              searchPlaceholder="Find a fire"
+            />
           </div>
         }
         source={fires}
@@ -297,8 +311,8 @@ export function FiresPage() {
           );
         }}
         empty={
-          f.q ? (
-            <>No fire is named like “{f.q}”.</>
+          f.q || f.active > 0 ? (
+            <>No fire matches these filters.</>
           ) : (
             <>
               No fire is lit. Enroll a relay on the machine where your cooks live: run <code className="font-mono">corntchap-cli fire enroll relay-laptop</code> there and approve it in the browser, or{" "}
@@ -697,11 +711,10 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
   const [busy, setBusy] = useState(false);
   const showing = withPeople ? kind : "cook";
 
-  // each list is paged and searched by the server; the chefs already in the team (for the same search) are marked
-  const people = useMappedSource(useUsersSource({ q: query, disabled: false, enabled: open && showing === "user" }), personCandidate);
-  const cooks = useMappedSource(useCooksSource({ q: query, disabled: false, ...(ownCooksOnly ? { owner: me.name } : {}), enabled: open && showing === "cook" }), cookCandidate);
-  const members = useTeamMembersSource(team ?? "", { q: query, enabled: open });
-  const taken = useMemo(() => new Set(members.items.map((m) => m.name)), [members.items]);
+  // each list is paged and searched by the server, and holds only those who are not in the team yet
+  const notInTeam = team ?? "";
+  const people = useMappedSource(useUsersSource({ q: query, disabled: false, notInTeam, enabled: open && showing === "user" }), personCandidate);
+  const cooks = useMappedSource(useCooksSource({ q: query, disabled: false, notInTeam, ...(ownCooksOnly ? { owner: me.name } : {}), enabled: open && showing === "cook" }), cookCandidate);
   const source = showing === "user" ? people : cooks;
 
   useEffect(() => {
@@ -714,7 +727,6 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
   }, [open]);
   const principal = who?.principal ?? "";
   const ownerOk = who?.kind === "user" && who.role !== "member";
-  const isTaken = useCallback((c: Candidate) => taken.has(c.principal), [taken]);
 
   return (
     <FormDialog
@@ -782,7 +794,6 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
           label={showing === "user" ? "People" : "Cooks"}
           itemKey={candidateKey}
           selected={(c) => who?.kind === c.kind && who.principal === c.principal}
-          isDisabled={isTaken}
           onPick={(c) => setWho(who?.kind === c.kind && who.principal === c.principal ? null : c)}
           empty={<p className="px-3.5 py-3 text-[13px] text-muted-foreground">Nobody left to add.</p>}
           className="rounded-xl border border-border"
@@ -791,7 +802,7 @@ export function AddMember({ team, onClose, ownCooksOnly = false }: { team: strin
             <span className="flex min-h-10 w-full items-center gap-2.5 px-2">
               <Avatar name={c.label} className="size-7 text-[12px]" />
               {c.kind === "user" ? <PersonName name={c.label} displayName={c.display} className="min-w-0 flex-1 truncate" /> : <span className="min-w-0 flex-1 truncate font-medium">{c.label}</span>}
-              <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{taken.has(c.principal) ? "in the team" : c.kind === "cook" ? "cook" : "person"}</span>
+              <span className="rounded-full bg-muted px-2 py-px text-[11px] text-muted-foreground">{c.kind === "cook" ? "cook" : "person"}</span>
             </span>
           )}
         />

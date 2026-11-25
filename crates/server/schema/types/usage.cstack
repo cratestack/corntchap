@@ -41,7 +41,6 @@ type UsageReport {
   note String
   totals UsageTotals
   by_day UsageDay[]
-  by_cook UsageCook[]
   /// The tools and wake reasons that sent the most, by estimated tokens.
   top UsageTop[]
 }

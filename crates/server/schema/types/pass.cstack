@@ -84,6 +84,8 @@ type PassConversationView {
   last_at String
   /// The newest message, cut to 140 characters.
   preview String?
+  /// The newest message is yours (or a cook's, posted in your name).
+  last_mine Boolean
   /// Messages from them you have not read.
   unread Int
 }

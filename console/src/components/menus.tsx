@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import type { MenuView } from "@corntchap/api";
 import { ChevronRight, Loader2, MoreHorizontal, PartyPopper, Pencil, Plus, RotateCcw, Soup } from "lucide-react";
@@ -47,12 +47,6 @@ export function useMenu(pot: string, key: string | undefined) {
   return { menu, isLoading: on && !menu && (source.isLoading || !!hasNextPage) };
 }
 
-/** The names of a pot's menus by key, for the chips on its tasks: as many menus as the first pages hold. */
-export function useMenuNames(pot: string, enabled = true): Record<string, string> {
-  const { items } = useMenusSource(pot, { status: "all", enabled: enabled && !!pot });
-  return useMemo(() => Object.fromEntries(items.map((m) => [m.key, m.name])) as Record<string, string>, [items]);
-}
-
 /** A menu as a facet or picker option: its key, its name and how far along it is. */
 export const menuOption = (m: MenuView) => ({ value: m.key, label: m.name, hint: m.status === "served" ? "served" : `${m.done}/${m.total}` });
 
@@ -94,19 +88,22 @@ export function MenuChip({ name, className }: { name: string; className?: string
 }
 
 export function MenuBar({ menu, className }: { menu: MenuView; className?: string }) {
-  const pct = Math.round(menu.progress * 100);
   const full = menu.total > 0 && menu.done === menu.total;
   return (
-    <div
-      role="progressbar"
+    <progress
       aria-label={`${menu.name} progress`}
-      aria-valuemin={0}
-      aria-valuemax={menu.total}
-      aria-valuenow={menu.done}
-      className={cn("h-2 overflow-hidden rounded-full bg-muted", className)}
-    >
-      <div className={cn("h-full rounded-full transition-[width] duration-500", full ? "bg-success" : "bg-primary")} style={{ width: `${pct}%` }} />
-    </div>
+      value={menu.done}
+      max={Math.max(1, menu.total)}
+      className={cn(
+        "block h-2 w-full appearance-none overflow-hidden rounded-full bg-muted",
+        "[&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:transition-[width] [&::-webkit-progress-value]:duration-500",
+        "[&::-moz-progress-bar]:rounded-full",
+        full
+          ? "[&::-webkit-progress-value]:bg-success [&::-moz-progress-bar]:bg-success"
+          : "[&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary",
+        className,
+      )}
+    />
   );
 }
 

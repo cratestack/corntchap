@@ -745,6 +745,9 @@ async fn pass_conversations_newest_first_with_unread_counts() {
         ]
     );
     assert_eq!(v["items"][0]["kind"], "user");
+    // the newest with dave is alice's own, the newest with carol is carol's
+    assert_eq!(v["items"][0]["last_mine"], true, "{v}");
+    assert_eq!(v["items"][1]["last_mine"], false, "{v}");
     assert!(
         v["items"][0]["last_seq"].as_i64().unwrap() > v["items"][1]["last_seq"].as_i64().unwrap()
     );
@@ -1161,6 +1164,160 @@ async fn my_work_pages_by_section() {
     ] {
         let (st, v) = w.proc(&w.alice, "myWorkPage", args.clone()).await;
         assert_eq!(st, want, "{args}: {v}");
+    }
+}
+
+/// A task row carries its menu's name, so a card needs no other read to show the chip.
+#[tokio::test]
+async fn task_rows_carry_the_menu_name() {
+    let w = world().await;
+    let (st, v) = w
+        .app
+        .post(
+            &w.alice,
+            "/projects/PAY/menus",
+            json!({"name": "Hardening"}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let key = v["key"].as_str().unwrap().to_string();
+    w.task(&w.alice, "PAY", "on it", json!({"menu": key})).await;
+    w.task(&w.alice, "PAY", "off it", json!({})).await;
+    let page = w
+        .ok(
+            &w.alice,
+            "taskPage",
+            json!({"project": "PAY", "bucket": "all", "page": {}}),
+        )
+        .await;
+    let rows = page["items"].as_array().unwrap();
+    let on = rows.iter().find(|t| t["title"] == "on it").unwrap();
+    assert_eq!(on["menu"], json!(key), "{page}");
+    assert_eq!(on["menu_name"], "Hardening", "{page}");
+    let off = rows.iter().find(|t| t["title"] == "off it").unwrap();
+    assert!(off["menu_name"].is_null(), "{page}");
+}
+
+/// What waits on me, a page at a time: questions to me, the unaddressed pool, reviews named to me or to the team.
+#[tokio::test]
+async fn my_work_pages_what_waits_on_me() {
+    let w = world().await;
+    // three questions to alice (oldest first), one to dave, one to the pot's people
+    for (to, title) in [
+        (Some("alice"), "q1"),
+        (Some("alice"), "q2"),
+        (Some("alice"), "q3"),
+        (Some("dave"), "not hers"),
+        (None, "anyone?"),
+    ] {
+        let body = match to {
+            Some(t) => json!({"title": title, "to": t}),
+            None => json!({"title": title}),
+        };
+        let (st, v) = w.app.post(&w.carol, "/projects/PAY/questions", body).await;
+        assert_eq!(st, 200, "{v}");
+    }
+    let q = w
+        .walk_plain(&w.alice, "myWorkQuestionPage", json!({}), 2, id)
+        .await;
+    assert_eq!(q.len(), 3, "{q:?}");
+    let titles = w
+        .ok(&w.alice, "myWorkQuestionPage", json!({"page": {}}))
+        .await;
+    let titles: Vec<&str> = titles["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["q1", "q2", "q3"]);
+    // the pool is the unaddressed one, people only, not the asker's own
+    let pool = w
+        .ok(
+            &w.alice,
+            "myWorkQuestionPage",
+            json!({"pool": true, "page": {}}),
+        )
+        .await;
+    assert_eq!(pool["items"].as_array().unwrap().len(), 1, "{pool}");
+    assert_eq!(pool["items"][0]["title"], "anyone?");
+    let own = w
+        .ok(
+            &w.carol,
+            "myWorkQuestionPage",
+            json!({"pool": true, "page": {}}),
+        )
+        .await;
+    assert!(own["items"].as_array().unwrap().is_empty(), "{own}");
+    // the summary's count is the true number, not the length of its capped lists
+    let summary = w.ok(&w.alice, "myWork", json!({})).await;
+    assert_eq!(summary["counts"]["waiting"], 3, "{summary}");
+
+    // reviews: one named to carol, one asked of anyone on the team
+    let t = w.task(&w.alice, "PAY", "reviewed", json!({})).await;
+    for body in [
+        json!({"reviewer": "carol", "note": "named"}),
+        json!({"note": "anyone"}),
+    ] {
+        let (st, v) = w
+            .app
+            .post(&w.alice, &format!("/tasks/{t}/review-request"), body)
+            .await;
+        assert_eq!(st, 200, "{v}");
+    }
+    let rev = w
+        .ok(&w.carol, "myWorkReviewPage", json!({"page": {"limit": 1}}))
+        .await;
+    assert_eq!(rev["items"][0]["note"], "named", "named to me first: {rev}");
+    let all = w
+        .walk_plain(&w.carol, "myWorkReviewPage", json!({}), 1, id)
+        .await;
+    assert_eq!(all.len(), 2, "{all:?}");
+    // the requester is not asked for the team's review
+    let mine = w
+        .ok(&w.alice, "myWorkReviewPage", json!({"page": {}}))
+        .await;
+    assert!(mine["items"].as_array().unwrap().is_empty(), "{mine}");
+    // a person has no unanswered comments, a cook's page is its own
+    let c = w
+        .ok(&w.alice, "myWorkCommentPage", json!({"page": {}}))
+        .await;
+    assert!(c["items"].as_array().unwrap().is_empty(), "{c}");
+    // a pot is checked, a cursor of another list or a forged one is a 400
+    for (name, args, want) in [
+        (
+            "myWorkQuestionPage",
+            json!({"project": "NOPE", "page": {}}),
+            404,
+        ),
+        (
+            "myWorkReviewPage",
+            json!({"project": "NOPE", "page": {}}),
+            404,
+        ),
+        (
+            "myWorkQuestionPage",
+            json!({"page": {"cursor": forged("created_at,id:pool", &["2026-05-01 10:11:12+00", "x"])}}),
+            400,
+        ),
+        (
+            "myWorkQuestionPage",
+            json!({"page": {"cursor": forged("created_at,id:mine", &["yesterday", "x"])}}),
+            400,
+        ),
+        (
+            "myWorkReviewPage",
+            json!({"page": {"cursor": forged("rn,created_at,id:reviews", &["x", "2026-05-01 10:11:12+00", "y"])}}),
+            400,
+        ),
+        (
+            "myWorkCommentPage",
+            json!({"page": {"cursor": forged("created_at,id:comments", &["x", "y"])}}),
+            400,
+        ),
+    ] {
+        let (st, v) = w.proc(&w.alice, name, args.clone()).await;
+        assert_eq!(st, want, "{name} {args}: {v}");
     }
 }
 

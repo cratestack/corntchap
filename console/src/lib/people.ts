@@ -54,7 +54,7 @@ export function principalState(p: Pick<PrincipalView, "disabled" | "busy" | "las
 const LIT_MS = 5 * 60_000;
 
 /** Whether a fire is lit: awake within five minutes and not put out. */
-export const isLit = (f: Pick<PrincipalView, "disabled" | "last_seen_at">, now: number) => !f.disabled && !!f.last_seen_at && now - new Date(f.last_seen_at).getTime() < LIT_MS;
+const isLit = (f: Pick<PrincipalView, "disabled" | "last_seen_at">, now: number) => !f.disabled && !!f.last_seen_at && now - new Date(f.last_seen_at).getTime() < LIT_MS;
 
 /** The fires in one line for the sidebar and the More sheet: which are lit (among those loaded: `more` when there are further pages) and when one was last seen. */
 export function useFireSummary(now: number) {
