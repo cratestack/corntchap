@@ -3,8 +3,8 @@ import { Link } from "react-router";
 import { ChevronLeft } from "lucide-react";
 import { useQueries } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-import { v1 } from "@/lib/api";
-import type { WakeTargetRow } from "@/lib/data";
+import type { WakeTargetView } from "@corntchap/api";
+import { client } from "@/lib/api";
 
 /** "Back to Cooks": the breadcrumb on top of every details page. */
 export function Crumb({ to, parent, here }: { to: string; parent: string; here: string }) {
@@ -80,16 +80,28 @@ export function PotLink({ pot, children }: { pot: string; children?: ReactNode }
   );
 }
 
-/** The wake targets of several cooks at once (same query keys as `useV1`, so the cooks page and this share the cache). */
+/** Every wake target of one cook: its pages read one after the other (a cook has a handful). */
+async function allWakeTargets(cook: string): Promise<WakeTargetView[]> {
+  const out: WakeTargetView[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = await client.procedures.wakeTargetPage({ cook, page: { limit: 200, cursor } });
+    out.push(...page.items);
+    cursor = page.nextCursor ?? null;
+  } while (cursor);
+  return out;
+}
+
+/** The wake targets of several cooks at once (`wakeTargetPage`, under `["data"]` so live events refresh them). */
 export function useWakeTargetsOf(names: string[]) {
   const results = useQueries({
     queries: names.map((n) => ({
-      queryKey: ["data", "v1", `/agents/${n}/wake-targets`],
-      queryFn: () => v1<WakeTargetRow[]>("GET", `/agents/${n}/wake-targets`),
+      queryKey: ["data", "wake-targets", n],
+      queryFn: () => allWakeTargets(n),
       staleTime: 1500,
     })),
   });
-  const byCook = new Map<string, WakeTargetRow[]>();
+  const byCook = new Map<string, WakeTargetView[]>();
   names.forEach((n, i) => byCook.set(n, results[i]?.data ?? []));
   return { byCook, isLoading: results.some((r) => r.isLoading) };
 }

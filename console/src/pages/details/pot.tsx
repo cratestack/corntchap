@@ -1,15 +1,18 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { ChevronRight, Pencil, Trash2 } from "lucide-react";
-import type { ActivityView } from "@corntchap/api";
+import type { ActivityView, MemberView } from "@corntchap/api";
 import { PageShell } from "@/components/page";
 import { Avatar, EmptyState, Group, GroupRow, IdChip, LabelChip, RowSkeleton } from "@/components/bits";
 import { PotDeleteDialog, PotRenameDialog } from "@/components/pot-options";
+import { SourceList } from "@/components/source-list";
 import { UsagePanel } from "@/components/usage";
 import { CodeBlock, CopyButton, CopyLine } from "@/components/secret-dialog";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api";
-import { useProc, useProjects, useTeamChefs, useV1, type TeamRow } from "@/lib/data";
+import { useProc, useProjects } from "@/lib/data";
+import { useActivitySource, useStationsSource, useTeamMembersSource, useUsageCooksSource } from "@/lib/sources";
+import { useTeamByName } from "@/lib/people";
 import { canManageTeam, useSession } from "@/lib/session";
 import { fmtAgo, useNow } from "@/lib/format";
 import { lastView } from "@/lib/views";
@@ -68,25 +71,42 @@ function mcpLines(url: string, key: string) {
   ];
 }
 
+const memberName = (m: MemberView) => m.name;
+const activityKey = (a: ActivityView) => `${a.station}${a.seq}`;
+
+/** A cook's row on a pot's page: its stations in this pot (read for this cook alone, as its row comes into view). */
+function PotCook({ cook, pot }: { cook: string; pot: string }) {
+  const stations = useStationsSource({ project: pot, cook, kind: "session" });
+  const where = stations.items.map((s) => s.label ?? s.directory ?? s.session.slice(0, 8)).join(", ");
+  return (
+    <Link to={`/cooks/${cook}`} className="flex min-h-14 items-center gap-3 px-4 py-2.5 outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted">
+      <Avatar name={cook} className="size-8 rounded-lg text-[14px]" />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[14px] font-medium leading-tight">{cook}</span>
+        <span className="block truncate text-[12px] text-muted-foreground">{stations.isLoading ? "…" : stations.items.length === 0 ? "no station here" : `${where}${stations.hasNextPage ? ", …" : ""}`}</span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+    </Link>
+  );
+}
+
 export function PotDetailsPage() {
   const { key = "" } = useParams();
   const potKey = key.toUpperCase();
   const projects = useProjects();
   const project = (projects.data ?? []).find((p) => p.key === potKey);
   const team = project?.team ?? null;
-  const members = useTeamChefs(team);
-  const stations = useProc("stationList", { project: potKey, kind: "session" }, { enabled: !!project });
+  const cooks = useTeamMembersSource(team ?? "", { kind: "agent", enabled: !!team });
+  const people = useTeamMembersSource(team ?? "", { kind: "user", enabled: !!team });
   const usage = useProc("usageReport", { project: potKey, days: 7 }, { enabled: !!project });
-  const activity = useProc("activityList", { project: potKey, limit: 20 }, { enabled: !!project, refetchMs: 15000 });
+  const usageCooks = useUsageCooksSource({ project: potKey, days: 7, enabled: !!project });
+  const activity = useActivitySource(potKey, { enabled: !!project });
   const now = useNow();
   const me = useSession();
-  const teamsQ = useV1<TeamRow[]>("/teams");
+  const teamRole = useTeamByName(team);
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
-  const canManage = canManageTeam(me, teamsQ.data?.find((t) => t.name === team)?.role);
-
-  const cooks = useMemo(() => (members.data ?? []).filter((m) => m.kind !== "user"), [members.data]);
-  const people = useMemo(() => (members.data ?? []).filter((m) => m.kind === "user"), [members.data]);
+  const canManage = canManageTeam(me, teamRole.item?.role);
   const mcpUrl = `${window.location.origin}/mcp/${potKey}`;
 
   const crumb = <Crumb to={`/pots/${potKey}`} parent={`${potKey} board`} here="About" />;
@@ -181,41 +201,38 @@ export function PotDetailsPage() {
             </Group>
 
             <Group title="Cooks who work here" hint={team ? `The cooks of team ${team}, with their stations in ${project.key}.` : "This pot has no team, so no cook sees it."}>
-              {members.isLoading ? (
-                <div className="p-3">
-                  <RowSkeleton rows={2} />
-                </div>
-              ) : cooks.length === 0 ? (
-                <GroupRow label="No cook yet" hint="No cook is in this pot's team." />
-              ) : (
-                cooks.map((c) => {
-                  const mine = (stations.data ?? []).filter((s) => s.cook === c.name);
-                  return (
-                    <Link
-                      key={c.name}
-                      to={`/cooks/${c.name}`}
-                      className="flex min-h-14 items-center gap-3 px-4 py-2.5 outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted"
-                    >
-                      <Avatar name={c.name} className="size-8 rounded-lg text-[14px]" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[14px] font-medium leading-tight">{c.name}</span>
-                        <span className="block truncate text-[12px] text-muted-foreground">
-                          {mine.length === 0 ? "no station here" : mine.map((s) => s.label ?? s.directory ?? s.session.slice(0, 8)).join(", ")}
-                        </span>
-                      </span>
-                      <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
-                    </Link>
-                  );
-                })
-              )}
-              {people.length > 0 && <GroupRow label="People" value={people.map((p) => p.display_name ?? p.name).join(", ")} />}
+              <SourceList<MemberView>
+                source={cooks}
+                itemKey={memberName}
+                label="Cooks who work here"
+                empty={<>No cook yet. No cook is in this pot's team.</>}
+                renderItem={(c) => <PotCook cook={c.name} pot={project.key} />}
+              />
+            </Group>
+
+            <Group title="People who work here" hint={team ? `The people of team ${team}.` : undefined}>
+              <SourceList<MemberView>
+                source={people}
+                itemKey={memberName}
+                label="People who work here"
+                empty={<>No one yet.</>}
+                renderItem={(p) => (
+                  <div className="flex min-h-12 items-center gap-3 px-4 py-2">
+                    <Avatar name={p.name} className="size-8 rounded-lg text-[14px]" />
+                    <span className="min-w-0 flex-1 truncate text-[14px]">
+                      {p.display_name ?? p.name}
+                      {p.display_name && <span className="ml-2 font-mono text-[12px] text-muted-foreground">@{p.name}</span>}
+                    </span>
+                  </div>
+                )}
+              />
             </Group>
 
             </div>
 
             <Group title="Usage" hint="Estimated tokens corntchap sent for this pot.">
               <div className="p-3.5">
-                <UsagePanel report={usage.data} showCooks />
+                <UsagePanel report={usage.data} cooks={usageCooks} />
               </div>
             </Group>
           </div>
@@ -241,25 +258,24 @@ export function PotDetailsPage() {
 
           <Group title="Recent activity" hint="What the stations of this pot reported last.">
             <div className="p-3.5">
-              {activity.isLoading ? (
-                <RowSkeleton rows={2} />
-              ) : (activity.data ?? []).length === 0 ? (
-                <Quiet>Nothing reported yet.</Quiet>
-              ) : (
-                <ul className="space-y-2">
-                  {activity.data!.map((a) => (
-                    <li key={`${a.station}${a.seq}`} className="flex items-baseline gap-2 text-[12px]">
-                      <LabelChip className="font-mono">{a.cook}</LabelChip>
-                      <span className="min-w-0 flex-1 truncate font-mono" title={a.summary ?? activityLine(a)}>
-                        {activityLine(a)}
-                        {a.count > 1 && <span className="text-muted-foreground"> x{a.count}</span>}
-                      </span>
-                      {a.task && <IdChip id={a.task} className="text-[11px]" />}
-                      <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{fmtAgo(a.at, now)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <SourceList<ActivityView>
+                source={activity}
+                itemKey={activityKey}
+                label="Recent activity"
+                empty={<Quiet>Nothing reported yet.</Quiet>}
+                itemClassName="py-1"
+                renderItem={(a) => (
+                  <div className="flex items-baseline gap-2 text-[12px]">
+                    <LabelChip className="font-mono">{a.cook}</LabelChip>
+                    <span className="min-w-0 flex-1 truncate font-mono" title={a.summary ?? activityLine(a)}>
+                      {activityLine(a)}
+                      {a.count > 1 && <span className="text-muted-foreground"> x{a.count}</span>}
+                    </span>
+                    {a.task && <IdChip id={a.task} className="text-[11px]" />}
+                    <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{fmtAgo(a.at, now)}</span>
+                  </div>
+                )}
+              />
             </div>
           </Group>
 

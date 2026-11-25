@@ -1,5 +1,7 @@
-import type { UsageReport } from "@corntchap/api";
+import type { UsageCook, UsageReport } from "@corntchap/api";
 import { cn } from "@/lib/utils";
+import type { ListSource } from "@/lib/listbox";
+import { SourceList } from "./source-list";
 
 /** Estimated tokens, short: 850, 12k, 1.2M. */
 export function fmtTokens(n: number): string {
@@ -38,7 +40,7 @@ export function DayBars({ days, className }: { days: UsageReport["by_day"]; clas
 /** One labelled line with a proportional bar and the estimate on the right. */
 function BarRow({ label, caption, tokens, max }: { label: string; caption?: string; tokens: number; max: number }) {
   return (
-    <li className="grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)_3.25rem] items-center gap-3 text-[12.5px] sm:grid-cols-[minmax(0,9rem)_minmax(0,1fr)_3.5rem]">
+    <div className="grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)_3.25rem] items-center gap-3 text-[12.5px] sm:grid-cols-[minmax(0,9rem)_minmax(0,1fr)_3.5rem]">
       <span className="min-w-0 truncate" title={caption ? `${label} (${caption})` : label}>
         <span className="font-medium">{label}</span>
         {caption && <span className="ml-1.5 font-mono text-[10.5px] text-muted-foreground">{caption}</span>}
@@ -47,16 +49,22 @@ function BarRow({ label, caption, tokens, max }: { label: string; caption?: stri
         <span className="block h-full rounded-full bg-corn" style={{ width: `${Math.max(3, Math.round((tokens / Math.max(1, max)) * 100))}%` }} />
       </span>
       <span className="text-right font-mono text-[12px] tabular-nums text-muted-foreground">~{fmtTokens(tokens)}</span>
-    </li>
+    </div>
   );
 }
 
-/** Estimated tokens corntchap sent (a pot's or one cook's): the total, a bar per day, then who and what took most. tokens ~ characters / 4. */
-export function UsagePanel({ report, showCooks }: { report: UsageReport | undefined; showCooks?: boolean }) {
+const cookKey = (c: UsageCook) => c.cook;
+
+/**
+ * Estimated tokens corntchap sent (a pot's or one cook's): the total, a bar per day, then who and what took most.
+ * tokens ~ characters / 4. `cooks` (the `usageCookPage` source: the biggest senders first) adds the per-cook bars,
+ * paged as they scroll.
+ */
+export function UsagePanel({ report, cooks }: { report: UsageReport | undefined; cooks?: ListSource<UsageCook> | undefined }) {
   if (!report) return <p className="text-[13px] text-muted-foreground">Counting...</p>;
-  const cooks = showCooks ? report.by_cook.slice(0, 5) : [];
   const top = report.top.slice(0, 3);
-  const cookMax = Math.max(1, ...cooks.map((c) => c.tokens));
+  // the biggest sender comes first, so its bar is the full width
+  const cookMax = Math.max(1, ...(cooks?.items ?? []).map((c) => c.tokens));
   const topMax = Math.max(1, ...top.map((t) => t.tokens));
   return (
     <div className="space-y-4">
@@ -68,14 +76,17 @@ export function UsagePanel({ report, showCooks }: { report: UsageReport | undefi
         <p className="font-mono text-[12px] text-muted-foreground">{report.totals.calls.toLocaleString()} sends</p>
       </div>
       <DayBars days={report.by_day} />
-      {cooks.length > 0 && (
+      {cooks && (cooks.isLoading || cooks.items.length > 0) && (
         <div>
           <p className="label-caps mb-2">By cook</p>
-          <ul className="space-y-2">
-            {cooks.map((c) => (
-              <BarRow key={c.cook} label={c.cook} tokens={c.tokens} max={cookMax} />
-            ))}
-          </ul>
+          <SourceList<UsageCook>
+            source={cooks}
+            itemKey={cookKey}
+            label="Usage by cook"
+            empty="Nobody was sent anything."
+            itemClassName="py-1"
+            renderItem={(c) => <BarRow label={c.cook} tokens={c.tokens} max={cookMax} />}
+          />
         </div>
       )}
       {top.length > 0 && (

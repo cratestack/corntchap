@@ -15,7 +15,7 @@ const own = <T extends object>(f: T) => Object.fromEntries(Object.entries(f).fil
 // One typed hook per `*Page` procedure: the picker's / list's ListSource, rows typed as the generated item.
 
 export const useUsersSource = (f: F<"userPage"> & Q = {}) => useListQuery("userPage", own(f), f);
-export const useTeamsSource = (q = "") => useListQuery("teamPage", {}, { q });
+export const useTeamsSource = (q = "", opts: O = {}) => useListQuery("teamPage", {}, { q, ...opts });
 export const useTeamMembersSource = (team: string, f: Omit<F<"teamMemberPage">, "team"> & Q = {}) =>
   useListQuery("teamMemberPage", { team, ...own(f) }, f);
 export const useCooksSource = (f: F<"cookPage"> & Q = {}) => useListQuery("cookPage", own(f), f);

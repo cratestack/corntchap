@@ -1,33 +1,26 @@
-import { useMemo } from "react";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useProjects, useTeamChefs, type MemberRow } from "@/lib/data";
-import { cn } from "@/lib/utils";
+import type { MemberView } from "@corntchap/api";
+import { VirtualCombobox } from "@/components/ui/virtual-combobox";
+import { useProjects } from "@/lib/data";
+import { useTeamMembersSource } from "@/lib/sources";
+import { useStoreValue } from "@/lib/use-store-value";
 import { Avatar } from "./bits";
 
-const NONE = "-";
+const itemKey = (m: MemberView) => m.name;
+const itemText = (m: MemberView) => (m.display_name ? `${m.display_name} @${m.name}` : m.name);
 
-/** The pot's team chefs for an owner picker: people first, then cooks (each by handle). */
-export function useOwnerChoices(pot: string, enabled = true): { people: MemberRow[]; cooks: MemberRow[]; loading: boolean } {
-  const team = useProjects().data?.find((p) => p.key === pot)?.team;
-  const chefs = useTeamChefs(team, { enabled });
-  return useMemo(() => {
-    const all = chefs.data ?? [];
-    return { people: all.filter((m) => m.kind === "user"), cooks: all.filter((m) => m.kind !== "user"), loading: chefs.isLoading };
-  }, [chefs.data, chefs.isLoading]);
-}
-
-function Who({ m }: { m: MemberRow }) {
+function Who({ m }: { m: MemberView }) {
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex min-w-0 items-center gap-2">
       <Avatar name={m.name} className="size-4 rounded-[5px] text-[9px]" />
-      <span>{m.display_name ? `${m.display_name} · @${m.name}` : m.name}</span>
+      <span className="truncate">{m.display_name ? `${m.display_name} · @${m.name}` : m.name}</span>
+      <span className="shrink-0 text-[12px] text-muted-foreground">{m.kind === "user" ? "person" : "cook"}</span>
     </span>
   );
 }
 
 /**
- * Who owns a task: a picker over the pot's team (people first, then cooks) with "No owner".
- * `value` is a handle or null; `onChange` gets a handle, or "" to clear.
+ * Who owns a task: a searchable picker over the pot's team (paged, searched by the server) with "No owner".
+ * `value` is a handle or null; `onChange` gets a handle, or "" to clear. An owner who left the team is still shown.
  */
 export function OwnerPicker({
   pot,
@@ -45,61 +38,24 @@ export function OwnerPicker({
   pill?: boolean;
   id?: string;
 }) {
-  const { people, cooks } = useOwnerChoices(pot);
-  // an owner who left the team is still shown, so the field never lies about what is stored
-  const known = [...people, ...cooks].some((m) => m.name === value);
+  const team = useProjects().data?.find((p) => p.key === pot)?.team ?? null;
+  const q = useStoreValue("");
+  const source = useTeamMembersSource(team ?? "", { q: q.value, enabled: !!team });
   return (
-    <Select value={value ?? NONE} onValueChange={(v) => v !== (value ?? NONE) && onChange(v === NONE ? "" : v)} disabled={disabled}>
-      <SelectTrigger
-        id={id}
-        aria-label="Owner"
-        size={pill ? "sm" : "default"}
-        className={cn(pill ? "h-8 min-w-0 max-w-52 gap-1.5 rounded-full border-border px-3 text-[12.5px] data-[size=sm]:h-8" : "w-full")}
-      >
-        <SelectValue>
-          <span className="inline-flex min-w-0 items-center gap-1.5">
-            {pill && <span className="text-muted-foreground">Owner</span>}
-            {value ? (
-              <>
-                <Avatar name={value} className="size-4 rounded-[5px] text-[9px]" />
-                <span className="truncate">{value}</span>
-              </>
-            ) : (
-              <span className="text-muted-foreground">{pill ? "none" : "No owner yet"}</span>
-            )}
-          </span>
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={NONE}>No owner</SelectItem>
-        {value && !known && (
-          <SelectItem value={value}>
-            <span className="inline-flex items-center gap-2">
-              <Avatar name={value} className="size-4 rounded-[5px] text-[9px]" /> {value}
-            </span>
-          </SelectItem>
-        )}
-        {people.length > 0 && (
-          <SelectGroup>
-            <SelectLabel>People</SelectLabel>
-            {people.map((m) => (
-              <SelectItem key={m.name} value={m.name}>
-                <Who m={m} />
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        )}
-        {cooks.length > 0 && (
-          <SelectGroup>
-            <SelectLabel>Cooks</SelectLabel>
-            {cooks.map((m) => (
-              <SelectItem key={m.name} value={m.name}>
-                <Who m={m} />
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        )}
-      </SelectContent>
-    </Select>
+    <VirtualCombobox<MemberView>
+      label="Owner"
+      placeholder="No owner yet"
+      source={source}
+      onQuery={q.set}
+      itemKey={itemKey}
+      itemText={itemText}
+      renderItem={(m) => <Who m={m} />}
+      nullOption="No owner"
+      value={value}
+      onChange={(v) => (v ?? "") !== (value ?? "") && onChange(v ?? "")}
+      trigger={pill ? "pill" : "field"}
+      disabled={disabled || !team}
+      id={id}
+    />
   );
 }

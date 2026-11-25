@@ -4,7 +4,6 @@ import { keepPreviousData, useQuery, useQueryClient, useQueries } from "@tanstac
 import type { CorntchapApiClient, FileView, ProjectSummary, TaskView, ViewOut } from "@corntchap/api";
 import { client, v1 } from "./api";
 import { invalidateData, usePagedQuery, useProcInfinite } from "./paging";
-import type { Role } from "./session";
 
 type Procs = CorntchapApiClient["procedures"];
 export type ProcName = keyof Procs;
@@ -225,17 +224,6 @@ export interface AgentRow {
   fireAndForget?: boolean;
 }
 
-export interface UserRow {
-  /** The handle: what others @mention and super-admins type. */
-  name: string;
-  /** How the person is shown (from the identity provider); never used for lookup. */
-  display_name: string | null;
-  role: Role;
-  /** Super-admins only: orchestrators get the directory (handle, name, role) without these. */
-  linked?: boolean;
-  disabled?: boolean;
-}
-
 export interface TeamRow {
   name: string;
   role: string | null;
@@ -250,35 +238,6 @@ export interface MemberRow {
   role: string;
   /** Cloud targets only: takes ready work, opens a pull request and stops. */
   fireAndForget?: boolean;
-}
-
-export interface WakeTargetRow {
-  id: string;
-  type: string;
-  projects: string[];
-  labels: string[];
-  config: Record<string, unknown>;
-}
-
-/** Rows per page of the people list. */
-const USERS_PAGE = 50;
-
-/**
- * People (`/api/v1/users`), a page at a time and narrowed by `q` (handle or display name): super-admins see every
- * sign-in, orchestrators the directory.
- */
-export function useUsers(q: string) {
-  return usePagedQuery(
-    ["users", q],
-    async (limit, cursor) => {
-      const qs = new URLSearchParams({ limit: String(limit) });
-      if (q) qs.set("q", q);
-      if (cursor) qs.set("cursor", cursor);
-      const page = await v1<{ items: UserRow[]; nextCursor?: string | null }>("GET", `/users?${qs}`);
-      return { items: page.items, total: null, nextCursor: page.nextCursor ?? null };
-    },
-    { getCursor: (p) => p.nextCursor, pageSize: USERS_PAGE, itemKey: (u) => u.name },
-  );
 }
 
 export function useAgents() {
