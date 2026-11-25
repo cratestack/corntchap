@@ -727,8 +727,9 @@ pub async fn pass_on(
                 Some(project),
                 Some(sub),
                 "task.created",
-                actor,
-                json!({"title": ftitle, "labels": [], "repos": [dep], "upstream": tref}),
+                actor.or(Some(crate::state::RESTAURANT)),
+                json!({"title": ftitle, "labels": [], "repos": [dep], "upstream": tref, "reason": "upstream",
+                       "why": format!("{tref} {did} in {up}, which {dep} depends on: a follow-up task was opened for it")}),
             )
             .await?;
             told.push(json!({"repo": dep, "mode": "task", "task": format!("{key}-{n}")}));
@@ -795,8 +796,9 @@ pub async fn pass_on(
         Some(project),
         task,
         "task.propagated",
-        actor,
-        json!({"upstream": repos.join(", "), "told": told}),
+        actor.or(Some(crate::state::RESTAURANT)),
+        json!({"upstream": repos.join(", "), "told": told, "reason": "propagate",
+               "why": format!("{tref} {did} in {}: what depends on it was told", repos.join(", "))}),
     )
     .await?;
     Ok(Value::Array(told))

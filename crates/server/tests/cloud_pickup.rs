@@ -141,6 +141,18 @@ impl World {
         assert_eq!(code, 200, "{r}");
     }
 
+    /// What the restaurant decided, in order: (decision, reason).
+    async fn decisions(&self) -> Vec<(String, String)> {
+        sqlx::query_as(
+            "select e.payload->>'decision', e.payload->>'reason' from events e
+               join principals a on a.id = e.actor_id and a.kind = 'restaurant'
+              where e.kind = 'restaurant.decided' order by e.seq",
+        )
+        .fetch_all(&self.app.state.db)
+        .await
+        .unwrap()
+    }
+
     async fn claim(&self) -> Value {
         let r = self
             .app
@@ -259,6 +271,23 @@ async fn a_429_waits_for_retry_after() {
     let first = wait_hits(&fake, 1, 10).await[0].0;
     tokio::time::sleep(Duration::from_millis(2300)).await;
     assert_eq!(hits(&fake).len(), 1, "delivered before Retry-After");
+    // the wait is the restaurant's decision: told once, with the time it ends
+    let held: Vec<(String, String)> = w.decisions().await;
+    assert_eq!(
+        held,
+        [("wake.held".to_string(), "retry_after".to_string())],
+        "{held:?}"
+    );
+    let (until, text): (String, String) = sqlx::query_as(
+        "select payload->>'until', payload->>'text' from events where kind = 'restaurant.decided'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert!(
+        until.starts_with("20") && text.contains("429"),
+        "{until} {text}"
+    );
     let h = wait_hits(&fake, 2, 10).await;
     assert!(
         h[1].0.duration_since(first) >= Duration::from_secs(3),
@@ -287,6 +316,58 @@ async fn a_cook_that_never_claims_is_woken_three_times() {
     wait_hits(&fake, 3, 15).await;
     tokio::time::sleep(Duration::from_secs(6)).await;
     assert_eq!(hits(&fake).len(), 3, "{:?}", hits(&fake));
+    // the cap is the restaurant's decision, told once, with the count
+    let capped: Vec<(String, String)> = w
+        .decisions()
+        .await
+        .into_iter()
+        .filter(|d| d.0 == "wake.capped")
+        .collect();
+    assert_eq!(capped, [("wake.capped".to_string(), "sweep".to_string())]);
+    let (misses, text, actor): (i32, String, String) = sqlx::query_as(
+        "select (e.payload->>'misses')::int, e.payload->>'text', a.name from events e join principals a on a.id = e.actor_id
+          where e.kind = 'restaurant.decided' and e.payload->>'decision' = 'wake.capped'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!((misses, actor.as_str()), (3, "restaurant"));
+    assert!(
+        text.contains("chef") && text.contains("3 times in a row"),
+        "{text}"
+    );
+    // more sweeps with nothing new to decide write nothing at all
+    let events: i64 = sqlx::query_scalar("select count(*) from events")
+        .fetch_one(&w.app.state.db)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let after: i64 = sqlx::query_scalar("select count(*) from events")
+        .fetch_one(&w.app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(after, events, "an idle sweep tick writes no event");
+    // what_now tells the cook the restaurant stopped waking it
+    let now = w
+        .app
+        .mcp(&w.cook, "what_now", json!({"project": "PAY"}))
+        .await;
+    let now = common::TestApp::payload(&now);
+    assert!(
+        now["restaurant"]
+            .as_str()
+            .unwrap_or("")
+            .contains("3 times in a row"),
+        "{now}"
+    );
+    // a claim ends it
+    w.claim().await;
+    let now = common::TestApp::payload(
+        &w.app
+            .mcp(&w.cook, "what_now", json!({"project": "PAY"}))
+            .await,
+    );
+    assert!(now["restaurant"].is_null(), "{now}");
 }
 
 #[tokio::test]
@@ -377,4 +458,46 @@ async fn a_failing_target_gets_at_most_three_work_deliveries() {
     wait_hits(&fake, 3, 20).await;
     tokio::time::sleep(Duration::from_secs(6)).await;
     assert_eq!(hits(&fake).len(), 3, "{:?}", hits(&fake));
+}
+
+#[tokio::test]
+async fn a_wake_held_back_by_the_backoff_is_said_once() {
+    let (url, fake) = fake_endpoint(&[]).await;
+    let w = world_with(Duration::from_secs(30)).await;
+    w.target(&url, &[]).await;
+    w.task("One", &[]).await;
+    wait_hits(&fake, 1, 10).await;
+    // more ready work while the cook was just woken: the next wake waits, and the restaurant says so
+    w.task("Two", &[]).await;
+    for _ in 0..50 {
+        if !w.decisions().await.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        w.decisions().await,
+        [("wake.held".to_string(), "backoff".to_string())]
+    );
+    let (misses, until, text): (i32, String, String) = sqlx::query_as(
+        "select (payload->>'misses')::int, payload->>'until', payload->>'text' from events where kind = 'restaurant.decided'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(misses, 1);
+    assert!(
+        until.starts_with("20") && text.contains("chef"),
+        "{until} {text}"
+    );
+    // the same decision again (more work, more sweeps) writes nothing
+    w.task("Three", &[]).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(w.decisions().await.len(), 1, "{:?}", w.decisions().await);
+    assert_eq!(hits(&fake).len(), 1, "no second wake inside the window");
+    // restaurant.decided never wakes anybody: it is not a dispatcher trigger
+    assert!(
+        !corntchap::jobs::wake_triggers().contains(&"restaurant.decided"),
+        "a decision must not trigger a wake"
+    );
 }

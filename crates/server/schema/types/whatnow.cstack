@@ -52,6 +52,7 @@ type NowQuestion {
 type NowComment {
   task String
   author String?
+  author_kind String?
   excerpt String
   at String
 }
@@ -119,6 +120,8 @@ type WhatNowView {
   folder_free NowFolderFree
   /// The pot's guide, how we work here (markdown), whole.
   guide String?
+  /// The restaurant (the server itself) decided to hold you back (no more wakes, a task skipped for you): its sentence, until you claim something.
+  restaurant String?
   /// ONE sentence: what to do now.
   next String
 }

@@ -48,7 +48,15 @@ pub fn norm_handle_syntax(s: &str) -> Result<String> {
 
 /// Names the pass gives a meaning to (`@all` reaches everyone) or that read as an address to a
 /// crowd; no person's handle may be one of them.
-pub const RESERVED_HANDLES: &[&str] = &["all", "everyone", "here", "channel", "me", "system"];
+pub const RESERVED_HANDLES: &[&str] = &[
+    "all",
+    "everyone",
+    "here",
+    "channel",
+    "me",
+    "system",
+    "restaurant",
+];
 
 /// A person's handle: valid syntax and not reserved. Letters are lowercased.
 pub fn norm_handle(s: &str) -> Result<String> {
@@ -1047,7 +1055,7 @@ pub async fn list_principals_q(
 
 async fn managed(c: &mut PgConnection, p: &Principal, name: &str) -> Result<(Uuid, String)> {
     let row: Option<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
-        "select id, kind, owner_id from principals where name = $1 and kind <> 'user'",
+        "select id, kind, owner_id from principals where name = $1 and kind in ('agent', 'relay')",
     )
     .bind(name.to_lowercase())
     .fetch_optional(c)

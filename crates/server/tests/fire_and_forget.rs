@@ -462,3 +462,246 @@ async fn the_migration_strips_on_call() {
         .unwrap();
     assert_eq!(c, json!({"url": "http://x"}));
 }
+
+async fn id_of(app: &common::TestApp, name: &str) -> uuid::Uuid {
+    sqlx::query_scalar("select id from principals where name = $1")
+        .bind(name)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap()
+}
+
+async fn wake(
+    conn: &mut sqlx::PgConnection,
+    project: uuid::Uuid,
+    cook: uuid::Uuid,
+    from: Option<uuid::Uuid>,
+    reason: &str,
+) -> Value {
+    corntchap::questions::wake_from(conn, project, "PAY", cook, None, None, "look", reason, from)
+        .await
+        .unwrap()
+}
+
+/// The restaurant's `wake.withheld` events for one reason: (actor, text, repeated).
+async fn withheld(app: &common::TestApp, reason: &str) -> Vec<(String, String, Option<i32>)> {
+    sqlx::query_as(
+        "select a.name, e.payload->>'text', (e.payload->>'repeated')::int
+         from events e join principals a on a.id = e.actor_id
+         where e.kind = 'restaurant.decided' and e.payload->>'decision' = 'wake.withheld' and e.payload->>'reason' = $1
+         order by e.seq",
+    )
+    .bind(reason)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_wake_the_server_withholds_is_a_decision_it_says_once_in_a_while() {
+    let w = world().await;
+    let (rita, alice) = (id_of(&w.app, "rita").await, id_of(&w.app, "alice").await);
+    let project: uuid::Uuid = sqlx::query_scalar("select id from projects where key = 'PAY'")
+        .fetch_one(&w.app.state.db)
+        .await
+        .unwrap();
+    let mut conn = w.app.state.db.acquire().await.unwrap();
+    // a forge wake for a fire-and-forget cook: nothing is sent, and the restaurant says why
+    let r = wake(&mut conn, project, rita, None, "forge").await;
+    assert_eq!(r["woken"], false, "{r}");
+    let rows = withheld(&w.app, "fire_and_forget").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "restaurant");
+    assert!(
+        rows[0].1.contains("rita") && rows[0].1.contains("fire-and-forget"),
+        "{rows:?}"
+    );
+    assert_eq!(wakes_for(&w.app, "rita").await, 0);
+    // the same again within the window: only counted
+    wake(&mut conn, project, rita, None, "forge").await;
+    wake(&mut conn, project, rita, None, "forge").await;
+    assert_eq!(withheld(&w.app, "fire_and_forget").await.len(), 1);
+    let suppressed: i32 = sqlx::query_scalar(
+        "select suppressed from restaurant_quiet where key like 'wake.withheld:fire_and_forget:%'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(suppressed, 2);
+    // after the window the next one carries the count
+    sqlx::query("update restaurant_quiet set last_at = now() - interval '31 minutes'")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    wake(&mut conn, project, rita, None, "forge").await;
+    let rows = withheld(&w.app, "fire_and_forget").await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].2, Some(2), "{rows:?}");
+
+    // its owner's message to a cook no cloud target serves in this pot
+    cloud_cook(&w, "tess", "{OTHER}").await;
+    let tess = id_of(&w.app, "tess").await;
+    let r = wake(&mut conn, project, tess, Some(alice), "pass").await;
+    assert_eq!(r["uncovered"], true, "{r}");
+    let rows = withheld(&w.app, "uncovered").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        rows[0].1.contains("tess") && rows[0].1.contains("PAY"),
+        "{rows:?}"
+    );
+    // the cook is told by what_now: its latest decision holds it back
+    let now = ok(
+        &w.app
+            .mcp(&w.rita, "what_now", json!({"project": "PAY"}))
+            .await,
+        "what_now",
+    );
+    assert!(
+        now["restaurant"]
+            .as_str()
+            .unwrap_or("")
+            .contains("fire-and-forget"),
+        "{now}"
+    );
+}
+
+#[tokio::test]
+async fn decisions_show_in_the_feed_and_are_kept_a_month_and_never_rolled_up() {
+    let w = world().await;
+    let rita = id_of(&w.app, "rita").await;
+    let project: uuid::Uuid = sqlx::query_scalar("select id from projects where key = 'PAY'")
+        .fetch_one(&w.app.state.db)
+        .await
+        .unwrap();
+    let mut conn = w.app.state.db.acquire().await.unwrap();
+    wake(&mut conn, project, rita, None, "forge").await;
+    drop(conn);
+    // changes_since lists it, with the restaurant as its actor and kind
+    let feed = ok(
+        &w.app
+            .mcp(
+                &w.alice,
+                "changes_since",
+                json!({"cursor": 0, "project": "PAY"}),
+            )
+            .await,
+        "changes_since",
+    );
+    let e = feed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "restaurant.decided")
+        .unwrap_or_else(|| panic!("{feed}"));
+    assert_eq!(
+        (e["actor"].as_str(), e["actor_kind"].as_str()),
+        (Some("restaurant"), Some("restaurant"))
+    );
+    assert_eq!(e["payload"]["decision"], "wake.withheld", "{e}");
+    // the digest and the catch-up count work, not decisions
+    let (code, digest) = w.app.get(&w.alice, "/projects/PAY/digest?since=0").await;
+    assert_eq!(code, 200, "{digest}");
+    assert!(digest["counts"]["restaurant.decided"].is_null(), "{digest}");
+    // a month on, it goes; other events are kept to 90 days and are rolled into daily counts, this one is not
+    sqlx::query(
+        "update events set at = now() - interval '31 days' where kind = 'restaurant.decided'",
+    )
+    .execute(&w.app.state.db)
+    .await
+    .unwrap();
+    sqlx::query("update restaurant_quiet set last_at = now() - interval '3 days'")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    corntchap::jobs::retain(&w.app.state).await.unwrap();
+    let left: i64 =
+        sqlx::query_scalar("select count(*) from events where kind = 'restaurant.decided'")
+            .fetch_one(&w.app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(left, 0);
+    let rolled: i64 = sqlx::query_scalar(
+        "select count(*) from event_daily_counts where kind = 'restaurant.decided'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(rolled, 0);
+    let quiet: i64 = sqlx::query_scalar("select count(*) from restaurant_quiet")
+        .fetch_one(&w.app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(quiet, 0, "the quiet rows are pruned");
+    common::assert_no_anonymous_events(&w.app.state.db).await;
+}
+
+#[tokio::test]
+async fn the_cook_page_reads_what_the_restaurant_did_about_it_a_page_at_a_time() {
+    let w = world().await;
+    let rita = id_of(&w.app, "rita").await;
+    let project: uuid::Uuid = sqlx::query_scalar("select id from projects where key = 'PAY'")
+        .fetch_one(&w.app.state.db)
+        .await
+        .unwrap();
+    // five decisions about rita (the quiet window is 0 for the test: each says something), one about bob
+    let mut conn = w.app.state.db.acquire().await.unwrap();
+    for i in 0..5 {
+        sqlx::query("delete from restaurant_quiet")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        wake(&mut conn, project, rita, None, &format!("forge{i}")).await;
+    }
+    drop(conn);
+    let proc = |args: Value| {
+        let (app, tok) = (&w.app, w.alice.clone());
+        async move {
+            let r = app
+                .http
+                .post(format!("{}/api/v2/$procs/cookDecisions", app.base))
+                .bearer_auth(tok)
+                .json(&args)
+                .send()
+                .await
+                .unwrap();
+            let st = r.status().as_u16();
+            (st, r.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let (st, first) = proc(json!({"agent": "rita", "page": {"limit": 2}})).await;
+    assert_eq!(st, 200, "{first}");
+    let items = first["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{first}");
+    assert!(
+        items
+            .iter()
+            .all(|e| e["actor"] == "restaurant" && e["actor_kind"] == "restaurant"),
+        "{first}"
+    );
+    assert!(
+        items[0]["seq"].as_i64() > items[1]["seq"].as_i64(),
+        "newest first"
+    );
+    // the rest, by cursor
+    let mut seen = items.len();
+    let mut cursor = first["nextCursor"].as_str().map(String::from);
+    while let Some(c) = cursor {
+        let (st, v) = proc(json!({"agent": "rita", "page": {"limit": 2, "cursor": c}})).await;
+        assert_eq!(st, 200, "{v}");
+        seen += v["items"].as_array().unwrap().len();
+        cursor = v["nextCursor"].as_str().map(String::from);
+    }
+    assert_eq!(seen, 5);
+    // another cook has none, and an unknown one is refused
+    let (st, none) = proc(json!({"agent": "bob", "page": {}})).await;
+    assert_eq!(
+        (st, none["items"].as_array().map(|a| a.len())),
+        (200, Some(0)),
+        "{none}"
+    );
+    let (st, _) = proc(json!({"agent": "nobody", "page": {}})).await;
+    assert_eq!(st, 404);
+    // a forged cursor is a 400, not a 500
+    let (st, _) = proc(json!({"agent": "rita", "page": {"cursor": "garbage"}})).await;
+    assert_eq!(st, 400);
+}

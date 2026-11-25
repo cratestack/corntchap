@@ -30,7 +30,7 @@ import { useSession } from "@/lib/session";
 import { useLive } from "@/lib/live";
 import { useIsPhone } from "@/lib/media";
 import { useOpenTask } from "@/lib/nav";
-import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip, SectionLabel } from "./bits";
+import { ActorAvatar, Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip, SectionLabel } from "./bits";
 import { RepoPicker } from "./repos";
 import { OwnerPicker } from "./owner-picker";
 import { TaskPrs } from "./forge-prs";
@@ -385,7 +385,7 @@ function TaskDetailBody({ id }: { id: string }) {
                   {t.comments_total === 0 && <li className="text-muted-foreground">No comments yet. Leave a note for the next cook.</li>}
                   {t.comments.map((c, i) => (
                     <li key={i} className="flex gap-3">
-                      <Avatar name={c.author ?? "?"} className="mt-0.5 size-7 text-[12px]" />
+                      <ActorAvatar name={c.author ?? "?"} kind={c.author_kind} className="mt-0.5 size-7 text-[12px]" />
                       <div className="min-w-0 flex-1 rounded-xl border border-border bg-muted/40 px-3.5 py-2.5">
                         <p className="text-[12px]">
                           <span className="font-semibold">{c.author ?? "someone"}</span>{" "}

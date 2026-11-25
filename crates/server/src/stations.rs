@@ -794,13 +794,35 @@ pub async fn end_stale_runs(db: &PgPool) -> Result<u64> {
            and greatest(st.created_at, coalesce(st.last_woken_at, st.created_at),
                  coalesce((select max(cm.created_at) from comments cm where cm.station_id = st.id), st.created_at),
                  coalesce((select max(pm.created_at) from pass_messages pm where pm.station_id = st.id), st.created_at))
-               < now() - make_interval(secs => {})",
+               < now() - make_interval(secs => {})
+         returning st.ref, st.agent_id, st.project_id, (select name from principals where id = st.agent_id)",
         crate::service::stall_secs()
     );
-    Ok(sqlx::query(sqlx::AssertSqlSafe(sql))
-        .execute(db)
-        .await?
-        .rows_affected())
+    let mut tx = db.begin().await?;
+    let ended: Vec<(String, Uuid, Uuid, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .fetch_all(&mut *tx)
+        .await?;
+    // the restaurant ended them: say so, with the cook and the run
+    for (reference, agent, project, name) in &ended {
+        crate::restaurant::decide(
+            &mut tx,
+            crate::restaurant::Decision::new(
+                Some(*project),
+                "run.ended",
+                "stale",
+                format!(
+                    "{name}'s cloud run {reference} was ended: it held nothing and said nothing for {}.",
+                    crate::service::hours_text(crate::service::stall_secs())
+                ),
+            )
+            .cook(name, *agent)
+            .at(Some(reference.clone()))
+            .keyed(reference.clone()),
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(ended.len() as u64)
 }
 
 /// The repository a confined station is tied to: `claim_next` from it hands out only tasks about

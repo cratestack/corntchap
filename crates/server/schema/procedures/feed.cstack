@@ -17,3 +17,9 @@ procedure changesSince(cursor: Int, project: String?, limit: Int?, before: Int?)
 procedure waitForWork(project: String?, timeoutS: Int?): WaitResult
   @allow(auth() != null)
   @mcp(tool: "wait_for_work", description: "Long-poll (up to 55 s) until a task is ready for you; returns the ready tasks or an empty list. Does not claim.")
+
+/// A page of what the restaurant (the server itself) did about one cook, newest first: its decisions, wakes and lapsed leases. For the cook's page in the console (not an MCP tool).
+/// @param agent The cook's name.
+/// @param page limit (default 20, at most 200) and cursor.
+procedure cookDecisions(agent: String, page: CursorPageInput): CursorPage<ChangeView>
+  @allow(auth() != null)

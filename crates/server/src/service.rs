@@ -283,6 +283,8 @@ pub async fn emit_to(
     payload: Value,
     audience: Option<&[Uuid]>,
 ) -> Result<i64> {
+    // What the server does itself is the restaurant's; only a forge event may have no actor (GitHub did it).
+    let actor = actor.or_else(|| (!kind.starts_with("forge.")).then_some(crate::state::RESTAURANT));
     let seq: i64 = sqlx::query_scalar(
         "insert into events (project_id, task_id, kind, actor_id, payload, audience) values ($1,$2,$3,$4,$5,$6) returning seq",
     )
@@ -372,6 +374,7 @@ pub(crate) async fn task_full_n(
     // the newest N when asked (oldest first either way); `created_at, id` keeps the cut stable
     let comments: Value = sqlx::query_scalar(
         "select coalesce(jsonb_agg(jsonb_build_object('author', (select name from principals where id = cm.author_id),
+            'author_kind', (select kind from principals where id = cm.author_id),
             'body', cm.body, 'at', cm.created_at,
             'station', (select s.ref from stations s where s.id = cm.station_id),
             'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = cm.station_id),
@@ -1029,6 +1032,21 @@ async fn catch_up_gate(
         .and_then(|t| t["id"].as_str())
         .map(|t| format!(" You still hold {t}: finish it first."))
         .unwrap_or_default();
+    crate::restaurant::decide(
+        c,
+        crate::restaurant::Decision::new(
+            Some(project),
+            "catch_up",
+            "away",
+            format!(
+                "{} was away {away}: its first claim in {key} returned a briefing instead of a lease.",
+                p.name
+            ),
+        )
+        .cook(&p.name, p.id)
+        .keyed(cu["away_since"].to_string()),
+    )
+    .await?;
     Ok(Some(json!({
         "catch_up": cu,
         "next": format!(
@@ -1955,7 +1973,9 @@ async fn end_lease(
     // its PR merged while it was held: nobody is left to serve it
     if new_status == "open" {
         crate::forge::events::complete_if_merged(&mut tx, t.id, None).await?;
-        block_if_bounced(&mut tx, t.id, t.project_id).await?;
+        if !block_if_bounced(&mut tx, t.id, t.project_id).await? {
+            tell_skipping(&mut tx, p, &t).await?;
+        }
     }
     let out = task_json(&mut tx, t.id).await?;
     tx.commit().await?;
@@ -1982,6 +2002,40 @@ pub async fn block(
     learned: Option<&str>,
 ) -> Result<Value> {
     end_lease(db, p, r, epoch, "blocked", "task.blocked", reason, learned).await
+}
+
+/// The give-back that makes `claim_next` skip the task for this cook (the [`BOUNCE_LIMIT`]th, with nobody
+/// touching it in between) is a decision of the restaurant: say so, once, where it is taken (not on reads).
+async fn tell_skipping(c: &mut PgConnection, p: &Principal, t: &TaskRef) -> Result<()> {
+    let crossed: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {} and not {} from tasks t where t.id = $1",
+        bounce_sql("$2", BOUNCE_LIMIT),
+        bounce_sql("$2", BOUNCE_LIMIT + 1),
+    )))
+    .bind(t.id)
+    .bind(p.id)
+    .fetch_one(&mut *c)
+    .await?;
+    if !crossed {
+        return Ok(());
+    }
+    let tref = format!("{}-{}", t.key, t.number);
+    crate::restaurant::decide(
+        c,
+        crate::restaurant::Decision::new(
+            Some(t.project_id),
+            "claim.skipping",
+            "bounce",
+            format!(
+                "{} gave {tref} back {BOUNCE_LIMIT} times with nobody touching it: claim_next skips it for {} until someone comments, edits it or answers.",
+                p.name, p.name
+            ),
+        )
+        .cook(&p.name, p.id)
+        .on(Some((t.id, tref))),
+    )
+    .await?;
+    Ok(())
 }
 
 /// A task given back this many times by any cooks, with no person touching it in between, is not
@@ -2031,7 +2085,7 @@ pub async fn block_if_bounced(c: &mut PgConnection, task: Uuid, project: Uuid) -
         c,
         task,
         &format!(
-            "[blocked by the server] {reason}: cooks gave this task back {n} times and nobody \
+            "{reason}: cooks gave this task back {n} times and nobody \
              touched it in between.{who} Look at why (the comments above), then unblock it with a clearer task."
         ),
     )
@@ -2064,18 +2118,20 @@ pub async fn block_if_bounced(c: &mut PgConnection, task: Uuid, project: Uuid) -
         Some(project),
         Some(task),
         "task.blocked",
-        None,
-        json!({"reason": reason, "bounced": true}),
+        Some(crate::state::RESTAURANT),
+        json!({"reason": reason, "bounced": true,
+               "why": format!("{n} give-backs by cooks with nobody touching the task in between: it is work a cook cannot do, so a person must look")}),
     )
     .await?;
     Ok(true)
 }
 
-/// A note on a task written by the server itself (no author).
+/// A note on a task written by the server itself: its author is the restaurant.
 pub async fn system_comment(c: &mut PgConnection, task: Uuid, body: &str) -> Result<()> {
-    sqlx::query("insert into comments (task_id, author_id, body) values ($1, null, $2)")
+    sqlx::query("insert into comments (task_id, author_id, body) values ($1, $3, $2)")
         .bind(task)
         .bind(body)
+        .bind(crate::state::RESTAURANT)
         .execute(c)
         .await?;
     Ok(())
@@ -2242,7 +2298,7 @@ pub async fn changes_feed_before(
     };
     let filter = |pid: &str, admin: &str, me: &str| {
         format!(
-            "e.kind not like 'wake%' and e.kind <> 'activity' and ({pid}::uuid is null or e.project_id = {pid})
+            "(e.kind not like 'wake%' or e.kind = 'wake.failed') and e.kind <> 'activity' and ({pid}::uuid is null or e.project_id = {pid})
                and (e.audience is null or {me} = any(e.audience)) and {}",
             access_sql(admin, me)
         )
@@ -2250,7 +2306,8 @@ pub async fn changes_feed_before(
     let sql = format!(
         "select e.seq, jsonb_build_object('seq', e.seq, 'kind', e.kind, 'project', pr.key,
             'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
-            'actor', coalesce((select name from principals where id = e.actor_id), e.payload->>'actor_name'), 'at', e.at, 'payload', e.payload)
+            'actor', coalesce((select name from principals where id = e.actor_id), e.payload->>'actor_name'),
+            'actor_kind', (select kind from principals where id = e.actor_id), 'at', e.at, 'payload', e.payload)
          from events e join projects pr on pr.id = e.project_id
          where e.seq > $1 and ($6::bigint is null or e.seq < $6) and {}
          order by case when $6::bigint is null then e.seq else -e.seq end limit $3",
@@ -2465,7 +2522,7 @@ pub async fn digest(db: &PgPool, p: &Principal, key: &str, since: i64) -> Result
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, key).await?;
     let counts: Vec<(String, i64)> = sqlx::query_as(
-        "select kind, count(*) from events where project_id = $1 and seq > $2 and kind not like 'wake%' and kind <> 'activity' and audience is null group by kind order by kind",
+        "select kind, count(*) from events where project_id = $1 and seq > $2 and kind not like 'wake%' and kind not in ('activity', 'restaurant.decided') and audience is null group by kind order by kind",
     )
     .bind(pr.id)
     .bind(since)

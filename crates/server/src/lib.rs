@@ -24,6 +24,7 @@ pub mod procs;
 pub mod questions;
 pub mod repos;
 pub mod rest;
+pub mod restaurant;
 pub mod reviews;
 pub mod roles;
 pub mod service;

@@ -24,6 +24,7 @@ import { useProcInfinite } from "@/lib/paging";
 import { CloudRunList, StationList } from "@/components/stations";
 import { CookRepoScopes } from "@/components/repos";
 import { UsagePanel } from "@/components/usage";
+import { RestaurantLog } from "@/components/restaurant-log";
 import { TaskRow } from "@/components/task-views";
 import { McpDialog, TokenDialog } from "@/components/secret-dialog";
 import { ConfirmDialog, DeleteDialog, RenameDialog } from "@/components/rename-delete";
@@ -626,6 +627,8 @@ export function CookDetailsPage() {
             )}
 
             <WakeGroup agent={cook.name} runtime={cook.runtime} />
+
+            <RestaurantLog cook={cook.name} />
 
             <Group title="Usage" hint="Estimated tokens corntchap sent this cook.">
               <div className="p-3.5">

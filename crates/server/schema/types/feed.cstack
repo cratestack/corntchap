@@ -26,7 +26,7 @@ type ChangePayload {
   relayed_by String?
   /// question.asked: who it is addressed to.
   to String?
-  /// pass.posted: the cook that posted it in its owner's name.
+  /// pass.posted: the cook that posted it in its owner's name; forge.linked: branch, title or body.
   via String?
   /// file.* events: the file id, e.g. PAY-F12.
   file String?
@@ -69,6 +69,27 @@ type ChangePayload {
   /// task.owner_changed: the owner before and after (handles; absent: nobody).
   old_owner String?
   new_owner String?
+  /// restaurant events (the server's own decisions): the sentence the server built. task.lease_expired,
+  /// task.blocked, task.completed, forge.linked and forge.backfill carry `why` and a `reason` code.
+  why String?
+  /// restaurant.decided: wake.held, wake.capped, wake.withheld, claim.skipping, catch_up, merge.kept_open, run.ended or role.kept.
+  decision String?
+  /// restaurant.decided: the sentence.
+  text String?
+  /// restaurant.decided and wakes: the cook's id, and its station when there is one.
+  agent_id String?
+  station String?
+  /// restaurant.decided: the task it is about (e.g. PAY-3).
+  task String?
+  /// restaurant.decided wake.held: no wake before this time.
+  until String?
+  /// restaurant.decided: wakes in a row without a claim.
+  misses Int?
+  /// wake.failed: why the delivery failed; wake.delivered and wake.failed: the kind of target.
+  error String?
+  type String?
+  /// restaurant.decided: how many times the same decision was left unsaid since the last one.
+  repeated Int?
 }
 
 type ChangeView {
@@ -76,7 +97,10 @@ type ChangeView {
   kind String
   project String
   task String?
+  /// A person, a cook, a fire or `restaurant` (the server itself: its events are decisions with a reason).
   actor String?
+  /// user, agent, relay or restaurant; absent for forge events (GitHub did it).
+  actor_kind String?
   at String
   payload ChangePayload
 }

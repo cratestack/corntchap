@@ -151,8 +151,11 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
            returning t.id, t.project_id, old.claimed_by as was, t.lease_epoch, t.station_id, old.why),
          logged as (
            insert into events (project_id, task_id, kind, actor_id, payload)
-           select project_id, id, 'task.lease_expired', null,
-                  jsonb_build_object('epoch', lease_epoch, 'agent', (select name from principals where id = expired.was),
+           select project_id, id, 'task.lease_expired', '{restaurant}'::uuid,
+                  jsonb_build_object('epoch', lease_epoch,
+                                     'why', case why when 'max_hold' then 'the lease ended: the task was held for more than {max_text}'
+                                                     when 'stalled' then 'the lease ended: no progress for {stall_text}'
+                                                     else 'the lease ended: it ran out without a heartbeat' end, 'agent', (select name from principals where id = expired.was),
                                      'agent_id', expired.was, 'reason', why,
                                      'on_pr', (select not ({np}) from tasks t where t.id = expired.id),
                                      'station', (select s.ref from stations s where s.id = expired.station_id))
@@ -161,6 +164,9 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
         stall = crate::service::stall_secs(),
         max = crate::service::max_hold_secs(),
         np = crate::service::NO_OPEN_PR_SQL,
+        restaurant = crate::state::RESTAURANT,
+        max_text = crate::service::hours_text(crate::service::max_hold_secs()),
+        stall_text = crate::service::hours_text(crate::service::stall_secs()),
     );
     let reaped: Vec<(Uuid, Uuid, Option<Uuid>, String, Option<Uuid>)> =
         sqlx::query_as(sqlx::AssertSqlSafe(sql))
@@ -231,9 +237,7 @@ async fn settle_reaped(
         crate::service::system_comment(
             c,
             task,
-            &format!(
-                "[released by the server] {limit}; holder {holder_name}. The task is open again."
-            ),
+            &format!("Lease ended: {limit}; holder {holder_name}. The task is open again."),
         )
         .await?;
         if let Some(agent) = was {
@@ -330,12 +334,19 @@ pub async fn nudge_unanswered(state: &AppState) -> Result<u64, crate::error::Err
     Ok(n)
 }
 
-/// Keep 90 days of events (activity: 14), rolling older ones into per-day counts, and a week of the pass.
+/// Keep 90 days of events (activity: 14, restaurant decisions: 30), rolling older ones into per-day counts, and a week of the pass.
 pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
     // Agent activity is monitoring chatter: kept two weeks, never rolled into the daily counts.
     sqlx::query("delete from events where kind = 'activity' and at < now() - interval '14 days'")
         .execute(&state.db)
         .await?;
+    // The restaurant's decisions are monitoring too: a month, and never rolled into the daily counts.
+    sqlx::query(
+        "delete from events where kind = 'restaurant.decided' and at < now() - interval '30 days'",
+    )
+    .execute(&state.db)
+    .await?;
+    crate::restaurant::prune(&state.db).await?;
     sqlx::query(
         "with old as (delete from events where at < now() - interval '90 days' and project_id is not null returning project_id, kind, at::date as day),
               agg as (select day, project_id, kind, count(*) as n from old group by 1,2,3)
@@ -398,6 +409,25 @@ struct Dispatcher {
     misses: HashMap<(Uuid, bool), u32>,
     /// Where the spawned cloud deliveries report a failed work wake.
     failed: tokio::sync::mpsc::UnboundedSender<WakeFailure>,
+    /// What the restaurant last decided about a cook in a pot (decision, reason): a decision is
+    /// recorded only when it changes, and a wake or a claim clears it. An idle sweep tick that decides
+    /// the same thing again writes nothing.
+    held: HashMap<(Uuid, Uuid), (&'static str, &'static str)>,
+}
+
+/// What looks at a pot's cooks: an event, the periodic sweep, or the retry of a failed delivery.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Via {
+    Event,
+    Sweep,
+    Retry,
+}
+
+/// A moment (on the dispatcher's clock) as a date.
+fn wall(at: Instant) -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+        + chrono::Duration::from_std(at.saturating_duration_since(Instant::now()))
+            .unwrap_or_default()
 }
 
 /// The wait before waking a cook again for the same work: the coalescing window, doubled for each
@@ -431,6 +461,11 @@ const TRIGGERS: &[&str] = &[
     "forge.pr",
 ];
 
+/// The event kinds that make the dispatcher look at a pot again. The restaurant's own decisions are never among them.
+pub fn wake_triggers() -> &'static [&'static str] {
+    TRIGGERS
+}
+
 impl Dispatcher {
     fn new(state: AppState) -> (Self, tokio::sync::mpsc::UnboundedReceiver<WakeFailure>) {
         let (failed, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -444,6 +479,7 @@ impl Dispatcher {
                 cloud_wait: HashMap::new(),
                 misses: HashMap::new(),
                 failed,
+                held: HashMap::new(),
             },
             rx,
         )
@@ -536,13 +572,50 @@ impl Dispatcher {
         {
             self.misses.remove(&(*actor, true));
             self.misses.remove(&(*actor, false));
+            self.held.retain(|(agent, _), _| agent != actor);
         }
         if let Ok(Some((kind, Some(project), actor, _))) = row
             && TRIGGERS.contains(&kind.as_str())
         {
             // The cook whose own action this was is in the middle of a turn and goes back to
             // claim_next by itself: waking it too would queue a duplicate, stale prompt.
-            self.consider_for(project, actor, false).await;
+            self.consider_for(project, actor, Via::Event).await;
+        }
+    }
+
+    /// The restaurant decided not to wake a cook (or to stop): record it as a `restaurant.decided`
+    /// event when it differs from what it last decided about this cook in this pot.
+    #[allow(clippy::too_many_arguments)]
+    async fn hold(
+        &mut self,
+        project: Uuid,
+        agent: Uuid,
+        name: &str,
+        decision: &'static str,
+        reason: &'static str,
+        text: String,
+        until: Option<Instant>,
+        misses: Option<u32>,
+    ) {
+        if self.held.get(&(agent, project)) == Some(&(decision, reason)) {
+            return;
+        }
+        self.held.insert((agent, project), (decision, reason));
+        let mut d = crate::restaurant::Decision::new(Some(project), decision, reason, text)
+            .cook(name, agent)
+            .until(until.map(wall));
+        if let Some(m) = misses {
+            d = d.misses(m);
+        }
+        let done = async {
+            let mut tx = self.state.db.begin().await?;
+            crate::restaurant::decide(&mut tx, d).await?;
+            tx.commit().await?;
+            Ok::<(), crate::error::Error>(())
+        }
+        .await;
+        if let Err(e) = done {
+            tracing::warn!("recording a decision about {name}: {e}");
         }
     }
 
@@ -590,7 +663,7 @@ impl Dispatcher {
     }
 
     async fn consider(&mut self, project: Uuid) {
-        self.consider_for(project, None, false).await;
+        self.consider_for(project, None, Via::Event).await;
     }
 
     /// Every project with a ready task is checked for cloud cooks that were not woken for it (no
@@ -605,14 +678,15 @@ impl Dispatcher {
         .await
         .unwrap_or_default();
         for p in projects {
-            self.consider_for(p, None, true).await;
+            self.consider_for(p, None, Via::Sweep).await;
         }
     }
 
     /// Wake the cooks that may take work in `project`. A sweep (`sweep`, also used for retrying
     /// failed deliveries) only looks at cloud targets, wakes a cook while its misses are below
     /// [`SWEEP_MAX_MISSES`], and holds nothing back for later: the next sweep looks again.
-    async fn consider_for(&mut self, project: Uuid, except: Option<Uuid>, sweep: bool) {
+    async fn consider_for(&mut self, project: Uuid, except: Option<Uuid>, via: Via) {
+        let sweep = via != Via::Event;
         let cands = self.candidates(project, except, sweep).await;
         let mut by_agent: HashMap<(Uuid, bool), Vec<Candidate>> = HashMap::new();
         for c in cands {
@@ -620,8 +694,14 @@ impl Dispatcher {
             by_agent.entry((c.agent_id, cloud)).or_default().push(c);
         }
         for ((agent, cloud), mut targets) in by_agent {
+            let name = targets[0].agent.clone();
             if cloud {
                 // a target that asked to wait (HTTP 429) is skipped until then
+                let waiting = targets
+                    .iter()
+                    .filter_map(|t| self.cloud_wait.get(&t.target_id).copied())
+                    .filter(|w| *w > Instant::now())
+                    .max();
                 let n = targets.len();
                 targets.retain(|t| {
                     !self
@@ -633,6 +713,22 @@ impl Dispatcher {
                     self.pending.insert((agent, project));
                 }
                 if targets.is_empty() {
+                    if let Some(until) = waiting {
+                        self.hold(
+                            project,
+                            agent,
+                            &name,
+                            "wake.held",
+                            "retry_after",
+                            format!(
+                                "{name}'s cloud target asked to wait (it answered 429): no wake before {}.",
+                                crate::restaurant::clock(wall(until))
+                            ),
+                            Some(until),
+                            None,
+                        )
+                        .await;
+                    }
                     continue;
                 }
             }
@@ -643,17 +739,64 @@ impl Dispatcher {
             };
             let wakes = self.misses.get(&(agent, cloud)).copied().unwrap_or(0);
             if sweep && wakes >= SWEEP_MAX_MISSES {
+                let (reason, by) = match via {
+                    Via::Retry => ("retry", "the retry of a failed wake"),
+                    _ => ("sweep", "the periodic sweep"),
+                };
+                self.hold(
+                    project,
+                    agent,
+                    &name,
+                    "wake.capped",
+                    reason,
+                    format!(
+                        "{name} was woken {wakes} times in a row without claiming anything: {by} stops waking it until it claims a task or the work changes."
+                    ),
+                    None,
+                    Some(wakes),
+                )
+                .await;
                 continue;
             }
-            let recently = self
-                .last_wake
-                .get(&(agent, cloud))
-                .map(|t| t.elapsed() < backoff(window, wakes.saturating_sub(1)))
-                .unwrap_or(false);
+            let wait = backoff(window, wakes.saturating_sub(1));
+            let since = self.last_wake.get(&(agent, cloud)).map(|t| t.elapsed());
+            let recently = since.is_some_and(|e| e < wait);
             // Cloud agents are never woken while they hold a lease: their session is already running.
             if recently || (cloud && targets[0].busy > 0) {
                 if !sweep {
                     self.pending.insert((agent, project));
+                }
+                if recently {
+                    let until = Instant::now() + wait.saturating_sub(since.unwrap_or_default());
+                    self.hold(
+                        project,
+                        agent,
+                        &name,
+                        "wake.held",
+                        "backoff",
+                        format!(
+                            "{name} was woken a moment ago and has not claimed anything yet ({wakes} wake{} in a row): the next wake waits until {}.",
+                            if wakes == 1 { "" } else { "s" },
+                            crate::restaurant::clock(wall(until))
+                        ),
+                        Some(until),
+                        Some(wakes),
+                    )
+                    .await;
+                } else {
+                    self.hold(
+                        project,
+                        agent,
+                        &name,
+                        "wake.held",
+                        "busy",
+                        format!(
+                            "{name} holds a lease right now: its session is already running, so it is not woken."
+                        ),
+                        None,
+                        None,
+                    )
+                    .await;
                 }
                 continue;
             }
@@ -661,8 +804,25 @@ impl Dispatcher {
             *self.misses.entry((agent, cloud)).or_default() += 1;
             self.last_wake.insert((agent, cloud), Instant::now());
             self.pending.remove(&(agent, project));
+            self.held.remove(&(agent, project));
+            let mut stations_busy = false;
             for t in targets {
-                self.wake(project, t).await;
+                stations_busy |= self.wake(project, t).await;
+            }
+            if stations_busy {
+                self.hold(
+                    project,
+                    agent,
+                    &name,
+                    "wake.held",
+                    "stations_busy",
+                    format!(
+                        "All of {name}'s sessions here are busy: no wake is sent, they pick the work up themselves."
+                    ),
+                    None,
+                    None,
+                )
+                .await;
             }
         }
     }
@@ -791,7 +951,7 @@ impl Dispatcher {
             projects.insert(k.1);
         }
         for p in projects {
-            self.consider_for(p, None, true).await;
+            self.consider_for(p, None, Via::Retry).await;
         }
     }
 
@@ -806,18 +966,19 @@ impl Dispatcher {
         }
     }
 
-    async fn wake(&self, project: Uuid, c: Candidate) {
+    /// Deliver one wake. True when it was held back because every session of the cook is busy.
+    async fn wake(&self, project: Uuid, c: Candidate) -> bool {
         let key: String = match sqlx::query_scalar("select key from projects where id = $1")
             .bind(project)
             .fetch_one(&self.state.db)
             .await
         {
             Ok(k) => k,
-            Err(_) => return,
+            Err(_) => return false,
         };
         let mut conn = match self.state.db.acquire().await {
             Ok(c) => c,
-            Err(_) => return,
+            Err(_) => return false,
         };
         match c.typ.as_str() {
             "relay" => {
@@ -825,7 +986,7 @@ impl Dispatcher {
                 // when all of them are busy, they pick the work up themselves.
                 let station =
                     match crate::stations::pick_for_wake(&mut conn, c.agent_id, project).await {
-                        Ok((true, None)) => return,
+                        Ok((true, None)) => return true,
                         Ok((_, st)) => st,
                         Err(e) => {
                             tracing::warn!("station lookup failed: {e}");
@@ -837,7 +998,7 @@ impl Dispatcher {
                     Some(project),
                     None,
                     "wake",
-                    None,
+                    Some(crate::state::RESTAURANT),
                     json!({"agent": c.agent, "agent_id": c.agent_id, "project": key, "station": station}),
                 )
                 .await;
@@ -915,6 +1076,7 @@ impl Dispatcher {
             }
             _ => {}
         }
+        false
     }
 }
 
@@ -986,7 +1148,16 @@ async fn record_delivery(
             )
         }
     };
-    let seq = emit(c, Some(project), None, kind, None, payload).await.ok();
+    let seq = emit(
+        c,
+        Some(project),
+        None,
+        kind,
+        Some(crate::state::RESTAURANT),
+        payload,
+    )
+    .await
+    .ok();
     if let Some((id, session, url)) = settled
         && let Err(e) =
             crate::stations::settle_run(&mut *c, id, session.as_deref(), url.as_deref(), seq).await

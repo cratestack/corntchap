@@ -69,6 +69,7 @@ type WorkComment {
   task String
   project String
   author String?
+  author_kind String?
   excerpt String
   at String
 }

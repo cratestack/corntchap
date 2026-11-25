@@ -649,6 +649,24 @@ async fn a_run_ends_when_it_holds_nothing_and_a_later_call_reopens_it() {
             >= 1
     );
     assert!(w.ended(run.id).await);
+    // the restaurant ended it, and says which run and why
+    let (actor, reason, station, agent): (String, String, String, String) = sqlx::query_as(
+        "select a.name, e.payload->>'reason', e.payload->>'station', e.payload->>'agent'
+         from events e join principals a on a.id = e.actor_id
+         where e.kind = 'restaurant.decided' and e.payload->>'decision' = 'run.ended'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            actor.as_str(),
+            reason.as_str(),
+            station.as_str(),
+            agent.as_str()
+        ),
+        ("restaurant", "stale", run.reference.as_str(), "claude-web")
+    );
     // a run that is not quiet stays
     sqlx::query("update stations set ended_at = null, last_woken_at = now() where id = $1")
         .bind(run.id)

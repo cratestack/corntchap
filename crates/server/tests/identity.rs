@@ -957,3 +957,217 @@ async fn init_refuses_a_person_who_signs_in_through_the_idp() {
             .unwrap();
     assert!(!flag, "nothing changed");
 }
+
+// ---------- the restaurant: the server itself, never a login ----------
+
+const RESTAURANT_ID: &str = "00000000-0000-4000-8000-524553545552";
+
+fn text_of(r: &Value) -> String {
+    r["content"][0]["text"].as_str().unwrap_or("").to_string()
+}
+
+#[tokio::test]
+async fn nobody_can_sign_in_as_the_restaurant() {
+    use authkestra::core::auth::SessionStore;
+    let app = common::start(false).await;
+    let db = &app.state.db;
+    assert_eq!(corntchap::state::RESTAURANT.to_string(), RESTAURANT_ID);
+    // its row: disabled, a member, no subject, no owner
+    let (kind, role, disabled, sub, owner): (String, String, bool, Option<String>, Option<String>) = sqlx::query_as(
+        "select kind, role, disabled_at is not null, oidc_sub, owner_id::text from principals where id = $1::uuid",
+    )
+    .bind(RESTAURANT_ID)
+    .fetch_one(db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (kind.as_str(), role.as_str(), disabled, sub, owner),
+        ("restaurant", "member", true, None, None)
+    );
+    // a token cannot be made for it, not even by the operator's escape hatch
+    let e = admin::operator_token(db, "restaurant", None)
+        .await
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("restaurant is the server itself"),
+        "{e}"
+    );
+    let n: i64 = sqlx::query_scalar("select count(*) from tokens where principal_id = $1::uuid")
+        .bind(RESTAURANT_ID)
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+    // a browser session (the OIDC login's result) is refused by the table itself
+    let store = corntchap::sessions::PgSessionStore { db: db.clone() };
+    let saved = store
+        .save_session(&corntchap::sessions::new_session(
+            "tok-restaurant".into(),
+            corntchap::state::RESTAURANT,
+            "restaurant",
+            "csrf".into(),
+            None,
+            600,
+        ))
+        .await;
+    assert!(
+        saved.is_err(),
+        "a session for the restaurant must not exist"
+    );
+    let r = app
+        .http
+        .get(format!("{}/api/v1/me", app.base))
+        .header("cookie", "ct_session=tok-restaurant")
+        .header("x-corntchap-console", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 401);
+    // nor OAuth codes or refresh tokens, wake targets, stations, handle claims, team seats
+    app.add_user("alice").await;
+    sqlx::query("insert into oauth_clients (id, name, redirect_uris) values ('c', 'c', '{}')")
+        .execute(db)
+        .await
+        .unwrap();
+    for sql in [
+        "insert into oauth_codes (code_hash, client_id, redirect_uri, challenge, principal_id, approved_by, expires_at)
+           values ('\\x01', 'c', 'http://x', 'c', $1::uuid, $1::uuid, now() + interval '1 minute')",
+        "insert into oauth_refresh (token_hash, client_id, principal_id, expires_at)
+           values ('\\x02', 'c', $1::uuid, now() + interval '1 minute')",
+        "insert into wake_targets (agent_id, type) values ($1::uuid, 'relay')",
+        "insert into handle_claims (name, principal_id) values ('someone-else', $1::uuid)",
+    ] {
+        let e = sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+            .bind(RESTAURANT_ID)
+            .execute(db)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("restaurant is the server itself"), "{sql}: {e}");
+    }
+    sqlx::query("insert into teams (name) values ('acme')")
+        .execute(db)
+        .await
+        .unwrap();
+    let e = sqlx::query("insert into team_members (team_id, principal_id, role) select id, $1::uuid, 'member' from teams")
+        .bind(RESTAURANT_ID)
+        .execute(db)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("restaurant is the server itself"), "{e}");
+}
+
+#[tokio::test]
+async fn the_restaurant_is_not_a_person_a_cook_or_a_fire_and_cannot_be_managed() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
+    let root = tok.unwrap();
+    app.post(&root, "/teams", json!({"name": "acme"})).await;
+    app.post(
+        &root,
+        "/projects",
+        json!({"team": "acme", "key": "PAY", "name": "Pay"}),
+    )
+    .await;
+    // it is in no list
+    for (tool, key) in [
+        ("list_users", "name"),
+        ("list_cooks", "name"),
+        ("list_fires", "name"),
+    ] {
+        let r = app.mcp(&root, tool, json!({})).await;
+        assert!(!r.to_string().contains("restaurant"), "{tool}: {r}");
+        let _ = key;
+    }
+    let r = app
+        .mcp(&root, "list_team_members", json!({"team": "acme"}))
+        .await;
+    assert!(!r.to_string().contains("restaurant"), "{r}");
+    // it cannot be put in a team, rotated or deleted, as a person, cook or fire
+    let r = app
+        .mcp(
+            &root,
+            "add_team_member",
+            json!({"team": "acme", "principal": "restaurant"}),
+        )
+        .await;
+    assert_eq!(r["isError"], true, "{r}");
+    for (tool, args) in [
+        ("rotate_token", json!({"name": "restaurant"})),
+        ("delete_cook", json!({"name": "restaurant"})),
+        ("delete_fire", json!({"name": "restaurant"})),
+        (
+            "set_role",
+            json!({"user": "restaurant", "role": "super_admin"}),
+        ),
+    ] {
+        let r = app.mcp(&root, tool, args).await;
+        assert_eq!(r["isError"], true, "{tool}: {r}");
+        assert!(text_of(&r).to_lowercase().contains("no "), "{tool}: {r}");
+    }
+    let still: i64 =
+        sqlx::query_scalar("select count(*) from principals where kind = 'restaurant'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(still, 1);
+    // the handle is reserved: nobody is called that
+    assert!(RESERVED_HANDLES.contains(&"restaurant"));
+    assert!(admin::norm_handle("Restaurant").is_err());
+    let (code, r) = app
+        .post(
+            &root,
+            "/agents",
+            json!({"name": "restaurant", "kind": "other", "runtime": "cloud"}),
+        )
+        .await;
+    assert_ne!(code, 200, "{r}");
+    // @restaurant wakes nobody, and a message to it is refused
+    let r = app
+        .mcp(
+            &root,
+            "pass",
+            json!({"project": "PAY", "message": "@restaurant hello"}),
+        )
+        .await;
+    assert_ne!(r["isError"], true, "{r}");
+    assert_eq!(
+        common::TestApp::payload(&r)["woken"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0),
+        0,
+        "{r}"
+    );
+    let wakes: i64 = sqlx::query_scalar("select count(*) from events where kind = 'wake'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(wakes, 0);
+    let r = app
+        .mcp(
+            &root,
+            "pass",
+            json!({"project": "PAY", "message": "hi", "to": "restaurant"}),
+        )
+        .await;
+    assert_eq!(r["isError"], true, "{r}");
+    // and it cannot own a task
+    app.mcp(
+        &root,
+        "create_task",
+        json!({"project": "PAY", "title": "x"}),
+    )
+    .await;
+    let r = app
+        .mcp(
+            &root,
+            "update_task",
+            json!({"id": "PAY-1", "owner": "restaurant"}),
+        )
+        .await;
+    assert_eq!(r["isError"], true, "{r}");
+}

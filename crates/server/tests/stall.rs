@@ -166,16 +166,41 @@ async fn the_reaper_says_why_and_leaves_a_note() {
         ("open", "stalled", "c1")
     );
     let note: String = sqlx::query_scalar(
-        "select c.body from comments c join tasks t on t.id = c.task_id where t.number = 1 and c.author_id is null",
+        "select c.body from comments c join tasks t on t.id = c.task_id where t.number = 1 and c.author_id = '00000000-0000-4000-8000-524553545552'",
     )
     .fetch_one(&w.app.state.db)
     .await
     .unwrap();
     assert!(
-        note.contains("released by the server")
+        note.starts_with("Lease ended:")
+            && !note.contains("by the server]")
             && note.contains("no progress for 2h")
             && note.contains("c1"),
         "{note}"
+    );
+    // the restaurant ended it, and says why
+    let (actor, kind, why): (String, String, String) = sqlx::query_as(
+        "select a.name, a.kind, e.payload->>'why' from events e join principals a on a.id = e.actor_id
+          where e.kind = 'task.lease_expired' and e.payload->>'reason' = 'stalled'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (actor.as_str(), kind.as_str()),
+        ("restaurant", "restaurant")
+    );
+    assert!(why.contains("no progress for 2h"), "{why}");
+    // the task shows the note's author as the restaurant, in every reader
+    let t = ok(
+        &w.app.mcp(&w.c1, "get_task", json!({"id": "PAY-1"})).await,
+        "get_task",
+    );
+    let last = t["comments"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(
+        (last["author"].as_str(), last["author_kind"].as_str()),
+        (Some("restaurant"), Some("restaurant")),
+        "{t}"
     );
     // the holder is told, with the reason
     let wake: String = sqlx::query_scalar(
@@ -369,13 +394,13 @@ async fn held_too_long_is_released_whatever_the_progress() {
     .unwrap();
     assert_eq!(reason, "max_hold");
     let note: String = sqlx::query_scalar(
-        "select c.body from comments c join tasks t on t.id = c.task_id where t.number = 1 and c.author_id is null",
+        "select c.body from comments c join tasks t on t.id = c.task_id where t.number = 1 and c.author_id = '00000000-0000-4000-8000-524553545552'",
     )
     .fetch_one(&w.app.state.db)
     .await
     .unwrap();
     assert!(
-        note.contains("released by the server") && note.contains("8h"),
+        note.starts_with("Lease ended:") && note.contains("8h"),
         "{note}"
     );
 
@@ -427,4 +452,55 @@ async fn a_late_comment_does_not_turn_a_stall_into_a_lapse() {
     .await
     .unwrap();
     assert_eq!(reason, "stalled");
+}
+
+#[tokio::test]
+async fn the_reaper_never_acts_anonymously() {
+    let w = world().await;
+    for (n, why) in [(1, "stalled"), (2, "lapsed")] {
+        w.claim(&format!("PAY-{n}"), json!({})).await;
+        let progress = if why == "stalled" {
+            "now() - interval '3 hours'"
+        } else {
+            "progress_at"
+        };
+        w.sql(&format!(
+            "update tasks set progress_at = {progress}, lease_expires_at = now() - interval '1 second' where number = {n}"
+        ))
+        .await;
+    }
+    assert_eq!(corntchap::jobs::reap(&w.app.state).await.unwrap(), 2);
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "select e.payload->>'reason', a.name, e.payload->>'why' from events e
+           join principals a on a.id = e.actor_id where e.kind = 'task.lease_expired' order by e.seq",
+    )
+    .fetch_all(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(
+        rows.iter()
+            .all(|r| r.1 == "restaurant" && r.2.starts_with("the lease ended")),
+        "{rows:?}"
+    );
+    let reasons: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    assert_eq!(reasons, ["stalled", "lapsed"]);
+    common::assert_no_anonymous_events(&w.app.state.db).await;
+}
+
+#[tokio::test]
+async fn the_reaper_ends_a_max_hold_with_its_reason_on_the_event() {
+    let w = world().await;
+    w.claim("PAY-1", json!({})).await;
+    w.sql("update tasks set held_since = now() - interval '9 hours', lease_expires_at = now() - interval '1 second' where number = 1")
+        .await;
+    assert_eq!(corntchap::jobs::reap(&w.app.state).await.unwrap(), 1);
+    let (reason, why): (String, String) = sqlx::query_as(
+        "select payload->>'reason', payload->>'why' from events where kind = 'task.lease_expired'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(reason, "max_hold");
+    assert!(why.contains("held for more than 8h"), "{why}");
 }

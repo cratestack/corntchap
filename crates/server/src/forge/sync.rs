@@ -305,13 +305,25 @@ pub fn spawn_backfill(st: &AppState, project: &str, urls: Vec<String>) {
     });
 }
 
-async fn record(st: &AppState, project: &str, payload: Value) -> Result<()> {
+async fn record(st: &AppState, project: &str, mut payload: Value) -> Result<()> {
+    payload["reason"] = json!("backfill");
+    payload["why"] = json!(
+        "a repository joined the pot: its open pull requests were searched for ones that name the pot's tasks"
+    );
     let mut tx = st.db.begin().await?;
     let pid: Option<Uuid> = sqlx::query_scalar("select id from projects where key = $1")
         .bind(project.to_uppercase())
         .fetch_optional(&mut *tx)
         .await?;
-    service::emit(&mut tx, pid, None, "forge.backfill", None, payload).await?;
+    service::emit(
+        &mut tx,
+        pid,
+        None,
+        "forge.backfill",
+        Some(crate::state::RESTAURANT),
+        payload,
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
