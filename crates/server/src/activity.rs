@@ -160,6 +160,12 @@ pub async fn record(db: &PgPool, p: &Principal, r: Record) -> Result<Value> {
     Ok(json!({"recorded": true, "station": station}))
 }
 
+const ACTIVITY_JSON: &str = "jsonb_build_object('seq', e.seq, 'at', e.at, 'station', e.payload->>'station', 'cook', e.payload->>'cook',
+            'tool', e.payload->>'tool', 'files', coalesce(e.payload->'files', '[]'::jsonb),
+            'checkpoint', e.payload->>'checkpoint', 'summary', e.payload->>'summary',
+            'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
+            'count', coalesce((e.payload->>'count')::bigint, 1))";
+
 /// Recent activity of a pot, newest first.
 pub async fn list(
     db: &PgPool,
@@ -175,18 +181,14 @@ pub async fn list(
         Some(t) => Some(task_by_ref(&mut c, p, t).await?.id),
         None => None,
     };
-    let rows: Vec<Value> = sqlx::query_scalar(
-        "select jsonb_build_object('seq', e.seq, 'at', e.at, 'station', e.payload->>'station', 'cook', e.payload->>'cook',
-            'tool', e.payload->>'tool', 'files', coalesce(e.payload->'files', '[]'::jsonb),
-            'checkpoint', e.payload->>'checkpoint', 'summary', e.payload->>'summary',
-            'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
-            'count', coalesce((e.payload->>'count')::bigint, 1))
+    let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {ACTIVITY_JSON}
          from events e
          where e.kind = 'activity' and e.project_id = $1
            and ($2::text is null or e.payload->>'station' = $2)
            and ($3::uuid is null or e.task_id = $3)
-         order by e.seq desc limit $4",
-    )
+         order by e.seq desc limit $4"
+    )))
     .bind(pr.id)
     .bind(station.map(str::trim).filter(|s| !s.is_empty()))
     .bind(task_id)
@@ -194,4 +196,126 @@ pub async fn list(
     .fetch_all(&mut *c)
     .await?;
     Ok(Value::Array(rows))
+}
+
+/// A page of a pot's activity, newest first (seq desc): [`list`] with the cook too (`cook` is a cook's name).
+pub async fn page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    station: Option<&str>,
+    task: Option<&str>,
+    cook: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "-seq",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let task_id = match task.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => Some(task_by_ref(&mut c, p, t).await?.id),
+        None => None,
+    };
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select {ACTIVITY_JSON}, array[e.seq::text]
+         from events e
+         where e.kind = 'activity' and e.project_id = $1
+           and ($2::text is null or e.payload->>'station' = $2)
+           and ($3::uuid is null or e.task_id = $3)
+           and ($4::text is null or e.payload->>'cook' = $4)
+           and ($5::text is null or e.seq < $5::text::bigint)
+         order by e.seq desc limit $6"
+    )))
+    .bind(pr.id)
+    .bind(station.map(str::trim).filter(|s| !s.is_empty()))
+    .bind(task_id)
+    .bind(
+        cook.map(|c| c.trim().to_lowercase())
+            .filter(|c| !c.is_empty()),
+    )
+    .bind(paging.key(0))
+    .bind(paging.fetch())
+    .fetch_all(&mut *c)
+    .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
+/// A page of a pot's change feed, newest first (seq desc), for the console (`eventPage`): the events
+/// `changes_since` shows (no wakes but failed ones, no activity), those the caller is in the audience of.
+/// `kinds` is a comma list of event kinds or `kind.*` prefixes (`task.*`); `actor` a person's, cook's or
+/// fire's name; `task` a task, e.g. PAY-12.
+pub async fn event_page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    kinds: Option<&str>,
+    actor: Option<&str>,
+    task: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "-seq",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let (mut exact, mut prefixes) = (Vec::<String>::new(), Vec::<String>::new());
+    for k in kinds.unwrap_or("").split(',').map(str::trim) {
+        match k.strip_suffix(".*") {
+            _ if k.is_empty() => {}
+            Some(prefix) => prefixes.push(format!("{prefix}.")),
+            None => exact.push(k.to_string()),
+        }
+    }
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let task_id = match task.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => Some(task_by_ref(&mut c, p, t).await?.id),
+        None => None,
+    };
+    let sql = "select jsonb_build_object('seq', e.seq, 'kind', e.kind, 'project', pr.key,
+            'task', (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id),
+            'actor', coalesce((select name from principals where id = e.actor_id), e.payload->>'actor_name'),
+            'actor_kind', (select kind from principals where id = e.actor_id), 'at', e.at, 'payload', e.payload),
+            array[e.seq::text]
+         from events e join projects pr on pr.id = e.project_id
+         where e.project_id = $1
+           and (e.kind not like 'wake%' or e.kind = 'wake.failed') and e.kind <> 'activity'
+           and (e.audience is null or $2 = any(e.audience))
+           and ($3::uuid is null or e.task_id = $3)
+           and ($4::text is null or e.actor_id = (select id from principals where name = $4))
+           and (cardinality($5::text[]) = 0 and cardinality($6::text[]) = 0
+                or e.kind = any($5) or exists (select 1 from unnest($6::text[]) x where left(e.kind, length(x)) = x))
+           and ($7::text is null or e.seq < $7::text::bigint)
+         order by e.seq desc limit $8";
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sql)
+        .bind(pr.id)
+        .bind(p.id)
+        .bind(task_id)
+        .bind(
+            actor
+                .map(|a| a.trim().to_lowercase())
+                .filter(|a| !a.is_empty()),
+        )
+        .bind(&exact)
+        .bind(&prefixes)
+        .bind(paging.key(0))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
 }

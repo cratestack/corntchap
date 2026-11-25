@@ -30,13 +30,16 @@ procedure fileGet(id: String): FileDownload
   @allow(auth() != null)
   @mcp(tool: "get_file", description: "A file's status (uploading, ready, failed) and, when ready, a presigned download URL valid for a few minutes (fetch it with curl). Links in the pot (url) stay valid; this one expires.")
 
-/// A pot's files.
+/// A page of a pot's files, newest first.
 /// @param project Pot key, e.g. PAY.
 /// @param task Only files attached to this task.
 /// @param question Only files attached to this question.
-procedure fileList(project: String, task: String?, question: String?): FileView[]
+/// @param status Only files that are uploading, ready or failed.
+/// @param q Only files whose name contains this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure filePage(project: String, task: String?, question: String?, status: String?, q: String?, page: CursorPageInput?): CursorPage<FileView>
   @allow(auth() != null)
-  @mcp(tool: "list_files", description: "Files in a pot (optionally one task's or one question's), newest first.")
+  @mcp(tool: "list_files", description: "Files in a pot (optionally one task's or one question's), newest first, a page at a time (items, nextCursor). Narrow with task, question, status (uploading, ready, failed) or q (name).")
 
 /// Delete a file.
 /// @param id File id, e.g. PAY-F12.

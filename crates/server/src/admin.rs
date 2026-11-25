@@ -620,21 +620,27 @@ pub async fn set_grants(
     Ok(json!({"name": name.to_lowercase(), "grants": g}))
 }
 
-/// Super-admins see every person with their sign-in state; an orchestrator sees the people directory (handle,
-/// display name and role: no sign-in or contact details) to put people in their teams.
-pub async fn list_users(db: &PgPool, p: &Principal) -> Result<Value> {
-    Ok(Value::Array(
-        list_users_q(db, p, &DirQuery::default()).await?,
-    ))
-}
-
-/// Narrowing and paging of a directory list (`/v1/users`, `/v1/agents`): `q` matches name and display
-/// name (any case); keyset on name after `after`; at most `limit` rows (none: all).
+/// Narrowing and paging of a directory list (`/v1/users`, `/v1/agents`, the `*Page` procedures): `q`
+/// matches name and display name (any case); keyset on name after `after`; at most `limit` rows
+/// (none: all). `role` and `disabled` narrow people; `team` and `owner` narrow cooks.
 #[derive(Default, Clone)]
 pub struct DirQuery {
     pub q: Option<String>,
     pub after: Option<String>,
     pub limit: Option<i64>,
+    pub role: Option<String>,
+    pub disabled: Option<bool>,
+    pub team: Option<String>,
+    pub owner: Option<String>,
+}
+
+impl DirQuery {
+    pub fn text(q: Option<&str>) -> Self {
+        DirQuery {
+            q: q.map(str::trim).filter(|q| !q.is_empty()).map(String::from),
+            ..Default::default()
+        }
+    }
 }
 
 fn dir_filter(col_name: &str, col_display: Option<&str>, first: usize) -> String {
@@ -648,6 +654,35 @@ fn dir_filter(col_name: &str, col_display: Option<&str>, first: usize) -> String
     )
 }
 
+/// A page of a directory list by name: `kind` is `user` (people), `agent` (cooks) or `relay` (fires). `q`
+/// carries the filters; its `after` and `limit` are set here from `page`. Answers the rows and the
+/// cursor of the next page. The REST lists with `?limit=` and the `*Page` procedures both use it.
+pub async fn dir_page(
+    db: &PgPool,
+    p: &Principal,
+    kind: &str,
+    mut q: DirQuery,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "name",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    q.after = paging.key(0);
+    q.limit = Some(paging.fetch());
+    let rows = if kind == "user" {
+        list_users_q(db, p, &q).await?
+    } else {
+        list_principals_q(db, p, kind, &q).await?
+    };
+    Ok(crate::paging::finish(by_name(rows), &paging))
+}
+
+/// Super-admins see every person with their sign-in state; an orchestrator sees the people directory (handle,
+/// display name and role: no sign-in or contact details) to put people in their teams.
 pub async fn list_users_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Vec<Value>> {
     let p = &acting_or_self(db, p).await?;
     if !p.is_user() || !p.can_orchestrate() {
@@ -660,18 +695,22 @@ pub async fn list_users_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Ve
         format!(
             "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role,
             'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals
-            where kind = 'user' and {f} order by name limit $3"
+            where kind = 'user' and {f} and ($4::text is null or role = $4)
+              and ($5::bool is null or $5 = (disabled_at is not null)) order by name limit $3"
         )
     } else {
         format!(
             "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role)
-         from principals where kind = 'user' and disabled_at is null and {f} order by name limit $3"
+         from principals where kind = 'user' and disabled_at is null and {f}
+           and ($4::text is null or role = $4) and ($5::bool is null or $5 = false) order by name limit $3"
         )
     };
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(q.q.as_deref())
         .bind(q.after.as_deref())
         .bind(q.limit)
+        .bind(q.role.as_deref())
+        .bind(q.disabled)
         .fetch_all(db)
         .await?;
     Ok(rows)
@@ -702,18 +741,61 @@ pub async fn create_team(db: &PgPool, p: &Principal, name: &str) -> Result<Value
 }
 
 pub async fn list_teams(db: &PgPool, p: &Principal) -> Result<Value> {
+    Ok(Value::Array(
+        list_teams_q(db, p, &DirQuery::default()).await?,
+    ))
+}
+
+/// Teams you belong to (super-admins: all), narrowed by name and paged by name like a directory list.
+pub async fn list_teams_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Vec<Value>> {
     let p = &acting_or_self(db, p).await?;
-    let rows: Vec<Value> = sqlx::query_scalar(
+    let sql = format!(
         "select jsonb_build_object('name', t.name, 'role', (select role from team_members where team_id = t.id and principal_id = $2),
             'members', (select count(*) from team_members where team_id = t.id),
             'projects', coalesce((select jsonb_agg(key order by key) from projects where team_id = t.id), '[]'::jsonb))
-         from teams t where $1 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $2) order by t.name",
-    )
-    .bind(p.is_super_admin())
-    .bind(p.id)
-    .fetch_all(db)
-    .await?;
-    Ok(Value::Array(rows))
+         from teams t where ($1 or exists (select 1 from team_members m where m.team_id = t.id and m.principal_id = $2))
+           and {} order by t.name limit $5",
+        dir_filter("t.name", None, 3)
+    );
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(p.is_super_admin())
+        .bind(p.id)
+        .bind(q.q.as_deref())
+        .bind(q.after.as_deref())
+        .bind(q.limit)
+        .fetch_all(db)
+        .await?)
+}
+
+/// A page of [`list_teams_q`], by name.
+pub async fn team_page(
+    db: &PgPool,
+    p: &Principal,
+    q: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "name",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut d = DirQuery::text(q);
+    d.after = paging.key(0);
+    d.limit = Some(paging.fetch());
+    let rows = list_teams_q(db, p, &d).await?;
+    Ok(crate::paging::finish(by_name(rows), &paging))
+}
+
+/// Rows with their `name` as the keyset key.
+fn by_name(rows: Vec<Value>) -> Vec<(Value, crate::paging::Keys)> {
+    rows.into_iter()
+        .map(|v| {
+            let k = vec![v["name"].as_str().map(str::to_string)];
+            (v, k)
+        })
+        .collect()
 }
 
 /// Resolve a team the principal owns (or any team for super-admins). Owning needs the orchestrator role: a demoted
@@ -858,6 +940,26 @@ pub async fn remove_member(
 }
 
 pub async fn list_members(db: &PgPool, p: &Principal, team: &str) -> Result<Value> {
+    Ok(Value::Array(
+        list_members_q(db, p, team, &MemberQuery::default()).await?,
+    ))
+}
+
+/// Narrowing of a team's chefs: `kind` user or agent, `role` owner or member (chef), `q` on handle and
+/// display name; keyset on handle after `after`; at most `limit` rows (none: all).
+#[derive(Default, Clone)]
+pub struct MemberQuery {
+    pub kind: Option<String>,
+    pub role: Option<String>,
+    pub dir: DirQuery,
+}
+
+pub async fn list_members_q(
+    db: &PgPool,
+    p: &Principal,
+    team: &str,
+    q: &MemberQuery,
+) -> Result<Vec<Value>> {
     let p = &acting_or_self(db, p).await?;
     let mut c = db.acquire().await?;
     let row: Option<Uuid> = sqlx::query_scalar(
@@ -872,13 +974,56 @@ pub async fn list_members(db: &PgPool, p: &Principal, team: &str) -> Result<Valu
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select jsonb_build_object('name', pr.name, 'display_name', pr.display_name, 'kind', pr.kind, 'role', m.role,
                 'fireAndForget', {}) from team_members m
-         join principals pr on pr.id = m.principal_id where m.team_id = $1 order by pr.name",
-        crate::cloud::fire_and_forget_sql("pr.id")
+         join principals pr on pr.id = m.principal_id where m.team_id = $1
+           and ($2::text is null or pr.kind = $2) and ($3::text is null or m.role = $3) and {}
+         order by pr.name limit $6",
+        crate::cloud::fire_and_forget_sql("pr.id"),
+        dir_filter("pr.name", Some("pr.display_name"), 4),
     )))
     .bind(tid)
+    .bind(q.kind.as_deref())
+    .bind(q.role.as_deref())
+    .bind(q.dir.q.as_deref())
+    .bind(q.dir.after.as_deref())
+    .bind(q.dir.limit)
     .fetch_all(&mut *c)
     .await?;
-    Ok(Value::Array(rows))
+    Ok(rows)
+}
+
+/// A page of a team's chefs by handle. `kind` is user or agent; `role` is owner or chef.
+pub async fn member_page(
+    db: &PgPool,
+    p: &Principal,
+    team: &str,
+    kind: Option<&str>,
+    role: Option<&str>,
+    q: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let kind = match kind.map(str::trim).filter(|k| !k.is_empty()) {
+        None => None,
+        Some(k @ ("user" | "agent")) => Some(k.to_string()),
+        Some(_) => return Err(Error::Invalid("kind is user or agent".into())),
+    };
+    let role = match role.map(str::trim).filter(|r| !r.is_empty()) {
+        None => None,
+        Some("owner") => Some("owner".to_string()),
+        Some("chef" | "member") => Some("member".to_string()),
+        Some(_) => return Err(Error::Invalid("role is owner or chef".into())),
+    };
+    let paging = crate::paging::paging(
+        page,
+        "name",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut dir = DirQuery::text(q);
+    dir.after = paging.key(0);
+    dir.limit = Some(paging.fetch());
+    let rows = list_members_q(db, p, team, &MemberQuery { kind, role, dir }).await?;
+    Ok(crate::paging::finish(by_name(rows), &paging))
 }
 
 pub async fn create_project(
@@ -1038,7 +1183,12 @@ pub async fn list_principals_q(
             'busy', (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()),
             'teams', coalesce((select jsonb_agg(t.name order by t.name) from team_members m join teams t on t.id = m.team_id
                                where m.principal_id = a.id), '[]'::jsonb))
-         from principals a where a.kind = $1 and ($2 or a.owner_id = $3) and {} order by a.name limit $6",
+         from principals a where a.kind = $1 and ($2 or a.owner_id = $3) and {}
+           and ($7::text is null or exists (select 1 from team_members m join teams t on t.id = m.team_id
+                                            where m.principal_id = a.id and t.name = $7))
+           and ($8::text is null or exists (select 1 from principals o where o.id = a.owner_id and o.name = $8))
+           and ($9::bool is null or $9 = (a.disabled_at is not null))
+         order by a.name limit $6",
         crate::cloud::fire_and_forget_sql("a.id"),
         dir_filter("a.name", None, 4),
     )))
@@ -1048,6 +1198,9 @@ pub async fn list_principals_q(
     .bind(q.q.as_deref())
     .bind(q.after.as_deref())
     .bind(q.limit)
+    .bind(q.team.as_deref())
+    .bind(q.owner.as_deref())
+    .bind(q.disabled)
     .fetch_all(db)
     .await?;
     Ok(rows)
@@ -1136,22 +1289,62 @@ pub async fn add_wake_target(
 }
 
 pub async fn list_wake_targets(db: &PgPool, p: &Principal, agent: &str) -> Result<Value> {
+    Ok(Value::Array(
+        list_wake_targets_q(db, p, agent, None, None).await?,
+    ))
+}
+
+async fn list_wake_targets_q(
+    db: &PgPool,
+    p: &Principal,
+    agent: &str,
+    after: Option<&str>,
+    limit: Option<i64>,
+) -> Result<Vec<Value>> {
     let p = &acting_or_self(db, p).await?;
     let mut c = db.acquire().await?;
     let (id, _) = managed(&mut c, p, agent).await?;
-    let rows: Vec<Value> = sqlx::query_scalar(
+    Ok(sqlx::query_scalar(
         // secrets in config are never echoed back
         "select jsonb_build_object('id', id, 'type', type, 'projects', projects, 'labels', labels,
             'config', (config - 'token' - 'headers' - 'secret') || coalesce((
                 select jsonb_build_object('session_url', r.session_url) from coder_runs r
                 where r.target_id = wake_targets.id and r.session_url is not null
                 order by r.updated_at desc limit 1), '{}'::jsonb))
-            from wake_targets where agent_id = $1 order by id",
+            from wake_targets where agent_id = $1 and ($2::text is null or id::text > $2)
+            order by id::text limit $3",
     )
     .bind(id)
+    .bind(after)
+    .bind(limit)
     .fetch_all(&mut *c)
-    .await?;
-    Ok(Value::Array(rows))
+    .await?)
+}
+
+/// A page of a cook's wake targets by id (the secrets in `config` are never echoed back).
+pub async fn wake_target_page(
+    db: &PgPool,
+    p: &Principal,
+    agent: &str,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "id",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let rows =
+        list_wake_targets_q(db, p, agent, paging.key(0).as_deref(), Some(paging.fetch())).await?;
+    let rows = rows
+        .into_iter()
+        .map(|v| {
+            let k = vec![v["id"].as_str().map(str::to_string)];
+            (v, k)
+        })
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
 }
 
 pub async fn delete_wake_target(db: &PgPool, p: &Principal, id: Uuid) -> Result<Value> {

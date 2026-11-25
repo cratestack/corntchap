@@ -293,7 +293,8 @@ async fn a_wake_starts_a_session_and_the_next_one_follows_up() {
         &app.mcp(&root, "list_wake_targets", json!({"cook": "devin-cook"}))
             .await,
         "list",
-    );
+    )["items"]
+        .clone();
     assert_eq!(mcp[0]["type"], "devin");
     let (_, cook_page) = app.get(&root, "/agents/devin-cook").await;
     let (_, cooks) = app.get(&root, "/agents").await;

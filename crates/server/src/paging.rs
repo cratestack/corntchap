@@ -53,8 +53,9 @@ fn check_keys(order: &str, keys: &Keys) -> Result<()> {
     for (col, key) in cols.zip(keys) {
         let Some(key) = key else { continue };
         let ok = match col.trim_start_matches('-') {
-            "number" | "priority" | "requested" | "rn" | "seq" => key.parse::<i64>().is_ok(),
-            "created_at" | "updated_at" => {
+            "number" | "priority" | "requested" | "rn" | "seq" | "position" | "served"
+            | "last_seq" | "chars" => key.parse::<i64>().is_ok(),
+            "created_at" | "updated_at" | "last_seen" => {
                 chrono::DateTime::parse_from_str(key, "%Y-%m-%d %H:%M:%S%.f%#z").is_ok()
             }
             _ => true,
@@ -130,4 +131,51 @@ pub fn page_json(items: Vec<Value>, next: Option<String>) -> Value {
         o["nextCursor"] = Value::String(n);
     }
     o
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys(v: &[&str]) -> Keys {
+        v.iter().map(|k| Some(k.to_string())).collect()
+    }
+
+    #[test]
+    fn integer_keys_must_be_integers() {
+        for col in [
+            "number", "priority", "seq", "position", "served", "last_seq", "chars",
+        ] {
+            assert!(check_keys(col, &keys(&["12"])).is_ok(), "{col}");
+            assert!(
+                check_keys(&format!("-{col}"), &keys(&["-3"])).is_ok(),
+                "-{col}"
+            );
+            assert!(check_keys(col, &keys(&["x"])).is_err(), "{col}");
+            assert!(check_keys(col, &keys(&["1'; drop"])).is_err(), "{col}");
+        }
+    }
+
+    #[test]
+    fn timestamp_keys_must_be_timestamps() {
+        let ts = "2026-05-01 10:11:12.123456+00";
+        for col in ["created_at", "updated_at", "last_seen"] {
+            assert!(
+                check_keys(&format!("-{col},name"), &keys(&[ts, "a"])).is_ok(),
+                "{col}"
+            );
+            assert!(
+                check_keys(&format!("-{col},name"), &keys(&["yesterday", "a"])).is_err(),
+                "{col}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_keys_always_fit_and_the_suffix_is_ignored() {
+        assert!(check_keys("name", &keys(&["anything at all"])).is_ok());
+        assert!(check_keys("-chars,cook:x", &keys(&["7", "bob"])).is_ok());
+        assert!(check_keys("-chars,cook:x", &keys(&["seven", "bob"])).is_err());
+        assert!(check_keys("-last_seen,norm_url", &vec![None, Some("u".into())]).is_ok());
+    }
 }

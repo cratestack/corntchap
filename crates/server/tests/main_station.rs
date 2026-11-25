@@ -121,7 +121,8 @@ async fn the_main_station_answers() {
         &app.mcp(&doug, "list_stations", json!({"project": "PAY"}))
             .await,
         "list",
-    );
+    )["items"]
+        .clone();
     let mains: Vec<&str> = list
         .as_array()
         .unwrap()

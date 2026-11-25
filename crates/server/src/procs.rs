@@ -545,6 +545,29 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn event_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: event_page::Args,
+        _z: event_page::Authorized,
+    ) -> Result<event_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            Box::pin(activity::event_page(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.kinds.as_deref(),
+                a.actor.as_deref(),
+                a.task.as_deref(),
+                &a.page,
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
+    }
+
     async fn wait_for_work(
         &self,
         _db: &Db,
@@ -769,16 +792,33 @@ impl ProcedureRegistry for Procedures {
         typed(menus::update(&self.state.db, &p, &a.project, &a.key, e).await)
     }
 
-    async fn admin_users(
+    async fn user_page(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        _a: admin_users::Args,
-        _z: admin_users::Authorized,
-    ) -> Result<admin_users::Output, CratestackError> {
+        a: user_page::Args,
+        _z: user_page::Authorized,
+    ) -> Result<user_page::Output, CratestackError> {
         let p = principal(ctx)?;
-        let db = &self.state.db;
-        typed(admin::list_users(db, &p).await)
+        let mut q = admin::DirQuery::text(a.q.as_deref());
+        q.role = a
+            .role
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(String::from);
+        q.disabled = a.disabled;
+        typed(
+            Box::pin(admin::dir_page(
+                &self.state.db,
+                &p,
+                "user",
+                q,
+                &a.page.unwrap_or_default(),
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
     }
 
     async fn admin_set_role(
@@ -796,16 +836,24 @@ impl ProcedureRegistry for Procedures {
         typed(crate::roles::set_role(&self.state.db, &p, &a.user, role).await)
     }
 
-    async fn admin_teams(
+    async fn team_page(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        _a: admin_teams::Args,
-        _z: admin_teams::Authorized,
-    ) -> Result<admin_teams::Output, CratestackError> {
+        a: team_page::Args,
+        _z: team_page::Authorized,
+    ) -> Result<team_page::Output, CratestackError> {
         let p = principal(ctx)?;
-        let db = &self.state.db;
-        typed(admin::list_teams(db, &p).await)
+        typed(
+            Box::pin(admin::team_page(
+                &self.state.db,
+                &p,
+                a.q.as_deref(),
+                &a.page.unwrap_or_default(),
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
     }
 
     async fn admin_add_team(
@@ -828,16 +876,27 @@ impl ProcedureRegistry for Procedures {
         }))
     }
 
-    async fn admin_team_members(
+    async fn team_member_page(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        a: admin_team_members::Args,
-        _z: admin_team_members::Authorized,
-    ) -> Result<admin_team_members::Output, CratestackError> {
+        a: team_member_page::Args,
+        _z: team_member_page::Authorized,
+    ) -> Result<team_member_page::Output, CratestackError> {
         let p = principal(ctx)?;
-        let db = &self.state.db;
-        typed(admin::list_members(db, &p, &a.team).await)
+        typed(
+            Box::pin(admin::member_page(
+                &self.state.db,
+                &p,
+                &a.team,
+                a.kind.as_deref(),
+                a.role.as_deref(),
+                a.q.as_deref(),
+                &a.page.unwrap_or_default(),
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
     }
 
     async fn admin_add_member(
@@ -896,28 +955,59 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
-    async fn admin_cooks(
+    async fn cook_page(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        _a: admin_cooks::Args,
-        _z: admin_cooks::Authorized,
-    ) -> Result<admin_cooks::Output, CratestackError> {
+        a: cook_page::Args,
+        _z: cook_page::Authorized,
+    ) -> Result<cook_page::Output, CratestackError> {
         let p = principal(ctx)?;
-        let db = &self.state.db;
-        typed(admin::list_principals(db, &p, "agent").await)
+        let mut q = admin::DirQuery::text(a.q.as_deref());
+        q.team = a
+            .team
+            .as_deref()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+        q.owner = a
+            .owner
+            .as_deref()
+            .map(|o| o.trim().to_lowercase())
+            .filter(|o| !o.is_empty());
+        q.disabled = a.disabled;
+        typed(
+            Box::pin(admin::dir_page(
+                &self.state.db,
+                &p,
+                "agent",
+                q,
+                &a.page.unwrap_or_default(),
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
     }
 
-    async fn admin_fires(
+    async fn fire_page(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        _a: admin_fires::Args,
-        _z: admin_fires::Authorized,
-    ) -> Result<admin_fires::Output, CratestackError> {
+        a: fire_page::Args,
+        _z: fire_page::Authorized,
+    ) -> Result<fire_page::Output, CratestackError> {
         let p = principal(ctx)?;
-        let db = &self.state.db;
-        typed(admin::list_principals(db, &p, "relay").await)
+        let q = admin::DirQuery::text(a.q.as_deref());
+        typed(
+            Box::pin(admin::dir_page(
+                &self.state.db,
+                &p,
+                "relay",
+                q,
+                &a.page.unwrap_or_default(),
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
     }
 
     async fn admin_add_cook(
@@ -980,19 +1070,49 @@ impl ProcedureRegistry for Procedures {
         typed(admin::set_disabled(db, &p, &a.name, !a.enabled).await)
     }
 
-    async fn admin_wake_targets(
+    async fn wake_target_page(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        a: admin_wake_targets::Args,
-        _z: admin_wake_targets::Authorized,
-    ) -> Result<admin_wake_targets::Output, CratestackError> {
+        a: wake_target_page::Args,
+        _z: wake_target_page::Authorized,
+    ) -> Result<wake_target_page::Output, CratestackError> {
         let p = principal(ctx)?;
-        let db = &self.state.db;
         typed(
-            admin::list_wake_targets(db, &p, &a.cook)
-                .await
-                .map(wake_target_views),
+            Box::pin(admin::wake_target_page(
+                &self.state.db,
+                &p,
+                &a.cook,
+                &a.page.unwrap_or_default(),
+            ))
+            .await
+            .map(|(items, next)| {
+                let items = wake_target_views(serde_json::Value::Array(items));
+                crate::paging::page_json(items.as_array().cloned().unwrap_or_default(), next)
+            }),
+        )
+    }
+    async fn forge_unfollowed_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: forge_unfollowed_page::Args,
+        _z: forge_unfollowed_page::Authorized,
+    ) -> Result<forge_unfollowed_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        if !p.is_user() || !p.is_super_admin() {
+            return typed(Err(Error::Forbidden(
+                "only a super-admin sees the repositories no pot follows".into(),
+            )));
+        }
+        typed(
+            Box::pin(crate::forge::unfollowed::page(
+                &self.state.db,
+                a.q.as_deref(),
+                &a.page,
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
         )
     }
 
@@ -1446,14 +1566,40 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<cloud_run_page::Output, CratestackError> {
         let p = principal(ctx)?;
         typed(
-            stations::run_page(
+            Box::pin(stations::page(
                 &self.state.db,
                 &p,
                 a.project.as_deref(),
                 a.cook.as_deref(),
+                Some("cloud-run"),
                 a.live,
+                None,
                 &a.page,
-            )
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
+    }
+
+    async fn station_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: station_page::Args,
+        _z: station_page::Authorized,
+    ) -> Result<station_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            Box::pin(stations::page(
+                &self.state.db,
+                &p,
+                a.project.as_deref(),
+                a.cook.as_deref(),
+                a.kind.as_deref(),
+                a.live,
+                a.q.as_deref(),
+                &a.page.unwrap_or_default(),
+            ))
             .await
             .map(|(items, next)| crate::paging::page_json(items, next)),
         )
@@ -1514,6 +1660,29 @@ impl ProcedureRegistry for Procedures {
                 a.limit,
             )
             .await,
+        )
+    }
+
+    async fn activity_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: activity_page::Args,
+        _z: activity_page::Authorized,
+    ) -> Result<activity_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            Box::pin(activity::page(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.station.as_deref(),
+                a.task.as_deref(),
+                a.cook.as_deref(),
+                &a.page.unwrap_or_default(),
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
         )
     }
 
@@ -1846,25 +2015,29 @@ impl ProcedureRegistry for Procedures {
         typed(files::get(db, st, &p, &a.id).await)
     }
 
-    async fn file_list(
+    async fn file_page(
         &self,
         _db: &Db,
         ctx: &CratestackContext,
-        a: file_list::Args,
-        _z: file_list::Authorized,
-    ) -> Result<file_list::Output, CratestackError> {
+        a: file_page::Args,
+        _z: file_page::Authorized,
+    ) -> Result<file_page::Output, CratestackError> {
         let p = principal(ctx)?;
         let (db, st) = (&self.state.db, &self.state);
         typed(
-            files::list(
+            Box::pin(files::page(
                 db,
                 st,
                 &p,
                 &a.project,
                 a.task.as_deref(),
                 a.question.as_deref(),
-            )
-            .await,
+                a.status.as_deref(),
+                a.q.as_deref(),
+                &a.page.unwrap_or_default(),
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
         )
     }
 
@@ -1925,6 +2098,28 @@ impl ProcedureRegistry for Procedures {
                 a.before,
             )
             .await,
+        )
+    }
+
+    async fn usage_cook_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: usage_cook_page::Args,
+        _z: usage_cook_page::Authorized,
+    ) -> Result<usage_cook_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            Box::pin(crate::usage::cook_page(
+                &self.state.db,
+                &p,
+                a.project.as_deref(),
+                a.days,
+                a.q.as_deref(),
+                &a.page,
+            ))
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
         )
     }
 

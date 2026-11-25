@@ -173,3 +173,16 @@ type RoleView {
   role_source String
   note String
 }
+
+/// A repository that sends forge events although no pot follows it.
+type ForgeUnfollowedView {
+  provider String
+  /// owner/name.
+  repo String
+  url String
+  installation Int?
+  /// Events received so far.
+  events Int
+  first_seen String
+  last_seen String
+}

@@ -168,7 +168,7 @@ async fn activity_is_recorded_coalesced_and_private() {
         .mcp(&alice, "list_activity", json!({"project": "PAY"}))
         .await;
     assert_ne!(r["isError"], true, "{r}");
-    let l = common::TestApp::payload(&r);
+    let l = common::TestApp::payload(&r)["items"].clone();
     let l = l.as_array().unwrap();
     assert_eq!(l.len(), 2, "{l:?}");
     assert_eq!(l[0]["files"], json!(["c.txt"]));
@@ -182,15 +182,17 @@ async fn activity_is_recorded_coalesced_and_private() {
             json!({"project": "PAY", "station": "st_other"}),
         )
         .await;
-    assert_eq!(common::TestApp::payload(&r), json!([]));
+    assert_eq!(common::TestApp::payload(&r)["items"], json!([]));
     let r = app
         .mcp(
             &alice,
             "list_activity",
-            json!({"project": "PAY", "limit": 1}),
+            json!({"project": "PAY", "page": {"limit": 1}}),
         )
         .await;
-    assert_eq!(common::TestApp::payload(&r).as_array().unwrap().len(), 1);
+    let one = common::TestApp::payload(&r);
+    assert_eq!(one["items"].as_array().unwrap().len(), 1);
+    assert!(one["nextCursor"].is_string(), "{one}");
 
     // not part of the change feed agents poll
     let r = app

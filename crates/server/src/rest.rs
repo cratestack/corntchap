@@ -179,55 +179,29 @@ async fn users_list(
     Authn(p): Auth,
     Query(q): Query<HashMap<String, String>>,
 ) -> J {
-    dir_list(&q, |d| {
-        let (db, p) = (st.db.clone(), p.clone());
-        async move { admin::list_users_q(&db, &p, &d).await }
-    })
-    .await
+    dir_list(&st.db, &p, "user", &q).await
 }
 
 /// A directory list (users, agents) as the bare array, or a page when `limit` is given.
-async fn dir_list<F, Fut>(q: &HashMap<String, String>, run: F) -> J
-where
-    F: FnOnce(admin::DirQuery) -> Fut,
-    Fut: std::future::Future<Output = Result<Vec<Value>>>,
-{
-    let text = q
-        .get("q")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+async fn dir_list(
+    db: &sqlx::PgPool,
+    p: &crate::state::Principal,
+    kind: &str,
+    q: &HashMap<String, String>,
+) -> J {
+    let dir = admin::DirQuery::text(q.get("q").map(String::as_str));
     let Some(limit) = q.get("limit").and_then(|v| v.parse::<i64>().ok()) else {
-        return ok(Value::Array(
-            run(admin::DirQuery {
-                q: text,
-                after: None,
-                limit: None,
-            })
-            .await?,
-        ));
+        return ok(Value::Array(if kind == "user" {
+            admin::list_users_q(db, p, &dir).await?
+        } else {
+            admin::list_principals_q(db, p, kind, &dir).await?
+        }));
     };
-    let paging = crate::paging::paging_raw(
-        Some(limit),
-        q.get("cursor").map(String::as_str),
-        "name",
-        1,
-        crate::paging::DEFAULT_LIMIT,
-        crate::paging::MAX_LIMIT,
-    )?;
-    let rows = run(admin::DirQuery {
-        q: text,
-        after: paging.key(0),
-        limit: Some(paging.fetch()),
-    })
-    .await?;
-    let rows = rows
-        .into_iter()
-        .map(|v| {
-            let k = vec![v["name"].as_str().map(str::to_string)];
-            (v, k)
-        })
-        .collect();
-    let (items, next) = crate::paging::finish(rows, &paging);
+    let page = cratestack::CursorPageInput {
+        limit: Some(limit),
+        cursor: q.get("cursor").cloned(),
+    };
+    let (items, next) = admin::dir_page(db, p, kind, dir, &page).await?;
     ok(crate::paging::page_json(items, next))
 }
 /// Change a person (super-admins only): `{"role": "super_admin" | "orchestrator" | "member"}` and/or
@@ -1143,11 +1117,7 @@ async fn agents_list(
     Authn(p): Auth,
     Query(q): Query<HashMap<String, String>>,
 ) -> J {
-    dir_list(&q, |d| {
-        let (db, p) = (st.db.clone(), p.clone());
-        async move { admin::list_principals_q(&db, &p, "agent", &d).await }
-    })
-    .await
+    dir_list(&st.db, &p, "agent", &q).await
 }
 async fn agents_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Value>) -> J {
     ok(admin::create_principal(

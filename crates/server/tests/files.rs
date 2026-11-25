@@ -273,7 +273,8 @@ async fn upload_watch_link_download() {
     let all = ok(
         &app.mcp(&a1, "list_files", json!({"project": "PAY"})).await,
         "list",
-    );
+    )["items"]
+        .clone();
     assert_eq!(all.as_array().unwrap().len(), 4);
     let on_task = ok(
         &app.mcp(
@@ -283,7 +284,8 @@ async fn upload_watch_link_download() {
         )
         .await,
         "task list",
-    );
+    )["items"]
+        .clone();
     assert_eq!(on_task.as_array().unwrap().len(), 2);
     let e = refused(
         &app.mcp(&a1, "delete_file", json!({"id": "PAY-F3"})).await,

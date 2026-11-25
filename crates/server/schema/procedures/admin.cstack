@@ -5,10 +5,14 @@ part of "../corntchap.cstack"
 // manage their own teams, pots, cooks and fires (team owners are orchestrators); people manage the cooks and
 // fires they own. Cooks (agents) calling these get "forbidden" except for reading what they can already see.
 
-/// People who can sign in: super-admins see all details; orchestrators the directory (handle, display name, role).
-procedure adminUsers(): UserView[]
+/// A page of the people who can sign in, by handle: super-admins see all details; orchestrators the directory (handle, display name, role).
+/// @param q Only handles or display names that contain this (any case).
+/// @param role Only people with this role: super_admin, orchestrator or member.
+/// @param disabled true: only people who are disabled; false: only those who are not (super-admins; others see enabled people only).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure userPage(q: String?, role: String?, disabled: Boolean?, page: CursorPageInput?): CursorPage<UserView>
   @allow(auth() != null)
-  @mcp(tool: "list_users", description: "People who can sign in. Super-admins see everyone with their sign-in state; orchestrators get the directory (handle, display name and role, to add people to their teams); members are refused.")
+  @mcp(tool: "list_users", description: "People who can sign in, a page at a time (items, nextCursor). Super-admins see everyone with their sign-in state; orchestrators get the directory (handle, display name and role, to add people to their teams); members are refused. Narrow with q, role or disabled; pass page: {cursor: nextCursor} for the next page.")
 
 /// Set a person's role (super-admins only): super_admin, orchestrator or member.
 /// @param user The person's handle.
@@ -17,10 +21,12 @@ mutation procedure adminSetRole(user: String, role: String): RoleView
   @allow(auth() != null)
   @mcp(tool: "set_role", description: "Set a person's role (super-admins only): super_admin, orchestrator or member. The role becomes manual (the identity provider no longer changes it). The last super-admin who can sign in cannot be demoted. A demoted team owner keeps the owner row but loses its powers until they are an orchestrator again.")
 
-/// Teams you belong to (super-admins: all), with their pots.
-procedure adminTeams(): TeamView[]
+/// A page of the teams you belong to (super-admins: all), by name, with their pots.
+/// @param q Only team names that contain this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure teamPage(q: String?, page: CursorPageInput?): CursorPage<TeamView>
   @allow(auth() != null)
-  @mcp(tool: "list_teams", description: "Teams you belong to (super-admins: all), with your role, how many chefs and its pots.")
+  @mcp(tool: "list_teams", description: "Teams you belong to (super-admins: all), a page at a time (items, nextCursor), with your role, how many chefs and its pots. Narrow with q; pass page: {cursor: nextCursor} for the next page.")
 
 /// Create a team (orchestrators and super-admins); you become its owner.
 /// @param name Team name, e.g. payments.
@@ -28,11 +34,15 @@ mutation procedure adminAddTeam(name: String): TeamCreated
   @allow(auth() != null)
   @mcp(tool: "create_team", description: "Create a team (orchestrators and super-admins); the person creating it becomes its owner.")
 
-/// A team's chefs: the people and cooks in it.
+/// A page of a team's chefs: the people and cooks in it, by handle.
 /// @param team Team name.
-procedure adminTeamMembers(team: String): MemberView[]
+/// @param kind Only people (user) or only cooks (agent).
+/// @param role Only owners (owner) or only chefs (chef).
+/// @param q Only handles or display names that contain this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure teamMemberPage(team: String, kind: String?, role: String?, q: String?, page: CursorPageInput?): CursorPage<MemberView>
   @allow(auth() != null)
-  @mcp(tool: "list_team_members", description: "A team's chefs (people and cooks) with their role (chef or owner). fireAndForget cooks take ready work, open a PR and stop: do not message, ask or assign reviews to them; give them a task.")
+  @mcp(tool: "list_team_members", description: "A team's chefs (people and cooks) with their role (chef or owner), a page at a time (items, nextCursor). Narrow with kind (user or agent), role (owner or chef) or q. fireAndForget cooks take ready work, open a PR and stop: do not message, ask or assign reviews to them; give them a task.")
 
 /// Add a person or a cook to a team. Team owners (orchestrators) and super-admins add anyone; a team member (chef) may add a cook they own. A cook joins only with its owner's say-so. Only an orchestrator or a super-admin can be made an owner.
 /// @param team Team name.
@@ -59,15 +69,22 @@ mutation procedure adminAddProject(team: String, key: String, name: String, repo
   @allow(auth() != null)
   @mcp(tool: "create_project", description: "Create a pot (project) in a team you own (super-admins: any team).")
 
-/// Cooks (agents) you own (super-admins: all).
-procedure adminCooks(): PrincipalView[]
+/// A page of the cooks (agents) you own (super-admins: all), by name.
+/// @param q Only names that contain this (any case).
+/// @param team Only cooks in this team.
+/// @param owner Only cooks owned by this person (handle).
+/// @param disabled true: only disabled cooks; false: only enabled ones.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure cookPage(q: String?, team: String?, owner: String?, disabled: Boolean?, page: CursorPageInput?): CursorPage<PrincipalView>
   @allow(auth() != null)
-  @mcp(tool: "list_cooks", description: "Cooks (agents) you own (super-admins: all) with their runtime, leases held and last activity. fireAndForget cooks (cloud targets only) take ready work, open a PR and stop: give them a task rather than messaging them.")
+  @mcp(tool: "list_cooks", description: "Cooks (agents) you own (super-admins: all), a page at a time (items, nextCursor), with their runtime, leases held and last activity. Narrow with q, team, owner or disabled. fireAndForget cooks (cloud targets only) take ready work, open a PR and stop: give them a task rather than messaging them.")
 
-/// Fires (relays) you own (super-admins: all).
-procedure adminFires(): PrincipalView[]
+/// A page of the fires (relays) you own (super-admins: all), by name.
+/// @param q Only names that contain this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure firePage(q: String?, page: CursorPageInput?): CursorPage<PrincipalView>
   @allow(auth() != null)
-  @mcp(tool: "list_fires", description: "Fires (relays that wake local cooks) you own (super-admins: all).")
+  @mcp(tool: "list_fires", description: "Fires (relays that wake local cooks) you own (super-admins: all), a page at a time (items, nextCursor). Narrow with q.")
 
 /// Create a cook (people only). Returns its token once.
 /// @param name Cook name, e.g. codex-laptop.
@@ -98,11 +115,18 @@ mutation procedure adminSetEnabled(name: String, enabled: Boolean): EnabledView
   @allow(auth() != null)
   @mcp(tool: "set_enabled", description: "Disable (enabled=false) or enable again a cook or fire you own (super-admins: any).")
 
-/// Wake targets of a cook you own.
+/// A page of the wake targets of a cook you own.
 /// @param cook The cook's name.
-procedure adminWakeTargets(cook: String): WakeTargetView[]
+/// @param page limit (default 25, at most 200) and cursor.
+procedure wakeTargetPage(cook: String, page: CursorPageInput?): CursorPage<WakeTargetView>
   @allow(auth() != null)
-  @mcp(tool: "list_wake_targets", description: "How an idle cook you own is woken: relay, webhook or github-comment targets, with their pot/label filters.")
+  @mcp(tool: "list_wake_targets", description: "How an idle cook you own is woken: relay, webhook or github-comment targets, with their pot/label filters, a page at a time (items, nextCursor).")
+
+/// A page of the repositories that send forge events although no pot follows them, most recent first (super-admins only). For the console (not an MCP tool).
+/// @param q Only repositories whose name contains this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure forgeUnfollowedPage(q: String?, page: CursorPageInput): CursorPage<ForgeUnfollowedView>
+  @allow(auth() != null)
 
 /// Add a wake target to a cook you own. Same rules as connect_cloud: a cook's owner may add a
 /// claude-routine (Anthropic's trigger host) or github-comment; webhooks, Coder and any other URL are a super-admin's call.

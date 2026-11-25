@@ -405,7 +405,8 @@ async fn the_listings_show_fire_and_forget() {
             .mcp(&w.alice, "list_team_members", json!({"team": "acme"}))
             .await,
         "members",
-    );
+    )["items"]
+        .clone();
     let flag = |name: &str| {
         members
             .as_array()
@@ -418,7 +419,7 @@ async fn the_listings_show_fire_and_forget() {
     assert_eq!(flag("rita"), true, "{members}");
     assert_eq!(flag("bob"), false);
     assert_eq!(flag("alice"), false);
-    let cooks = ok(&w.app.mcp(&w.alice, "list_cooks", json!({})).await, "cooks");
+    let cooks = ok(&w.app.mcp(&w.alice, "list_cooks", json!({})).await, "cooks")["items"].clone();
     let by = |name: &str| {
         cooks
             .as_array()
@@ -435,7 +436,7 @@ async fn the_listings_show_fire_and_forget() {
         .execute(&w.app.state.db)
         .await
         .unwrap();
-    let cooks = ok(&w.app.mcp(&w.alice, "list_cooks", json!({})).await, "cooks");
+    let cooks = ok(&w.app.mcp(&w.alice, "list_cooks", json!({})).await, "cooks")["items"].clone();
     let rita = cooks
         .as_array()
         .unwrap()

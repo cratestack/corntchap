@@ -442,7 +442,7 @@ async fn claim_next_routes_by_the_cooks_repository_scope() {
         json!({"cook": "webber", "project": "PAY", "repos": "backend"}),
     )
     .await;
-    let cooks = tool(&w.app, &w.root, "list_cooks", json!({})).await;
+    let cooks = tool(&w.app, &w.root, "list_cooks", json!({})).await["items"].clone();
     let b = cooks
         .as_array()
         .unwrap()

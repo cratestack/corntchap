@@ -350,7 +350,8 @@ async fn a_routine_run_gets_a_station_with_its_session_url() {
             .mcp(&w.root, "list_stations", json!({"cook": "claude-web"}))
             .await,
         "list_stations",
-    );
+    )["items"]
+        .clone();
     let st = list
         .as_array()
         .unwrap()
@@ -372,7 +373,8 @@ async fn a_routine_run_gets_a_station_with_its_session_url() {
             )
             .await,
         "list ended",
-    );
+    )["items"]
+        .clone();
     assert!(live.as_array().unwrap().is_empty(), "{live}");
 
     // claim and comment with the station: attributed, with the URL
@@ -768,14 +770,16 @@ async fn a_failed_delivery_keeps_the_station_of_a_run_that_may_have_started() {
         ok(
             &w.app.mcp(&w.root, "list_stations", args).await,
             "list_stations",
-        )
+        )["items"]
+            .clone()
     };
     let default = list(json!({"cook": "claude-web"})).await;
     assert!(default.as_array().unwrap().is_empty(), "{default}");
     let runs_listed = list(json!({"cook": "claude-web", "kind": "cloud-run"})).await;
     assert_eq!(runs_listed.as_array().unwrap().len(), 1, "{runs_listed}");
     assert_eq!(runs_listed[0]["id"], json!(run.reference));
-    let capped = list(json!({"cook": "claude-web", "kind": "cloud-run", "limit": 1})).await;
+    let capped =
+        list(json!({"cook": "claude-web", "kind": "cloud-run", "page": {"limit": 1}})).await;
     assert_eq!(capped.as_array().unwrap().len(), 1);
 
     // the run's later calls name that station: they are attributed to it, and it reopens
