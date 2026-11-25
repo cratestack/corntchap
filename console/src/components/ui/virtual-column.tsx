@@ -2,6 +2,7 @@ import { useId, type Key, type ReactNode, type Ref } from "react";
 import type { StateSnapshot, VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
 import { VirtualList } from "./virtual-list";
+import type { VirtualScroll } from "./virtual-shared";
 
 export interface VirtualColumnProps<T> {
   /** The column's title row (name, count). */
@@ -19,6 +20,11 @@ export interface VirtualColumnProps<T> {
   /** The list's handle (`getState` to remember where it was scrolled) and the snapshot to start from. */
   listRef?: Ref<VirtuosoHandle>;
   restoreStateFrom?: StateSnapshot | undefined;
+  /**
+   * `"window"` (default): the column is as tall as its cards and the page scrolls through it.
+   * `"own"`: the column fills its parent's height and its cards scroll inside it (the board).
+   */
+  scroll?: Extract<VirtualScroll, string>;
   /** On the wrapper around the cards (padding). */
   bodyClassName?: string | undefined;
   /** The column surface; size it with the grid or flex it sits in. */
@@ -27,18 +33,18 @@ export interface VirtualColumnProps<T> {
 }
 
 /**
- * One board column: a header slot and a virtualized stack of cards. The column is as tall as its cards and the page
- * scrolls through it (no scroller of its own), so a screen of columns scrolls as one.
+ * One board column: a header slot and a virtualized stack of cards. By default the column is as tall as its cards and
+ * the page scrolls through it; with `scroll="own"` it fills its parent and the cards scroll inside it, under the header.
  */
-export function VirtualColumn<T>({ header, headerClassName, items, itemKey, renderItem, empty, onEndReached, footer, listRef, restoreStateFrom, bodyClassName, className, "aria-label": label }: VirtualColumnProps<T>) {
+export function VirtualColumn<T>({ header, headerClassName, items, itemKey, renderItem, empty, onEndReached, footer, listRef, restoreStateFrom, scroll = "window", bodyClassName, className, "aria-label": label }: VirtualColumnProps<T>) {
   const id = useId();
   return (
-    <section aria-labelledby={label ? undefined : id} aria-label={label} className={cn("flex min-w-0 flex-col rounded-[14px] bg-column", className)}>
+    <section aria-labelledby={label ? undefined : id} aria-label={label} className={cn("flex min-w-0 flex-col rounded-[14px] bg-column", scroll === "own" && "h-full min-h-0", className)}>
       <div id={id} className={headerClassName}>
         {header}
       </div>
-      <div className={bodyClassName}>
-        <VirtualList {...(listRef ? { ref: listRef } : {})} {...(restoreStateFrom ? { restoreStateFrom } : {})} items={items} itemKey={itemKey} renderItem={renderItem} scroll="window" empty={empty} onEndReached={onEndReached} footer={footer} itemClassName="pb-2" defaultItemHeight={96} />
+      <div className={cn(scroll === "own" && "min-h-0 flex-1", bodyClassName)}>
+        <VirtualList {...(listRef ? { ref: listRef } : {})} {...(restoreStateFrom ? { restoreStateFrom } : {})} items={items} itemKey={itemKey} renderItem={renderItem} scroll={scroll} empty={empty} onEndReached={onEndReached} footer={footer} itemClassName="pb-2" defaultItemHeight={96} />
       </div>
     </section>
   );

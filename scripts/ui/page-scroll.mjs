@@ -2,9 +2,10 @@
 // stands for a page (board, activity feed, users table, the pass, the virtualized lists, ListPage, FilterBar) at 320, 375, 768, 1280 and 1920 px:
 //   - the page does not scroll horizontally (document.scrollingElement.scrollWidth <= clientWidth);
 //   - no element has a vertical scroller of its own (computed overflow-y auto/scroll holding more than it shows),
-//     except the chat thread (`[role=log]`), which is anchored to the bottom by design;
-//   - the board shows its five columns side by side only where all five fit (1920: one row, no tab strip), and a tab
-//     strip with one column everywhere narrower (a wrapping grid would strand a column below one that pages forever).
+//     except the chat thread (`[role=log]`) and the board's columns (`[role=region][aria-label=Board]`, its row scrolls
+//     sideways and each column inside it scrolls up and down), which are scrollers by design;
+//   - the board fills the screen below its header, so the page does not scroll vertically either; from 640px up it has
+//     five columns side by side (a row, never wrapped), on a phone one column per screen and a header strip of five.
 // Usage: pnpm -C console build-storybook && node scripts/ui/page-scroll.mjs   (serves console/storybook-static itself)
 import { chromium, serve } from "./storybook.mjs";
 
@@ -18,7 +19,7 @@ const PAGES = [
   ["console-board--tablet", "[role=listitem]"],
   ["console-board--paged-laptop", "[role=listitem]"],
   ["console-board--paged-ten-thousand-per-column", "[role=listitem]"],
-  ["console-board--served-paged", "[role=tablist], [role=listitem]"],
+  ["console-board--served-paged", "[role=listitem]"],
   ["console-board--phone", "[role=listitem]"],
   ["console-board--loading", "[aria-busy=true]"],
   ["console-board--empty", "text=The board is bare"],
@@ -45,8 +46,8 @@ const PAGES = [
   ["console-reviewslist--show-more", "[role=listitem]"],
   ["console-sourcelist--show-more-button", "[role=listitem]"],
 ];
-// Inner scrollers that are the point: the chat thread (VirtualThread inside the pass's `role=log`).
-const ALLOWED = "[role=log], [role=log] *";
+// Inner scrollers that are the point: the chat thread (VirtualThread inside the pass's `role=log`) and the board's columns.
+const ALLOWED = "[role=log], [role=log] *, [role=region][aria-label=Board], [role=region][aria-label=Board] *";
 
 const { base, close } = await serve();
 const browser = await chromium.launch();
@@ -76,20 +77,22 @@ for (const [id, ready] of PAGES) {
         const o = getComputedStyle(el).overflowY;
         if ((o === "auto" || o === "scroll") && el.scrollHeight > el.clientHeight + 1) panes.push(`${el.tagName.toLowerCase()}.${String(el.className).split(" ").slice(0, 3).join(".")} ${el.scrollHeight}>${el.clientHeight}`);
       }
-      // the board: its column sections (side by side in the region, or the one in the tab panel) and whether there are tabs
-      const cols = [...document.querySelectorAll("[role=region][aria-label=Board] > section, [role=tabpanel] > section")].map((e) => {
+      // the board: its column sections (one row, or one per screen on a phone), the header strip, and whether the page scrolls down
+      const cols = [...document.querySelectorAll("[role=region][aria-label=Board] > section")].map((e) => {
         const b = e.getBoundingClientRect();
         return { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width) };
       });
-      const tabs = document.querySelectorAll("[role=tablist] [role=tab]").length;
-      return { sw: root.scrollWidth, cw: root.clientWidth, panes, cols, tabs };
+      const tabs = [...document.querySelectorAll("[role=tablist] [role=tab]")].filter((e) => e.getBoundingClientRect().width > 0).length;
+      return { sw: root.scrollWidth, cw: root.clientWidth, sh: root.scrollHeight, ch: root.clientHeight, panes, cols, tabs };
     }, ALLOWED);
     let layout = "";
     if (id.startsWith("console-board--") && r.cols.length > 0) {
-      // all five fit only at 1920 (the story's board is 1856px wide; five need 1416)
-      const across = r.cols.length === 5 && r.tabs === 0 && r.cols.every((c, i) => c.y === r.cols[0].y && (i === 0 || c.x >= r.cols[i - 1].x + r.cols[i - 1].w));
-      const tabbed = r.cols.length === 1 && r.tabs === 5;
-      if (width >= 1920 ? !across : !tabbed) layout = ` board layout wrong: ${width >= 1920 ? "want five across" : "want a tab strip and one column"}, got ${JSON.stringify(r)}`;
+      const row = r.cols.length === 5 && r.cols.every((c, i) => c.y === r.cols[0].y && (i === 0 || c.x >= r.cols[i - 1].x + r.cols[i - 1].w));
+      const full = r.sh - r.ch <= 1;
+      if (!row) layout = ` board layout wrong: want five columns in a row, got ${JSON.stringify(r.cols)}`;
+      else if (width >= 640 && r.tabs !== 0) layout = ` board layout wrong: a header strip at ${width}px`;
+      else if (width < 640 && (r.tabs !== 5 || r.cols.some((c) => Math.abs(c.w - (width - 32)) > 1))) layout = ` board layout wrong: want a header strip of five and one-screen columns, got tabs=${r.tabs} ${JSON.stringify(r.cols)}`;
+      else if (!full && !id.endsWith("loading")) layout = ` board layout wrong: the page scrolls down (${r.sh} > ${r.ch})`;
     }
     const ok = r.sw <= r.cw && r.panes.length === 0 && errors.length === 0 && !layout;
     if (!ok) failed++;

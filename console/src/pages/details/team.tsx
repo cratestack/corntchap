@@ -139,7 +139,7 @@ export function TeamDetailsPage() {
                   </>
                 }
                 renderItem={(p) => (
-                  <GroupRow label={p.name} hint={<span className="font-mono">{p.key} · {p.open + p.claimed + p.blocked} not served</span>} to={`/pots/${p.key}/about`} />
+                  <GroupRow label={p.name} hint={<span className="font-mono">{p.key} · {p.ready + p.claimed + p.blocked} not served</span>} to={`/pots/${p.key}/about`} />
                 )}
               />
             </Group>

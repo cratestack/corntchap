@@ -450,7 +450,7 @@ export function PotsAdminPage() {
     },
     { id: "team", header: "Team", cell: (p) => p.team ?? "-" },
     { id: "lease", header: "Lease", className: "font-mono text-[12px]", cell: (p) => `${Math.round(p.lease_ttl_s / 60)} min` },
-    { id: "unserved", header: "Not served", className: "text-right font-mono text-[12.5px]", cell: (p) => p.open + p.claimed + p.blocked },
+    { id: "unserved", header: "Not served", className: "text-right font-mono text-[12.5px]", cell: (p) => p.ready + p.claimed + p.blocked },
     {
       id: "actions",
       header: <span className="sr-only">Actions</span>,
@@ -500,7 +500,7 @@ export function PotsAdminPage() {
               </span>
             </span>
             <span className="text-right font-mono text-[12.5px] leading-tight">
-              <b>{p.open + p.claimed + p.blocked}</b>
+              <b>{p.ready + p.claimed + p.blocked}</b>
               <span className="block text-[10px] uppercase tracking-wider text-muted-foreground">not served</span>
             </span>
             <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />

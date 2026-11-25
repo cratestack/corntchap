@@ -294,6 +294,38 @@ async fn every_column_keyset_walks_once_with_inserts_mid_walk() {
     assert_eq!(st, 400);
 }
 
+/// The pot's header counts (`/projects`: ready, claimed, blocked) are the board columns' totals, including a task
+/// waiting on a dependency (open, not blocked) and a claimed one whose lease lapsed (ready, not on the fire).
+#[tokio::test]
+async fn pot_counts_are_the_column_totals() {
+    let w = board().await;
+    let (st, projects) = w.app.get(&w.alice, "/projects").await;
+    assert_eq!(st, 200, "{projects}");
+    let pay = projects
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["key"] == "PAY")
+        .unwrap();
+    for (field, bucket) in [
+        ("ready", "ready"),
+        ("claimed", "claimed"),
+        ("blocked", "waiting"),
+        ("done", "done"),
+        ("tossed", "cancelled"),
+    ] {
+        assert_eq!(
+            pay[field].as_i64().unwrap(),
+            w.total(bucket, json!({})).await,
+            "{field} vs the {bucket} column: {pay}"
+        );
+    }
+    // the waiting column holds blocked tasks and one on a dependency; the lapsed lease is ready, not on the fire
+    assert_eq!(pay["blocked"], 4, "{pay}");
+    assert_eq!(pay["claimed"], 3, "{pay}");
+    assert_eq!(pay["ready"], 25, "{pay}");
+}
+
 #[tokio::test]
 async fn totals_follow_the_holder_status_and_label_filters() {
     let w = board().await;

@@ -443,7 +443,9 @@ pub async fn get_task_n(
 }
 
 /// SQL: one pot as the console and `list_projects` show it, with its counts. Needs alias `pr`
-/// (projects); `$2` is the caller.
+/// (projects); `$2` is the caller. `ready`, `claimed` and `blocked` (the console's "waiting") count the
+/// board's columns by `bucket_sql`, so they partition the unserved tasks and equal each column's `total`;
+/// `open` is the raw status.
 fn project_summary_sql() -> String {
     format!(
         "jsonb_build_object('key', pr.key, 'name', pr.name, 'repo_url', pr.repo_url,
@@ -452,10 +454,9 @@ fn project_summary_sql() -> String {
             'lease_ttl_s', extract(epoch from pr.lease_ttl)::float8,
             'guide', pr.guide,
             'open', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'open'),
-            'ready', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'open'
-                and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))),
-            'claimed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'claimed'),
-            'blocked', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'blocked'),
+            'ready', (select count(*) from tasks t where t.project_id = pr.id and {ready}),
+            'claimed', (select count(*) from tasks t where t.project_id = pr.id and {claimed}),
+            'blocked', (select count(*) from tasks t where t.project_id = pr.id and {waiting}),
             'done', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'done'),
             'tossed', (select count(*) from tasks t where t.project_id = pr.id and t.status = 'cancelled'),
             'open_questions', (select count(*) from questions q where q.project_id = pr.id and q.status = 'open'),
@@ -467,6 +468,10 @@ fn project_summary_sql() -> String {
                   and m.seq > coalesce((select r.last_seq from pass_reads r where r.principal_id = $2 and r.project_id = pr.id
                       and r.conversation = case when m.to_principal is null then 'pot' else m.author_id::text end), 0)))",
         repos = crate::repos::repos_json_sql("pr.id"),
+        // the board's own columns (`bucket_sql`), so a pot's counts and its columns' totals always agree
+        ready = bucket_sql("ready").expect("known bucket").0,
+        claimed = bucket_sql("claimed").expect("known bucket").0,
+        waiting = bucket_sql("waiting").expect("known bucket").0,
     )
 }
 

@@ -16,27 +16,28 @@ const meta = {
   title: "Console/Board",
   component: Fixture,
   args: { loading: false, source: tasks, columns: { groups: { ready: [], claimed: [], waiting: [], done: [], cancelled: [] } } satisfies BoardColumns, bare: false, selected: null, onOpen: () => undefined, onNew: () => undefined, showMenu: true },
-  decorators: [(Story) => <div className="min-h-dvh bg-background px-4 pt-4 md:px-5 lg:px-8"><Story /></div>],
+  // the page around a board as the pot page has it: its padding, and the phone's tab bar under it
+  decorators: [(Story) => <div className="min-h-dvh bg-background pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0"><div className="px-4 pt-3 pb-6 md:px-5 md:pt-6 md:pb-16 lg:px-8"><Story /></div></div>],
 } satisfies Meta<typeof Fixture>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * 2,000 cards a column. Where all five columns fit side by side (a board about 1416px wide or more) they sit side by
- * side and the page scrolls through them; anywhere narrower, a tab strip and one column at a time.
+ * 2,000 cards a column. From 640px up, all five columns side by side, 19rem each, filling the screen below the page's
+ * header: the row scrolls sideways when they do not fit and every column scrolls up and down on its own.
  */
 export const TenThousandTasks: Story = {};
 
-/** A wide desktop (1920px): all five columns side by side. */
+/** A wide desktop (1920px): five columns, room to spare. */
 export const Wide: Story = { globals: { viewport: { value: "wide", isRotated: false } } };
 
-/** A laptop (1280px): five columns do not fit, so it is the tab strip and one column, as on a phone. */
+/** A laptop (1280px): five columns of 19rem fit; each scrolls on its own. */
 export const Laptop: Story = { globals: { viewport: { value: "desktop", isRotated: false } } };
 
-/** A tablet (768px): the tab strip and one column. */
+/** A tablet (768px): the five columns side by side, the row scrolling sideways. */
 export const Tablet: Story = { globals: { viewport: { value: "tablet", isRotated: false } } };
 
-/** Phone: a tab strip and one column below it; the page scrolls. */
+/** Phone: one column per screen in a snapping strip, a header strip of the five names and counts above it. */
 export const Phone: Story = { globals: { viewport: { value: "phone", isRotated: false } } };
 
 export const Loading: Story = { args: { loading: true } };
@@ -88,11 +89,11 @@ function PagedColumns(args: Parameters<typeof BoardView>[0]) {
   );
 }
 
-/** 10,000 tasks in every column, each paged on its own as its end is scrolled to (side by side on a wide screen, tabs below). */
+/** 10,000 tasks in every column, each paged on its own as its end is scrolled to (side by side from 640px up, one per screen on a phone). */
 export const PagedTenThousandPerColumn: Story = { render: (args) => <PagedColumns {...args} /> };
 
-/** A laptop (1280px): the same paged columns behind tabs, so the last column pages as far as the first. */
+/** A laptop (1280px): the same paged columns; the last column pages as far as the first. */
 export const PagedLaptop: Story = { render: (args) => <PagedColumns {...args} />, globals: { viewport: { value: "desktop", isRotated: false } } };
 
-/** Phone: the same paged columns; only the column in the open tab loads more as the page scrolls. */
+/** Phone: the same paged columns, one per screen; each pages as its own end is scrolled to. */
 export const PagedPhone: Story = { render: (args) => <PagedColumns {...args} />, globals: { viewport: { value: "phone", isRotated: false } } };

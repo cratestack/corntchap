@@ -38,7 +38,7 @@ Wax-print band (concentric circles + zigzag, SVG, `aria-hidden`) only on sign-in
 
 ## Screens
 - Kitchen · List: header (pot name, view tabs List/Board/Activity/+ View, filter chips, ⌘K, New task) · groups by status with row = id · title · progress bar + n/m items · label · note · holder · lease timer/epoch · right rail "From the kitchen" (events).
-- Kitchen · Board: 4 status columns, compact cards with progress.
+- Kitchen · Board: 5 columns (ready, on the fire, waiting, served, tossed), compact cards with progress; header counts and column totals are the same numbers (`bucket_sql`).
 - Sign-in / Approve device: indigo left panel (wax band, logo, headline, signed-in-as + Log out) · right: code in Space Mono 46px, details card, Approve (primary) / Deny.
 - Cooks: card with avatar letter, kind/runtime, live state, current task, MCP config, Rotate token.
 
@@ -70,10 +70,10 @@ In JS, `useIsPhone()` and `useIsDesktop()` come from `src/lib/media.ts`. Prefer 
 - Inputs are 16px on phones, set globally so iOS doesn't zoom on focus.
 - Anything fixed to the bottom clears the tab bar: use the `bottom-tabbar` and `pb-tabbar` utilities. Respect `env(safe-area-inset-*)`, since the page uses `viewport-fit=cover`.
 - Lists over tables: a table on a phone becomes stacked cards or two-line rows (title on line one, mono meta on line two). Nothing scrolls sideways but code blocks and wide markdown tables, inside their own box.
-- Board: a tab strip sticky under the top bar (one tab per column, with its total; `?col=` in the URL) and the open column below it; the page scrolls through the column and each tab keeps its scroll position. Tablets and laptops get the same tabs: columns sit side by side only when all five fit.
+- Board: from 640px up, all five columns always side by side (19rem each, sticky name and count), filling the screen below the pot header; the row scrolls sideways inside the board when they do not fit and every column scrolls up and down on its own. Phones: one column per screen in a snapping strip (swipe), with a header strip of the five names and counts above it that jumps to a column when tapped and lights the one in view (`?col=` in the URL).
 - Sheets and dialogs scroll inside themselves (`min-h-0 flex-1 overflow-y-auto`). Keep primary actions in a sticky footer.
 
-**One scroll.** Every page scrolls vertically with the window, at every screen size: no fixed-height panes, no horizontal page scroll. Virtualized lists use `scroll="window"`. The board shows its five columns side by side only when all five fit in one row (17rem each, so a board about 1416px wide: a 1920px desktop), each as tall as its cards and paging when its end comes into view; anywhere narrower it is the tab strip and one column. It never wraps columns onto a second row: a column below one that pages forever could never be reached. The choice is made on the board's own width (a ResizeObserver, `useAtLeastWide`), not the window's. The only inner scrollers are the chat thread (bottom-anchored), popovers and menus, dialogs and sheets over the page, and the app sidebar (navigation chrome). `scripts/ui/page-scroll.mjs` checks this on the Storybook stories at 320, 375, 768, 1280 and 1920 px.
+**One scroll.** Every page scrolls vertically with the window, at every screen size, and never horizontally. Virtualized lists use `scroll="window"`. The exceptions are scrollers that are the point of their screen: the chat thread (bottom-anchored) and the board. The board fills the viewport below the pot header (its top is measured into `--fill-top` by `useFillTop`, the height is CSS) so the page itself does not scroll past it; inside it a row of columns scrolls sideways (scroll-snap) and each column is its own vertical scroller (`VirtualColumn scroll="own"`) that pages as its end is reached. Also scrolling inside themselves: popovers and menus, dialogs and sheets over the page, and the app sidebar (navigation chrome). `scripts/ui/page-scroll.mjs` checks this on the Storybook stories at 320, 375, 768, 1280 and 1920 px (the page never scrolls sideways; the board's scrollers are allowed, and the board must fit the screen).
 
 **Tablet.** Use the space for list and detail side by side where it helps (task list plus detail, pass plus thread). Keep desktop density, but with touch-size targets.
 
