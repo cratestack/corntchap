@@ -838,6 +838,74 @@ pub async fn list(
     Ok(Value::Array(rows))
 }
 
+/// A page of a pot's files, newest first (created_at desc, number desc): [`list`] with a `status`
+/// (uploading, ready or failed) and `q` on the file name (any case).
+#[allow(clippy::too_many_arguments)]
+pub async fn page(
+    db: &PgPool,
+    state: &AppState,
+    p: &Principal,
+    project: &str,
+    task: Option<&str>,
+    question: Option<&str>,
+    status: Option<&str>,
+    q: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let status = match status.map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(s @ ("uploading" | "ready" | "failed")) => Some(s),
+        Some(_) => return invalid("status is uploading, ready or failed"),
+    };
+    let paging = crate::paging::paging(
+        page,
+        "-created_at,-number",
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let task_id = match task.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => Some(task_by_ref(&mut c, p, t).await?.id),
+        None => None,
+    };
+    let qnum = match question.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(q) => Some(crate::questions::parse_ref(q)?.1),
+        None => None,
+    };
+    let sql = format!(
+        "select {FILE_JSON}, array[f.created_at::text, f.number::text] from files f join projects pr on pr.id = f.project_id
+         where f.project_id = $1 and f.status <> 'deleted'
+           and ($2::uuid is null or f.task_id = $2)
+           and ($3::bigint is null or f.question_id = (select id from questions where project_id = $1 and number = $3))
+           and ($4::text is null or f.status = $4)
+           and ($5::text is null or position(lower($5) in lower(f.name)) > 0)
+           and ($6::text is null or f.created_at < $6::text::timestamptz
+                or (f.created_at = $6::text::timestamptz and f.number < $7::text::bigint))
+         order by f.created_at desc, f.number desc limit $8"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(task_id)
+        .bind(qnum)
+        .bind(status)
+        .bind(q.map(str::trim).filter(|q| !q.is_empty()))
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(mut v, k)| {
+            with_url(state, &mut v);
+            (v, k.into_iter().map(Some).collect())
+        })
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 /// Delete a file: its uploader, people (and cooks granted `plan`) in the pot, or admins.
 pub async fn delete(db: &PgPool, state: &AppState, p: &Principal, r: &str) -> Result<Value> {
     let mut tx = db.begin().await?;

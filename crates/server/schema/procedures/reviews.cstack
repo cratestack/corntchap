@@ -19,25 +19,18 @@ mutation procedure reviewVerdict(id: String?, task: String?, verdict: String, bo
   @allow(auth() != null)
   @mcp(tool: "review", description: "Give your verdict on a review waiting on you (from the wake prompt, or list_reviews with mine=true): approve, changes (changes requested: say in the body what to fix, precisely) or comment (not a decision). Give the review id (PAY-R3) or the task. You cannot review your own request. The cook that holds or last held the task is woken with your verdict. Look at the work first: read the task and its pull request or branch.")
 
-/// A pot's reviews.
-/// @param project Pot key, e.g. PAY.
-/// @param mine Only the reviews waiting on you (named to you, or to anyone and not asked by you).
-/// @param state requested, approved, changes_requested, commented, cancelled or all. Default: requested with mine, else all.
-/// @param task Only this task's reviews.
-procedure reviewList(project: String, mine: Boolean?, state: String?, task: String?): ReviewView[]
-  @allow(auth() != null)
-  @mcp(tool: "list_reviews", description: "The pot's reviews, open ones first. mine=true lists the ones waiting on you: review them with the `review` tool.")
-
 /// Withdraw a review request.
 /// @param id The review id, e.g. PAY-R3.
 mutation procedure reviewCancel(id: String): ReviewView
   @allow(auth() != null)
   @mcp(tool: "cancel_review", description: "Withdraw a review you asked for that has no verdict yet.")
 
-/// A page of a pot's reviews, for the console (not an MCP tool).
+/// A page of a pot's reviews, open ones first.
 /// @param project Pot key, e.g. PAY.
-/// @param mine Only the reviews waiting on you.
+/// @param mine Only the reviews waiting on you (named to you, or to anyone and not asked by you).
 /// @param state requested, approved, changes_requested, commented, cancelled or all. Default: requested with mine, else all.
+/// @param task Only this task's reviews (e.g. PAY-42).
 /// @param page limit (default 25, at most 200) and cursor.
-procedure reviewPage(project: String, mine: Boolean?, state: String?, page: CursorPageInput): CursorPage<ReviewView>
+procedure reviewPage(project: String, mine: Boolean?, state: String?, task: String?, page: CursorPageInput?): CursorPage<ReviewView>
   @allow(auth() != null)
+  @mcp(tool: "list_reviews", description: "The pot's reviews, open ones first, a page at a time (items, nextCursor). mine=true lists the ones waiting on you: review them with the `review` tool.")

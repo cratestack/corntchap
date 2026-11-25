@@ -16,7 +16,7 @@ mutation procedure stationRegister(project: String, runtime: String, session: St
   @allow(auth() != null)
   @mcp(tool: "register_station", description: "Register an agent session as a station of a cook in a pot, so wakes resume that very session. Usually done by `corntchap-cli station scan`; a cook that knows its own session id can register itself. Say confined=true when you cannot leave your folder. The answer carries the pot's guide (how we work here) and what_now tells you what to do next.")
 
-/// Stations you can see.
+/// Stations you can see, all at once, for the console's pickers (not an MCP tool).
 /// @param project Only this pot.
 /// @param cook Only this cook.
 /// @param kind session (registered agent sessions) or cloud-run (one station per cloud run, ended ones too). Without it: the sessions and the cloud runs still going.
@@ -24,7 +24,6 @@ mutation procedure stationRegister(project: String, runtime: String, session: St
 /// @param limit With kind cloud-run: how many of the newest runs (default 100, at most 500).
 procedure stationList(project: String?, cook: String?, kind: String?, live: Boolean?, limit: Int?): StationView[]
   @allow(auth() != null)
-  @mcp(tool: "list_stations", description: "Registered agent sessions (stations): yours as a cook, or those of the cooks you own, with the tasks each holds or waits on.")
 
 /// Remove a station.
 /// @param id Station id, e.g. st_1a2b3c4d5e.
@@ -58,3 +57,14 @@ mutation procedure stationStart(project: String, cook: String?, task: String?, p
 /// @param page limit (default 25, at most 200) and cursor.
 procedure cloudRunPage(cook: String?, project: String?, live: Boolean?, page: CursorPageInput): CursorPage<StationView>
   @allow(auth() != null)
+
+/// A page of the stations you can see, newest first (the same as stationList, paged).
+/// @param project Only this pot.
+/// @param cook Only this cook.
+/// @param kind session (registered agent sessions) or cloud-run (one station per cloud run, ended ones too). Without it: the sessions and the cloud runs still going.
+/// @param live true: only sessions and cloud runs that have not ended; false: only ended cloud runs.
+/// @param q Only stations whose label, folder or session id contains this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure stationPage(project: String?, cook: String?, kind: String?, live: Boolean?, q: String?, page: CursorPageInput?): CursorPage<StationView>
+  @allow(auth() != null)
+  @mcp(tool: "list_stations", description: "Registered agent sessions (stations): yours as a cook, or those of the cooks you own, with the tasks each holds or waits on, a page at a time (items, nextCursor). Narrow with project, cook, kind, live or q.")

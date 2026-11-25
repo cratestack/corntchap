@@ -10,6 +10,7 @@ import { chromium, serve } from "./storybook.mjs";
 const MAX_ROWS = 200;
 const { base, close } = await serve();
 
+const OPTION = "[role=option]";
 const desktop = { width: 1280, height: 800 };
 const phone = { width: 390, height: 844 };
 // [story id, viewport, text of the last row (a regex, matched against a whole element's text)]
@@ -25,6 +26,18 @@ const CASES = [
   ["console-board--phone", phone, /^PAY-9996$/],
   ["ui-virtualtable--ten-thousand-rows", desktop, /^Row 10000$/, "tbody tr[data-index]"],
   ["ui-virtualtable--phone", phone, /^Row 10000$/],
+  // the pickers: 10,000 options each, in a listbox (`role=option` rows) in a popover, sheet, dialog or under a field
+  ["ui-virtuallistbox--ten-thousand", desktop, /^cook-10000$/, OPTION],
+  ["ui-virtuallistbox--phone", phone, /^cook-10000$/, OPTION],
+  ["ui-virtualcombobox--ten-thousand", desktop, /^cook-10000$/, OPTION],
+  ["ui-virtualcombobox--phone", phone, /^cook-10000$/, OPTION],
+  ["ui-virtualmenu--ten-thousand", desktop, /^cook-10000$/, OPTION],
+  ["ui-virtualcommand--ten-thousand", desktop, /^cook-10000$/, OPTION],
+  ["console-taginput--ten-thousand-suggestions", desktop, /^label-10000$/, OPTION],
+  ["console-mentionpopup--ten-thousand-chefs", desktop, /^cook-10000$/, OPTION],
+  ["console-listpage--ten-thousand", desktop, /^cook-10000$/],
+  ["console-listpage--phone", phone, /^cook-10000$/],
+  ["console-listpage--table", desktop, /^cook-10000$/, "tbody tr[data-index]"],
 ];
 
 const browser = await chromium.launch();
@@ -54,6 +67,266 @@ for (const [id, viewport, last, rowSelector = "[role=listitem]"] of CASES) {
   await page.close();
 }
 
+// ---- the pickers' keyboard: End then ArrowUp x5 lands on option 9995 (of 10,000), which is rendered and in view; Enter picks it ----
+
+const check = (name, ok, detail) => {
+  if (!ok) failed++;
+  console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? " " + detail : ""}`);
+};
+
+const KEYBOARD = [
+  ["ui-virtuallistbox--ten-thousand", desktop],
+  ["ui-virtualcombobox--ten-thousand", desktop],
+  ["ui-virtualcombobox--phone", phone],
+  ["ui-virtualmenu--ten-thousand", desktop],
+  ["ui-virtualmenu--not-searchable", desktop, 6],
+  ["ui-virtualcommand--ten-thousand", desktop],
+  ["ui-virtualcommand--phone", phone],
+  ["console-taginput--ten-thousand-suggestions", desktop],
+  ["console-mentionpopup--ten-thousand-chefs", desktop],
+];
+for (const [id, viewport, total = 10000] of KEYBOARD) {
+  const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=${id}&viewMode=story`);
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.waitForTimeout(300);
+  const combo = page.locator("[role=combobox]").first();
+  const target = (await combo.count()) ? combo : page.locator("[role=listbox]").first();
+  await target.focus();
+  await page.keyboard.press("End");
+  await page.waitForTimeout(500);
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowUp");
+  await page.waitForTimeout(400);
+  const at = await page.evaluate(() => {
+    const el = document.querySelector("[role=combobox], [role=listbox]");
+    const opt = document.getElementById(el.getAttribute("aria-activedescendant") ?? "");
+    const scroller = opt?.closest("[data-virtuoso-scroller]");
+    if (!opt || !scroller) return null;
+    const o = opt.getBoundingClientRect();
+    const s = scroller.getBoundingClientRect();
+    return { text: opt.textContent, selectedRole: opt.getAttribute("role"), inView: o.top >= s.top - 1 && o.bottom <= s.bottom + 1 };
+  });
+  const want = String(total - 5);
+  check(`keyboard ${id}: End then ArrowUp x5 reaches option ${want}, rendered and in view`, !!at && at.selectedRole === "option" && at.inView && at.text.includes(want), JSON.stringify(at));
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(300);
+  const picked = await page.locator("[data-testid=picked]").textContent();
+  check(`keyboard ${id}: Enter picks it`, picked.includes(want), `picked=${picked}`);
+  check(`keyboard ${id}: no page errors`, errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
+// ---- the pickers' query: typing "999" into a server-backed picker leaves only the options that match ----
+
+for (const [id, viewport] of [
+  ["ui-virtualcombobox--paged", desktop],
+  ["ui-virtualmenu--paged", desktop],
+  ["ui-virtualcommand--paged", desktop],
+  ["console-taginput--paged", desktop],
+  ["console-mentionpopup--paged", desktop],
+  ["ui-virtualcombobox--paged", phone],
+]) {
+  const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=${id}&viewMode=story`);
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  const input = page.locator("[role=combobox]").first();
+  // (the mention story's text ends in "@" with the caret after it, and focusing keeps the caret there: "999" completes it)
+  await input.fill("999");
+  await page.waitForTimeout(900);
+  const texts = await page.locator(OPTION).allTextContents();
+  check(`query ${id}@${viewport.width}: "999" leaves only matching options`, texts.length > 0 && texts.length < MAX_ROWS && texts.every((t) => t.includes("999")), `options=${texts.length} first=${texts[0]}`);
+  check(`query ${id}@${viewport.width}: no page errors`, errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
+// ---- review fixes: TagInput in a form, a query still pending, picked text, URL filters, active row after scrolling, End while paging, late sections ----
+
+const story = async (id, viewport = desktop) => {
+  const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=${id}&viewMode=story`);
+  return { page, errors };
+};
+const activeText = (page) =>
+  page.evaluate(() => {
+    const el = document.querySelector("[role=combobox], [role=listbox]");
+    const id = el?.getAttribute("aria-activedescendant");
+    return id ? (document.getElementById(id)?.textContent ?? "(not rendered)") : null;
+  });
+
+{
+  // TagInput in a form: nothing highlighted until an arrow key; Enter on an empty field submits; ArrowDown, Enter, Tab adds exactly one tag and moves focus on
+  const { page, errors } = await story("console-taginput--inside-form");
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.waitForTimeout(300);
+  const input = page.getByRole("combobox", { name: "Labels" });
+  check("taginput: nothing is active before an arrow key", (await input.getAttribute("aria-activedescendant")) === null && (await page.locator("[role=option][data-active]").count()) === 0);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(150);
+  check("taginput: Enter on an empty field submits the form", (await page.getByTestId("submits").textContent()) === "1");
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(250);
+  check("taginput: the first ArrowDown activates option 0", (await activeText(page)) === "label-1", String(await activeText(page)));
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(150);
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(250);
+  const focus = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+  check("taginput: ArrowDown, Enter, Tab adds exactly one tag and moves focus out", (await page.getByTestId("picked").textContent()) === "label-1" && focus === "Next field", `picked=${await page.getByTestId("picked").textContent()} focus=${focus}`);
+  check("taginput: no page errors", errors.length === 0, errors.join("|"));
+  await page.close();
+}
+{
+  const { page } = await story("console-taginput--inside-form");
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.getByRole("combobox", { name: "Labels" }).fill("zzz");
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(250);
+  const focus = await page.evaluate(() => document.activeElement?.getAttribute("aria-label"));
+  check("taginput: Tab moves on and the text typed is added when the field is left", (await page.getByTestId("picked").textContent()) === "zzz" && focus === "Next field", `picked=${await page.getByTestId("picked").textContent()} focus=${focus}`);
+  await page.close();
+}
+
+// a query still pending: Enter typed at once picks from the answer to the new text, never a row of the old one
+for (const [id, viewport, keys] of [
+  ["ui-virtualcombobox--paged", desktop, ["Enter"]],
+  ["ui-virtualmenu--paged", desktop, ["Enter"]],
+  ["ui-virtualcommand--paged", desktop, ["Enter"]],
+  ["console-taginput--paged", desktop, ["ArrowDown", "Enter"]],
+]) {
+  const { page, errors } = await story(id, viewport);
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.waitForTimeout(300);
+  await page.locator("[role=combobox]").first().fill("999");
+  for (const k of keys) await page.keyboard.press(k);
+  await page.waitForTimeout(1200);
+  const picked = await page.locator("[data-testid=picked]").textContent();
+  check(`pending ${id}: Enter typed at once picks from the new query`, picked.includes("999"), `picked=${picked}`);
+  check(`pending ${id}: no page errors`, errors.length === 0, errors.join("|"));
+  await page.close();
+}
+{
+  // clicking a stale row while the query is pending picks nothing
+  const { page } = await story("ui-virtualcombobox--paged");
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.waitForTimeout(300);
+  await page.locator("[role=combobox]").first().fill("999");
+  await page.locator(OPTION).first().click({ force: true });
+  await page.waitForTimeout(100);
+  const picked = await page.locator("[data-testid=picked]").textContent();
+  check("pending: a click on a row of the old query picks nothing", picked === "", `picked=${picked}`);
+  await page.close();
+}
+
+{
+  // the trigger names the pick by its text: restored (valueText), and remembered after a search moves the rows on
+  const { page, errors } = await story("ui-virtualcombobox--restored-value");
+  const trigger = page.getByRole("button", { name: "Cook", exact: true });
+  await trigger.waitFor({ timeout: 20000 });
+  check("combobox: a restored value shows its text, not its key", ((await trigger.textContent()) ?? "").includes("Cook number 9000"), await trigger.textContent());
+  await trigger.click();
+  await page.locator("[role=combobox]").fill("cook-30");
+  await page.waitForTimeout(900);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(300);
+  await trigger.click();
+  await page.locator("[role=combobox]").fill("cook-4000");
+  await page.waitForTimeout(900);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  check("combobox: a picked value keeps its text after the search moved on", ((await trigger.textContent()) ?? "").includes("Cook number 30"), await trigger.textContent());
+  check("combobox: no page errors (restored)", errors.length === 0, errors.join("|"));
+  await page.close();
+}
+{
+  const { page } = await story("console-filterbar--restored-values");
+  const chip = page.getByRole("button", { name: "Owner: Cook number 9000" });
+  await chip.waitFor({ timeout: 20000 }).catch(() => {});
+  check("filter chip: a restored value shows its label, not its key", (await chip.count()) === 1);
+  await page.close();
+}
+
+{
+  // URL filters: an explicit "none" survives a non-empty default; several changes in one handler all land
+  const { page, errors } = await story("console-filterbar--defaults");
+  const state = () => page.getByTestId("url-state").textContent();
+  await page.getByTestId("url-state").waitFor({ timeout: 20000 });
+  const start = await state();
+  await page.getByRole("button", { name: "No owner, no labels" }).click();
+  await page.waitForTimeout(150);
+  const none = await state();
+  await page.getByRole("button", { name: "Back to the defaults" }).click();
+  await page.waitForTimeout(150);
+  const back = await state();
+  await page.getByRole("button", { name: "Owner none, kind task, search x" }).click();
+  await page.waitForTimeout(150);
+  const many = await state();
+  check("url filters: defaults apply at first", start.includes('owner="cook-1"') && start.includes('label=["label-1"]'), start);
+  check("url filters: an empty value is kept against a non-empty default", none.includes('owner=""') && none.includes("label=[]"), none);
+  check("url filters: clear goes back to the defaults", back.includes('owner="cook-1"') && back.includes('q=""'), back);
+  check("url filters: three changes in one handler all land", many.includes('owner=""') && many.includes('kind="task"') && many.includes('q="x"'), many);
+  check("url filters: no page errors", errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
+{
+  // after a wheel or touch scroll the active row is not rendered: aria-activedescendant must not name it
+  const { page } = await story("ui-virtuallistbox--ten-thousand");
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.waitForTimeout(300);
+  await page.locator("[role=listbox]").first().focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(300);
+  await page.evaluate(() => { document.querySelector("[data-virtuoso-scroller]").scrollTop = 20000; });
+  await page.waitForTimeout(700);
+  const away = await page.evaluate(() => { const id = document.querySelector("[role=listbox]").getAttribute("aria-activedescendant"); return id === null ? null : document.getElementById(id) !== null; });
+  check("listbox: scrolled away, aria-activedescendant names no unrendered option", away === null || away === true, `attr resolves=${away}`);
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(500);
+  const back = await page.evaluate(() => { const id = document.querySelector("[role=listbox]").getAttribute("aria-activedescendant"); return id ? document.getElementById(id)?.textContent : null; });
+  check("listbox: moving again names a rendered option once more", back.startsWith("cook-4Cook"), `text=${back}`);
+  await page.close();
+}
+{
+  // End before every page is loaded: the active row follows the end until it is the true last row
+  const { page, errors } = await story("ui-virtualcombobox--paged-short");
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.waitForTimeout(300);
+  await page.locator("[role=combobox]").focus();
+  await page.keyboard.press("End");
+  await page.waitForTimeout(3500);
+  const at = await activeText(page);
+  check("combobox: End before all pages load ends on the true last row", String(at).startsWith("cook-200Cook"), String(at));
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(300);
+  check("combobox: Enter picks the true last row", (await page.getByTestId("picked").textContent()) === "cook-200");
+  check("combobox: no page errors (End)", errors.length === 0, errors.join("|"));
+  await page.close();
+}
+{
+  // a section above the active row fills in late: the active row stays on the same item; headings are not listbox content
+  const { page, errors } = await story("ui-virtualcommand--late-section");
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.locator("[role=combobox]").focus();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(250);
+  const before = await activeText(page);
+  await page.waitForTimeout(2200);
+  const after = await activeText(page);
+  check("command: the active row stays on the same item when a section above it loads", !!before && before === after && (await page.locator(OPTION).first().textContent()).startsWith("Recent"), `before=${before} after=${after}`);
+  const headings = await page.evaluate(() => [...document.querySelectorAll("[role=listbox] p")].filter((p) => p.getAttribute("role") !== "presentation").length);
+  check("command: section headings are presentation inside the listbox", headings === 0, `headings=${headings}`);
+  check("command: no page errors (late)", errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
 // ---- VirtualThread ----
 
 const SCROLLER = "[data-virtuoso-scroller]";
@@ -63,11 +336,6 @@ const topOf = (page, seq) =>
     const el = document.querySelector(`[data-seq="${seq}"]`);
     return el ? el.getBoundingClientRect().top - document.querySelector(sel).getBoundingClientRect().top : null;
   }, [SCROLLER, seq]);
-const check = (name, ok, detail) => {
-  if (!ok) failed++;
-  console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? " " + detail : ""}`);
-};
-
 for (const [label, viewport] of [["desktop", desktop], ["phone", phone]]) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];

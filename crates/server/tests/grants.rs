@@ -30,7 +30,7 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
     app.add_user("alice").await;
     // owning a team needs the orchestrator role
     app.set_role("alice", "orchestrator").await;
-    let users = ok(&call(&root, "list_users", json!({})).await, "list_users");
+    let users = ok(&call(&root, "list_users", json!({})).await, "list_users")["items"].clone();
     assert!(
         users
             .as_array()
@@ -51,7 +51,7 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
         .await,
         "add_team_member",
     );
-    let teams = ok(&call(&root, "list_teams", json!({})).await, "list_teams");
+    let teams = ok(&call(&root, "list_teams", json!({})).await, "list_teams")["items"].clone();
     assert_eq!(teams[0]["name"], "acme");
     let p = ok(
         &call(
@@ -68,12 +68,13 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
         "create_fire",
     );
     assert!(fire["token"].as_str().unwrap().starts_with("ct_"));
-    let fires = ok(&call(&root, "list_fires", json!({})).await, "list_fires");
+    let fires = ok(&call(&root, "list_fires", json!({})).await, "list_fires")["items"].clone();
     assert_eq!(fires[0]["name"], "laptop");
     let members = ok(
         &call(&root, "list_team_members", json!({"team": "acme"})).await,
         "list_team_members",
-    );
+    )["items"]
+        .clone();
     assert!(
         members
             .as_array()
@@ -105,7 +106,7 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
         .await,
         "add c1",
     );
-    let cooks = ok(&call(&alice, "list_cooks", json!({})).await, "list_cooks");
+    let cooks = ok(&call(&alice, "list_cooks", json!({})).await, "list_cooks")["items"].clone();
     assert_eq!(
         (&cooks[0]["name"], &cooks[0]["grants"]),
         (&json!("c1"), &json!([]))
@@ -122,7 +123,8 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
     let wts = ok(
         &call(&alice, "list_wake_targets", json!({"cook": "c1"})).await,
         "list_wake_targets",
-    );
+    )["items"]
+        .clone();
     assert_eq!(
         (&wts[0]["type"], &wts[0]["projects"]),
         (&json!("relay"), &json!(["PAY"]))
@@ -143,7 +145,8 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
     let wts = ok(
         &call(&root, "list_wake_targets", json!({"cook": "c1"})).await,
         "list webhook",
-    );
+    )["items"]
+        .clone();
     assert_eq!(wts[0]["target"], "https://hooks.example/x");
     ok(
         &call(&root, "delete_wake_target", json!({"id": hook["id"]})).await,
@@ -202,7 +205,7 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
     );
     assert!(e.contains("only a person"), "{e}");
     assert_eq!(
-        ok(&call(&c1, "list_cooks", json!({})).await, "c1 list_cooks"),
+        ok(&call(&c1, "list_cooks", json!({})).await, "c1 list_cooks")["items"],
         json!([])
     );
 
@@ -300,12 +303,13 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
         "create_cook as owner",
     );
     assert!(made["token"].as_str().unwrap().starts_with("ct_"));
-    let cooks: Vec<String> = ok(&call(&c1, "list_cooks", json!({})).await, "owner's cooks")
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["name"].as_str().unwrap().to_string())
-        .collect();
+    let cooks: Vec<String> =
+        ok(&call(&c1, "list_cooks", json!({})).await, "owner's cooks")["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect();
     assert_eq!(cooks, ["c1", "c1-helper"]);
     ok(
         &call(
@@ -325,7 +329,7 @@ async fn console_actions_are_tools_and_cooks_act_within_their_grants() {
         &call(&c1, "create_team", json!({"name": "rogue"})).await,
         "an orchestrator's cook with admin acts as an orchestrator",
     );
-    let dir = ok(&call(&c1, "list_users", json!({})).await, "directory");
+    let dir = ok(&call(&c1, "list_users", json!({})).await, "directory")["items"].clone();
     assert!(
         dir[0]["linked"].is_null(),
         "only the directory, no sign-in state: {dir}"

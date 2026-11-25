@@ -639,6 +639,51 @@ pub async fn page(
     Ok(crate::paging::finish(rows, &paging))
 }
 
+/// A page of the tags used in a pot's pantry with how many memories carry each (`tagPage`), by tag.
+/// `q` matches the tag (any case); `kind` counts only memories of that kind.
+pub async fn tag_page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    q: Option<&str>,
+    kind: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let kind = kind_of(kind)?;
+    let paging = crate::paging::paging(
+        page,
+        "tag",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(
+        "select jsonb_build_object('tag', g.tag, 'count', g.n), array[g.tag]
+         from (select u.tag, count(distinct m.id) as n
+               from memories m cross join lateral unnest(m.tags) as u(tag)
+               where m.project_id = $1 and ($2::text is null or m.kind = $2)
+                 and ($3::text is null or position(lower($3) in lower(u.tag)) > 0)
+               group by u.tag) g
+         where $4::text is null or g.tag > $4
+         order by g.tag limit $5",
+    )
+    .bind(pr.id)
+    .bind(kind.as_deref())
+    .bind(q)
+    .bind(paging.key(0))
+    .bind(paging.fetch())
+    .fetch_all(&mut *c)
+    .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 /// Forget a memory. People and admins can forget any memory of a project they can see; an agent
 /// only the ones it created (ask a human for the rest, or overwrite with `remember`).
 pub async fn forget(

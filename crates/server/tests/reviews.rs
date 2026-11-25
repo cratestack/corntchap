@@ -330,7 +330,7 @@ async fn a_review_goes_round_by_round() {
             .await,
         "list",
     );
-    let row = list
+    let row = list["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -501,7 +501,7 @@ async fn a_review_goes_round_by_round() {
             .await,
         "list",
     );
-    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert_eq!(all["items"].as_array().unwrap().len(), 2);
     let open = ok(
         &app.mcp(
             &w.c1,
@@ -511,7 +511,7 @@ async fn a_review_goes_round_by_round() {
         .await,
         "list",
     );
-    assert!(open.as_array().unwrap().is_empty());
+    assert!(open["items"].as_array().unwrap().is_empty());
 
     // served and still reviewable by a person: complete, then ask a person
     ok(
@@ -564,7 +564,7 @@ async fn people_review_and_anyone_on_the_team_may() {
         .await,
         "bob's",
     );
-    assert_eq!(mine.as_array().unwrap().len(), 1, "{mine}");
+    assert_eq!(mine["items"].as_array().unwrap().len(), 1, "{mine}");
     let alices = ok(
         &app.mcp(
             &w.alice,
@@ -574,12 +574,12 @@ async fn people_review_and_anyone_on_the_team_may() {
         .await,
         "alice's",
     );
-    assert!(alices.as_array().unwrap().is_empty());
+    assert!(alices["items"].as_array().unwrap().is_empty());
     let projects = ok(
         &app.mcp(&w.bob, "list_projects", json!({})).await,
         "projects",
     );
-    assert_eq!(projects[0]["waiting_reviews"], 1, "{projects}");
+    assert_eq!(projects["items"][0]["waiting_reviews"], 1, "{projects}");
     // the activity feed (the pot's events) has it
     let feed: Vec<Value> = sqlx::query_scalar(
         "select payload from events where kind = 'review.requested' and seq > $1",

@@ -192,7 +192,7 @@ async fn a_cook_can_be_renamed_and_keeps_working() {
             .await,
         "heartbeat on the old lease",
     );
-    let cooks = ok(&app.mcp(&w.alice, "list_cooks", json!({})).await, "list");
+    let cooks = ok(&app.mcp(&w.alice, "list_cooks", json!({})).await, "list")["items"].clone();
     let names: Vec<_> = cooks
         .as_array()
         .unwrap()
@@ -431,7 +431,7 @@ async fn fires_rename_and_delete() {
     );
     assert_eq!(r["name"], "desk");
     assert_eq!(app.get(&ft, "/me").await.1["name"], "desk");
-    let fires = ok(&app.mcp(&w.alice, "list_fires", json!({})).await, "list");
+    let fires = ok(&app.mcp(&w.alice, "list_fires", json!({})).await, "list")["items"].clone();
     assert_eq!(fires[0]["name"], "desk");
     ok(
         &app.mcp(&w.alice, "delete_fire", json!({"name": "desk"}))
@@ -440,7 +440,7 @@ async fn fires_rename_and_delete() {
     );
     assert_eq!(app.get(&ft, "/me").await.0, 401);
     assert_eq!(
-        ok(&app.mcp(&w.alice, "list_fires", json!({})).await, "list"),
+        ok(&app.mcp(&w.alice, "list_fires", json!({})).await, "list")["items"],
         json!([])
     );
     // the cook is untouched
@@ -551,7 +551,7 @@ async fn pots_rename_and_delete() {
         (&r["key"], &r["name"], &r["previous"]),
         (&json!("PAY"), &json!("Payments v2"), &json!("Payments"))
     );
-    let pots = ok(&app.mcp(&w.alice, "list_projects", json!({})).await, "list");
+    let pots = ok(&app.mcp(&w.alice, "list_projects", json!({})).await, "list")["items"].clone();
     assert_eq!(pots[0]["name"], "Payments v2");
     assert_eq!(pots[0]["key"], "PAY");
     refused(
@@ -715,7 +715,7 @@ async fn teams_rename_and_delete() {
         (&r["name"], &r["previous"]),
         (&json!("payments-co"), &json!("acme"))
     );
-    let teams = ok(&app.mcp(&w.alice, "list_teams", json!({})).await, "list");
+    let teams = ok(&app.mcp(&w.alice, "list_teams", json!({})).await, "list")["items"].clone();
     assert_eq!(teams[0]["name"], "payments-co");
     assert_eq!(teams[0]["projects"], json!(["PAY"]));
     // the pot and the membership followed

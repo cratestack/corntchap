@@ -567,6 +567,72 @@ async fn unread(c: &mut PgConnection, me: Uuid, project: Uuid) -> Result<Value> 
     Ok(json!({"pot": pot, "direct": direct}))
 }
 
+/// A page of your direct conversations in a pot (`passConversationPage`), the most recent first
+/// (last_seq desc, chef): the other chef, the last message (cut) and how many of it you have not
+/// read, by the same visibility and unread rule as [`read`]. `q` matches the chef's name and display
+/// name (any case); `unread` keeps the conversations with something unread.
+pub async fn conversation_page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    q: Option<&str>,
+    unread: Option<bool>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let p = p.clone().worker()?;
+    let paging = crate::paging::paging(
+        page,
+        "-last_seq,chef",
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, &p, &project.trim().to_uppercase()).await?;
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
+    let sql = "with conv as (
+           select case when m.author_id = $2 or m.relayed_by = $2 then m.to_principal else m.author_id end as peer,
+                  m.seq, m.body, m.author_id, m.relayed_by, m.created_at
+           from pass_messages m
+           where m.project_id = $1 and m.to_principal is not null
+             and (m.author_id = $2 or m.relayed_by = $2 or m.to_principal = $2)),
+         agg as (
+           select c.peer, max(c.seq) as last_seq, max(c.created_at) as last_at,
+                  (array_agg(c.body order by c.seq desc))[1] as last_body,
+                  count(*) filter (where c.seq > coalesce(r.last_seq, 0)
+                                     and c.author_id is distinct from $2 and c.relayed_by is distinct from $2) as unread
+           from conv c left join pass_reads r
+             on r.principal_id = $2 and r.project_id = $1 and r.conversation = c.peer::text
+           where c.peer is not null
+           group by c.peer, r.last_seq)
+         select jsonb_build_object('chef', x.name, 'display_name', x.display_name, 'kind', x.kind,
+                  'last_seq', a.last_seq, 'last_at', a.last_at,
+                  'preview', case when char_length(a.last_body) > 140 then left(a.last_body, 140) || '…' else a.last_body end,
+                  'unread', a.unread),
+                array[a.last_seq::text, x.name]
+         from agg a join principals x on x.id = a.peer
+         where ($3::text is null or position(lower($3) in lower(x.name || ' ' || coalesce(x.display_name, ''))) > 0)
+           and (not $4 or a.unread > 0)
+           and ($5::text is null or a.last_seq < $5::text::bigint
+                or (a.last_seq = $5::text::bigint and x.name > $6))
+         order by a.last_seq desc, x.name limit $7";
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sql)
+        .bind(pr.id)
+        .bind(p.id)
+        .bind(q)
+        .bind(unread.unwrap_or(false))
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 async fn mark_read(
     c: &mut PgConnection,
     me: Uuid,

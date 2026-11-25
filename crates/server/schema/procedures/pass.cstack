@@ -23,3 +23,11 @@ mutation procedure passPost(project: String, message: String, to: String?, task:
 procedure passRead(project: String, chef: String?, after: Int?, limit: Int?, before: Int?): PassPage
   @allow(auth() != null)
   @mcp(tool: "read_pass", description: "Read a pot's pass and your direct messages, oldest first, and what is still unread. Read it when you start on a pot and when a wake says someone wrote to you. What you read counts as read.")
+
+/// A page of your direct conversations in a pot, the most recent first, with the last message and what you have not read.
+/// @param project Pot key, e.g. PAY.
+/// @param q Only chefs whose name or display name contains this (any case).
+/// @param unread true: only the conversations with something unread.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure passConversationPage(project: String, q: String?, unread: Boolean?, page: CursorPageInput): CursorPage<PassConversationView>
+  @allow(auth() != null)

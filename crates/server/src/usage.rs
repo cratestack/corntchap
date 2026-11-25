@@ -199,6 +199,64 @@ pub async fn report(
     }))
 }
 
+/// A page of the cooks whose usage you may see, the biggest senders first (chars desc, then name),
+/// for the last `days` days: the `by_cook` rows of [`report`], paged. `q` matches the cook's name.
+pub async fn cook_page(
+    db: &sqlx::PgPool,
+    p: &Principal,
+    project: Option<&str>,
+    days: Option<i64>,
+    q: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let days = days.unwrap_or(7).clamp(1, RETAIN_DAYS as i64);
+    let first = Utc::now().date_naive() - Duration::days(days - 1);
+    // the aggregate depends on the window start, which moves at UTC midnight: a cursor minted for
+    // another window is refused (400) rather than repeating or skipping cooks
+    let paging = crate::paging::paging(
+        page,
+        &format!("-chars,cook:{first}"),
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let who = admin::acting_or_self(db, p).await?;
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(
+        "select jsonb_build_object('cook', x.cook, 'calls', x.calls, 'chars', x.chars, 'tokens', (x.chars + 3) / 4),
+                array[x.chars::text, x.cook]
+         from (select a.name as cook, sum(u.calls)::bigint as calls, sum(u.chars)::bigint as chars
+               from usage_daily u
+               join principals a on a.id = u.principal_id
+               left join projects pr on pr.id = u.project_id
+               where u.day >= $1::text::date
+                 and ($2 or a.id = $3 or a.owner_id = $3
+                      or ($6 and exists (select 1 from team_members m
+                                         where m.team_id = pr.team_id and m.principal_id = $3 and m.role = 'owner')))
+                 and ($4::text is null or pr.key = $4)
+                 and ($5::text is null or position(lower($5) in lower(a.name)) > 0)
+               group by a.name) x
+         where $7::text is null or x.chars < $7::text::bigint
+               or (x.chars = $7::text::bigint and x.cook > $8)
+         order by x.chars desc, x.cook limit $9",
+    )
+    .bind(first.to_string())
+    .bind(who.is_super_admin())
+    .bind(who.id)
+    .bind(project.map(|k| k.trim().to_uppercase()))
+    .bind(q.map(str::trim).filter(|q| !q.is_empty()))
+    .bind(who.can_orchestrate())
+    .bind(paging.key(0))
+    .bind(paging.key(1))
+    .bind(paging.fetch())
+    .fetch_all(db)
+    .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 #[cfg(test)]
 mod tests {
     use super::tokens;

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useInfiniteQuery, type InfiniteData, type Query, type QueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, type InfiniteData, type Query, type QueryClient } from "@tanstack/react-query";
 import { dataProvider } from "./api";
 import type { ProcArgs, ProcName, ProcOut } from "./data";
 
@@ -33,7 +33,7 @@ export interface PagingMeta {
 }
 
 export interface PagedOptions<Page extends PageShape> {
-  /** The cursor of the next page in an answer: `nextCursor` of a CursorPage, `next_cursor` of a TaskPage. */
+  /** The cursor of the next page in an answer: `nextCursor`. */
   getCursor: (page: Page) => string | null | undefined;
   /** Rows per page; the server's default when left out. */
   pageSize?: number;
@@ -53,6 +53,11 @@ export interface PagedOptions<Page extends PageShape> {
    * it), where a head-only refresh would keep the stale row and miss the one that arrived further down.
    */
   refreshLoaded?: boolean;
+  /**
+   * While a new key (another search) loads its first page, keep showing the rows of the previous one instead of
+   * going back to loading; `isPlaceholderData` says they are not the new key's. For a search box.
+   */
+  keepPrevious?: boolean;
 }
 
 export type ProcInfiniteOptions<N extends PagedProc> = PagedOptions<ProcOut<N>>;
@@ -108,6 +113,7 @@ export function usePagedQuery<Page extends PageShape>(
     staleTime: 30_000,
     refetchOnWindowFocus: false,
     enabled: opts.enabled ?? true,
+    ...(opts.keepPrevious ? { placeholderData: keepPreviousData } : {}),
     meta,
   });
   const pages = q.data?.pages;
@@ -121,6 +127,8 @@ export function usePagedQuery<Page extends PageShape>(
     fetchNextPage: q.fetchNextPage,
     hasNextPage: q.hasNextPage,
     isFetchingNextPage: q.isFetchingNextPage,
+    /** The rows are the previous key's (`keepPrevious`), while this key's first page loads. */
+    isPlaceholderData: q.isPlaceholderData,
     /** The most pages one list holds are loaded. */
     capped: (pages?.length ?? 0) >= maxPages,
   };

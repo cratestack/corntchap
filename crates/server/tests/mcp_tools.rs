@@ -70,10 +70,9 @@ async fn every_tool_returns_its_typed_output() {
     let me = w.ok("whoami", json!({})).await;
     assert_eq!(me["name"], "a1");
     let projects = w.ok("list_projects", json!({})).await;
-    assert_eq!(projects[0]["key"], "PAY");
+    assert_eq!(projects["items"][0]["key"], "PAY");
     assert_eq!(
-        w.ok("list_tasks", json!({"project": "PAY"}))
-            .await
+        w.ok("list_tasks", json!({"project": "PAY"})).await["items"]
             .as_array()
             .unwrap()
             .len(),
@@ -81,7 +80,7 @@ async fn every_tool_returns_its_typed_output() {
     );
     w.ok(
         "list_tasks",
-        json!({"project": "PAY", "status": "open", "label": "api", "readyOnly": true}),
+        json!({"project": "PAY", "bucket": "ready", "label": "api"}),
     )
     .await;
     let t = w.ok("get_task", json!({"id": "PAY-1"})).await;
@@ -212,9 +211,10 @@ async fn relay_token_on_mcp_explains_itself() {
     assert!(text.contains("cook token"), "{text}");
 }
 
-/// The console's `*Page` procedures are not MCP tools, and the agents' tools keep their default
-/// shapes: `list_tasks` is one array with no paging keys, `read_pass` and `get_task` carry only the
-/// additive `older` and `comments_total`.
+/// The `*Page` procedures are not MCP tools under their own names (the list tools carry `list_*`
+/// names), and the agents' other tools keep their default shapes: `list_tasks` is a page
+/// (`items`, `total`, `nextCursor`), `read_pass` and `get_task` carry only the additive `older` and
+/// `comments_total`.
 #[tokio::test]
 async fn page_procedures_are_not_tools_and_default_shapes_hold() {
     let app = common::start(false).await;
@@ -308,8 +308,11 @@ async fn page_procedures_are_not_tools_and_default_shapes_hold() {
         .unwrap();
     assert_eq!(r.status(), 200);
 
-    // list_tasks: a plain array of tasks, no paging fields
-    let tasks = w.ok("list_tasks", json!({"project": "PAY"})).await;
+    // list_tasks: a page of tasks with the total and no cursor on the last page
+    let page = w.ok("list_tasks", json!({"project": "PAY"})).await;
+    assert!(page["nextCursor"].is_null(), "{page}");
+    assert_eq!(page["total"], 1);
+    let tasks = page["items"].clone();
     assert!(tasks.is_array(), "{tasks}");
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();

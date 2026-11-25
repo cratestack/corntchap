@@ -2,12 +2,20 @@ part of "../corntchap.cstack"
 
 // Menus: a project's milestones (see src/menus.rs).
 
-/// A project's menus with their progress.
+/// A project's menus with their progress, all at once, for the console (not an MCP tool).
 /// @param project Project key, e.g. PAY.
 /// @param includeServed Also list menus already served (shipped).
 procedure menuList(project: String, includeServed: Boolean?): MenuView[]
   @allow(auth() != null)
-  @mcp(tool: "list_menus", description: "The project's menus (milestones such as MVP), open ones first, each with done/total progress. Put tasks on a menu with create_task/update_task `menu`, and focus claim_next on one with its `menu` filter.")
+
+/// A page of a project's menus with their progress, open ones first, each by position and key.
+/// @param project Project key, e.g. PAY.
+/// @param status open (default), served or all.
+/// @param q Only menus whose key or name contains this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure menuPage(project: String, status: String?, q: String?, page: CursorPageInput?): CursorPage<MenuView>
+  @allow(auth() != null)
+  @mcp(tool: "list_menus", description: "The project's menus (milestones such as MVP), open ones first (status open, served or all), each with done/total progress, a page at a time (items, nextCursor). Put tasks on a menu with create_task/update_task `menu`, and focus claim_next on one with its `menu` filter.")
 
 /// Create a menu.
 /// @param project Project key, e.g. PAY.

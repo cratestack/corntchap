@@ -7,11 +7,13 @@ part of "../corntchap.cstack"
 // total_items, parent. No subqueries or other tables; functions: lower, upper, length, coalesce,
 // nullif, greatest, least, now, date_trunc, age, cardinality, array_length, abs, round, starts_with.
 
-/// A pot's saved views.
+/// A page of a pot's saved views, by position and key.
 /// @param project Pot key, e.g. PAY.
-procedure viewList(project: String): ViewOut[]
+/// @param q Only views whose key or name contains this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure savedViewPage(project: String, q: String?, page: CursorPageInput?): CursorPage<ViewOut>
   @allow(auth() != null)
-  @mcp(tool: "list_views", description: "The saved views of a pot (besides its board): name, layout and the SQL each one runs.")
+  @mcp(tool: "list_views", description: "The saved views of a pot (besides its board): name, layout and the SQL each one runs, a page at a time (items, nextCursor).")
 
 /// Create a view, or update the one with the same key.
 /// @param project Pot key, e.g. PAY.
@@ -32,20 +34,12 @@ mutation procedure viewDelete(project: String, key: String): OkResult
   @allow(auth() != null)
   @mcp(tool: "delete_view", description: "Delete a saved view (people; a cook only the views it made, unless it has the plan grant).")
 
-/// The tasks of a saved view, or of a condition you are trying out.
+/// A page of the tasks of a saved view, or of a condition you are trying out.
 /// @param project Pot key, e.g. PAY.
 /// @param key A saved view's key.
 /// @param where A condition to try instead (same rules as save_view).
 /// @param orderBy An order to try.
-procedure viewRun(project: String, key: String?, where: String?, orderBy: String?): TaskView[]
+/// @param page limit (default 25, at most 200) and cursor; a cursor belongs to the condition and order that made it.
+procedure viewPage(project: String, key: String?, where: String?, orderBy: String?, page: CursorPageInput?): CursorPage<TaskView>
   @allow(auth() != null)
-  @mcp(tool: "run_view", description: "Run a saved view, or try a SQL condition and order over a pot's tasks before saving it with save_view (at most 500 tasks).")
-
-/// A page of the tasks of a saved view, or of a condition you are trying out, for the console (not an MCP tool).
-/// @param project Pot key, e.g. PAY.
-/// @param key A saved view's key.
-/// @param where A condition to try instead.
-/// @param orderBy An order to try.
-/// @param page limit (default 25, at most 200) and cursor.
-procedure viewPage(project: String, key: String?, where: String?, orderBy: String?, page: CursorPageInput): CursorPage<TaskView>
-  @allow(auth() != null)
+  @mcp(tool: "run_view", description: "Run a saved view, or try a SQL condition and order over a pot's tasks before saving it with save_view, a page at a time (items, nextCursor; pass page.cursor with the same condition and order for the next page).")

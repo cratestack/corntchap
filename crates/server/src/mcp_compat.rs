@@ -37,8 +37,12 @@ pub const LEGACY_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26",
 
 const MAX_BODY: usize = 4 * 1024 * 1024;
 
+/// Tools per `tools/list` page (older revisions; the 2026-07-28 path is cratestack's own).
+const TOOLS_PAGE: usize = 200;
+
 const INSTRUCTIONS: &str = "Start (and come back) with what_now; a claim after 30 min away returns catch_up first. \
 corntchap coordinates coding agents over one task list per project. \
+list_* tools return {items, nextCursor}: pass page: {cursor: nextCursor} for the next page. \
 Loop: call claim_next with a project key (or claim_task for one named task); you get the task and a \
 lease {epoch, expires_at}. Work the task, tick checklist items with check_item and keep your lease \
 alive (every call carrying the epoch extends it, or call heartbeat). The lease lasts the pot's lease TTL: \
@@ -768,7 +772,15 @@ impl<T: McpTools> Compat<T> {
             }
             "ping" => rpc_result(id, json!({})),
             "tools/list" => {
-                let mut l = self.list_tools();
+                let cursor = match params.get("cursor") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(c)) => Some(c.as_str()),
+                    Some(_) => return Some(rpc_error(id, -32602, "cursor must be a string")),
+                };
+                let mut l = match self.list_tools(cursor) {
+                    Ok(l) => l,
+                    Err(m) => return Some(rpc_error(id, -32602, m)),
+                };
                 if let Some(p) = current_pot() {
                     for t in l["tools"].as_array_mut().into_iter().flatten() {
                         pot_tool(t, &p.key);
@@ -977,9 +989,15 @@ impl<T: McpTools> Compat<T> {
         )
     }
 
-    fn list_tools(&self) -> Value {
-        let tools: Vec<Value> = self.tools.tools().iter().map(tool_json).collect();
-        json!({"tools": tools})
+    /// One page of the tool list; `Err` is a bad cursor (-32602).
+    fn list_tools(&self, cursor: Option<&str>) -> Result<Value, String> {
+        let all: Vec<Value> = self.tools.tools().iter().map(tool_json).collect();
+        let (tools, next) = tools_page(&all, cursor, TOOLS_PAGE)?;
+        let mut l = json!({"tools": tools});
+        if let Some(n) = next {
+            l["nextCursor"] = json!(n);
+        }
+        Ok(l)
     }
 
     /// `Err` is a protocol error (-32602); tool failures are `isError` results.
@@ -1136,9 +1154,69 @@ fn encode_cursor(segment: &str, offset: u64) -> String {
     URL_SAFE_NO_PAD.encode(format!("{segment}:{offset}"))
 }
 
+/// The page of `all` that `cursor` (none: the first) starts, `size` tools long, and the cursor of the
+/// next page while tools remain. A cursor that was not issued for the tool list is an error.
+fn tools_page(
+    all: &[Value],
+    cursor: Option<&str>,
+    size: usize,
+) -> Result<(Vec<Value>, Option<String>), String> {
+    let start = match cursor.filter(|c| !c.is_empty()) {
+        None => 0,
+        Some(c) => decode_cursor("tools", c)
+            .and_then(|o| usize::try_from(o).ok())
+            .filter(|o| *o <= all.len())
+            .ok_or("invalid cursor: it was not issued for tools/list")?,
+    };
+    let end = (start + size).min(all.len());
+    let next = (end < all.len()).then(|| encode_cursor("tools", end as u64));
+    Ok((all[start..end].to_vec(), next))
+}
+
 fn decode_cursor(segment: &str, raw: &str) -> Option<u64> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     let text = String::from_utf8(URL_SAFE_NO_PAD.decode(raw).ok()?).ok()?;
     let (seg, offset) = text.rsplit_once(':')?;
     (seg == segment).then(|| offset.parse().ok()).flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(v: &[Value]) -> Vec<&str> {
+        v.iter().map(|t| t.as_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn tools_pages_walk_the_whole_list_once() {
+        let all: Vec<Value> = ["a", "b", "c", "d", "e"].iter().map(|n| json!(n)).collect();
+        let (first, next) = tools_page(&all, None, 2).unwrap();
+        assert_eq!(names(&first), ["a", "b"]);
+        let (second, next) = tools_page(&all, next.as_deref(), 2).unwrap();
+        assert_eq!(names(&second), ["c", "d"]);
+        let (last, next) = tools_page(&all, next.as_deref(), 2).unwrap();
+        assert_eq!(names(&last), ["e"]);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn a_list_that_fits_has_no_next_cursor() {
+        let all = vec![json!("a"), json!("b")];
+        let (page, next) = tools_page(&all, None, 2).unwrap();
+        assert_eq!((page.len(), next), (2, None));
+        assert!(tools_page(&[], None, 2).unwrap().0.is_empty());
+    }
+
+    #[test]
+    fn a_cursor_that_is_not_for_the_tool_list_is_refused() {
+        let all = vec![json!("a"), json!("b"), json!("c")];
+        for bad in [
+            "garbage".to_string(),
+            encode_cursor("files", 1),
+            encode_cursor("tools", 99),
+        ] {
+            assert!(tools_page(&all, Some(&bad), 2).is_err(), "{bad}");
+        }
+    }
 }

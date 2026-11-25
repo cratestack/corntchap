@@ -1,6 +1,7 @@
 // Generated data and tiny live stores for the virtual list stories; not used by the app.
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore, type ReactNode } from "react";
 import type { ChangeView, TaskView } from "@corntchap/api";
+import { staticSource, type ListSource } from "@/lib/listbox";
 
 export interface FixtureRow {
   id: number;
@@ -236,4 +237,160 @@ export function useThread({ total, loaded, olderPage = 50, olderMs = 300, append
   const state = useSyncExternalStore(store.subscribe, store.get);
   const first = state.items[0]?.seq ?? 1;
   return { items: state.items, loadingOlder: state.loadingOlder, hasOlder: first > 1, loadOlder: store.loadOlder, lastSeq: state.items[state.items.length - 1]?.seq ?? 0 };
+}
+
+// ---- pickers: people and labels, and a source that pages and searches like the server ----
+
+export interface FixturePerson {
+  id: string;
+  /** `cook-1` .. `cook-N` (every fifth is a person, not an agent). */
+  name: string;
+  display: string;
+  kind: "agent" | "user";
+}
+
+export function makePeople(count: number): FixturePerson[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `cook-${i + 1}`,
+    name: `cook-${i + 1}`,
+    display: `Cook number ${i + 1}`,
+    kind: (i + 1) % 5 === 0 ? "user" : "agent",
+  }));
+}
+
+export function makeLabels(count: number): string[] {
+  return Array.from({ length: count }, (_, i) => `label-${i + 1}`);
+}
+
+export const matchPerson = (p: FixturePerson, q: string) => `${p.name} ${p.display}`.toLowerCase().includes(q.trim().toLowerCase());
+export const matchString = (s: string, q: string) => s.toLowerCase().includes(q.trim().toLowerCase());
+
+export function PersonRow({ person }: { person: FixturePerson }) {
+  return (
+    <span className="flex min-w-0 items-baseline gap-2">
+      <span className="truncate font-mono text-[13px] font-medium">{person.name}</span>
+      <span className="truncate text-[12px] text-muted-foreground">{person.display}</span>
+    </span>
+  );
+}
+
+/** A source that has not answered yet (the first page is loading). */
+export function loadingSource<T>(): ListSource<T> {
+  return { ...staticSource<T>([]), isLoading: true, total: null };
+}
+
+/** A source whose first page failed. */
+export function errorSource<T>(): ListSource<T> {
+  return { ...staticSource<T>([]), error: new Error("The server did not answer. Try again."), total: null };
+}
+
+/**
+ * Pages and searches `all` like a server would: `pageSize` rows at a time (`latencyMs` after the request), narrowed by
+ * `match` as `onQuery` is told the search text. `loads` counts the pages asked for.
+ */
+export function usePagedSource<T>(all: readonly T[], opts: { pageSize?: number; latencyMs?: number; match: (item: T, q: string) => boolean; /** The search text already in force (from the URL). */ initialQuery?: string }) {
+  const pageSize = opts.pageSize ?? 25;
+  const latencyMs = opts.latencyMs ?? 250;
+  const store = useMemo(() => {
+    let query = opts.initialQuery ?? "";
+    let applied = query;
+    let shown = pageSize;
+    let loading = false;
+    let loads = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const listeners = new Set<() => void>();
+    const filtered = (q: string) => (q.trim() ? all.filter((it) => opts.match(it, q)) : all);
+    let rows = filtered(query);
+    const snapshot = () => {
+      const source: ListSource<T> = {
+        items: rows.slice(0, shown),
+        hasNextPage: shown < rows.length,
+        fetchNextPage: more,
+        isLoading: false,
+        isFetchingNextPage: loading && applied === query,
+        error: null,
+        total: rows.length,
+        // until the server answers the text typed, the rows are the previous search's
+        pending: applied !== query,
+      };
+      return { source, query, loads };
+    };
+    let current = snapshot();
+    const publish = () => {
+      current = snapshot();
+      listeners.forEach((l) => l());
+    };
+    function more() {
+      if (loading || shown >= rows.length) return;
+      loading = true;
+      loads += 1;
+      publish();
+      setTimeout(() => {
+        shown += pageSize;
+        loading = false;
+        publish();
+      }, latencyMs);
+    }
+    return {
+      get: () => current,
+      subscribe: (l: () => void) => {
+        listeners.add(l);
+        return () => void listeners.delete(l);
+      },
+      onQuery: (q: string) => {
+        query = q;
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          applied = q;
+          rows = filtered(q);
+          shown = pageSize;
+          loading = false;
+          publish();
+        }, latencyMs);
+        publish();
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [all, pageSize, latencyMs]);
+  const { source, query, loads } = useSyncExternalStore(store.subscribe, store.get);
+  return { source, onQuery: store.onQuery, query, loads };
+}
+
+/**
+ * `items` after `ms` (empty before): a section of a palette that answers late, so the rows of the sections after it
+ * move down when it arrives.
+ */
+export function useLateItems<T>(items: readonly T[], ms: number): readonly T[] {
+  const store = useMemo(() => {
+    let current: readonly T[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const listeners = new Set<() => void>();
+    return {
+      get: () => current,
+      subscribe: (l: () => void) => {
+        listeners.add(l);
+        timer ??= setTimeout(() => {
+          current = items;
+          listeners.forEach((f) => f());
+        }, ms);
+        return () => void listeners.delete(l);
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return useSyncExternalStore(store.subscribe, store.get, store.get);
+}
+
+/** What the story's picker last chose, for a test (or a person) to read. */
+export function PickedLine({ value }: { value: string }) {
+  return (
+    <p className="mt-3 text-[12.5px] text-muted-foreground">
+      Picked: <span data-testid="picked" className="font-mono text-foreground">{value}</span>
+    </p>
+  );
+}
+
+/** A page for a popover story to sit on. */
+export function StoryPage({ children }: { children: ReactNode }) {
+  return <div className="min-h-dvh bg-background p-4 md:p-8">{children}</div>;
 }

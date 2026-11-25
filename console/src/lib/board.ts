@@ -39,7 +39,7 @@ export interface BoardData {
   options: TaskView[];
 }
 
-const cursorOf = (p: TaskPage) => p.next_cursor;
+const cursorOf = (p: TaskPage) => p.nextCursor;
 
 /** The board's columns, in the order the board shows them. */
 export const COLUMNS: Bucket[] = ["ready", "claimed", "waiting", "done", "cancelled"];

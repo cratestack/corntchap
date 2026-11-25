@@ -115,13 +115,14 @@ async fn stations_and_the_question_pool() {
         "self-register",
     );
     assert_eq!(own["cook"], "c2");
-    let mine = ok(&app.mcp(&c1, "list_stations", json!({})).await, "list");
+    let mine = ok(&app.mcp(&c1, "list_stations", json!({})).await, "list")["items"].clone();
     assert_eq!(mine.as_array().unwrap().len(), 2);
     let all = ok(
         &app.mcp(&alice, "list_stations", json!({"project": "PAY"}))
             .await,
         "alice list",
-    );
+    )["items"]
+        .clone();
     assert_eq!(all.as_array().unwrap().len(), 3);
 
     // --- the dispatcher wakes idle stations, least recently woken first ---
@@ -182,7 +183,7 @@ async fn stations_and_the_question_pool() {
         "foreign station",
     );
     assert!(e.contains("no station"), "{e}");
-    let held = ok(&app.mcp(&c1, "list_stations", json!({})).await, "holding");
+    let held = ok(&app.mcp(&c1, "list_stations", json!({})).await, "holding")["items"].clone();
     let s0 = held
         .as_array()
         .unwrap()
@@ -268,7 +269,7 @@ async fn stations_and_the_question_pool() {
         .await,
         "complete while parked",
     );
-    let parked = ok(&app.mcp(&c1, "list_stations", json!({})).await, "waiting");
+    let parked = ok(&app.mcp(&c1, "list_stations", json!({})).await, "waiting")["items"].clone();
     let s0 = parked
         .as_array()
         .unwrap()
@@ -281,7 +282,7 @@ async fn stations_and_the_question_pool() {
             .await,
         "pool",
     );
-    assert_eq!(pool.as_array().unwrap().len(), 1);
+    assert_eq!(pool["items"].as_array().unwrap().len(), 1);
     // wait is only for a task you hold
     let e = refused(
         &app.mcp(
@@ -547,7 +548,7 @@ async fn stations_and_the_question_pool() {
 
     // --- my_questions and the feed ---
     let mine = ok(&app.mcp(&c1, "my_questions", json!({})).await, "mine");
-    assert_eq!(mine.as_array().unwrap().len(), 5);
+    assert_eq!(mine["items"].as_array().unwrap().len(), 5);
     let feed = ok(
         &app.mcp(
             &alice,
@@ -593,6 +594,7 @@ async fn stations_and_the_question_pool() {
     let left = ok(
         &app.mcp(&c1, "list_stations", json!({})).await,
         "after remove",
-    );
+    )["items"]
+        .clone();
     assert_eq!(left.as_array().unwrap().len(), 1);
 }

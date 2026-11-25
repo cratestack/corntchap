@@ -23,3 +23,12 @@ procedure waitForWork(project: String?, timeoutS: Int?): WaitResult
 /// @param page limit (default 20, at most 200) and cursor.
 procedure cookDecisions(agent: String, page: CursorPageInput): CursorPage<ChangeView>
   @allow(auth() != null)
+
+/// A page of a pot's change feed, newest first, for the console's activity page (not an MCP tool).
+/// @param project Pot key, e.g. PAY.
+/// @param kinds Comma-separated event kinds or `kind.*` prefixes, e.g. task.claimed,question.*.
+/// @param actor Only events by this person, cook or fire.
+/// @param task Only events about this task, e.g. PAY-12.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure eventPage(project: String, kinds: String?, actor: String?, task: String?, page: CursorPageInput): CursorPage<ChangeView>
+  @allow(auth() != null)

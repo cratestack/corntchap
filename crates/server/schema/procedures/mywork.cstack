@@ -7,3 +7,10 @@ part of "../corntchap.cstack"
 procedure myWork(project: String?): MyWorkView
   @allow(auth() != null)
   @mcp(tool: "my_work", description: "What is yours across every pot you can see: `owned` (open, claimed and blocked tasks you are accountable for, by pot), `holding` (tasks you hold with a live lease), `waiting_on_me` (questions addressed to you, reviews asked of you or of the team, unanswered comments on your tasks; people also see the open questions nobody picked), `blocked_on_me` (tasks parked on a question you must answer, or depending on a task you own) and `counts`. A task's owner is the person accountable for it, whoever does the work: set it with create_task / update_task owner. what_now is the same for one pot and your station.")
+
+/// A page of one section of what you own or hold: highest priority first, then pot and number.
+/// @param section owned (open, claimed and blocked tasks you own), holding (tasks you hold with a live lease) or blocked (tasks parked on a question you must answer, or depending on a task you own).
+/// @param project Only this pot (key, e.g. PAY).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure myWorkPage(section: String, project: String?, page: CursorPageInput): CursorPage<WorkTask>
+  @allow(auth() != null)

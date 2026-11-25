@@ -70,3 +70,20 @@ type WokenRef {
   /// A cloud cook (a Claude routine, a GitHub mention, a webhook): fire and forget, each wake a fresh run that answers once.
   cloud Boolean?
 }
+
+/// One of your direct conversations in a pot.
+type PassConversationView {
+  /// The other chef's name.
+  chef String
+  /// How the chef is shown (people), when they have one.
+  display_name String?
+  /// user or agent.
+  kind String
+  /// The seq of the newest message in the conversation: order of the list, newest first.
+  last_seq Int
+  last_at String
+  /// The newest message, cut to 140 characters.
+  preview String?
+  /// Messages from them you have not read.
+  unread Int
+}

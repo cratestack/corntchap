@@ -85,7 +85,7 @@ async fn an_orchestrator_creates_and_manages_their_own_things() {
     let w = world().await;
     let (app, o) = (&w.app, &w.orch);
     kitchen(&w).await;
-    let teams = ok(&app.mcp(o, "list_teams", json!({})).await, "teams");
+    let teams = ok(&app.mcp(o, "list_teams", json!({})).await, "teams")["items"].clone();
     assert_eq!(teams[0]["name"], "kitchen");
     assert_eq!(teams[0]["role"], "owner");
     // pots, their settings and repositories
@@ -162,7 +162,8 @@ async fn an_orchestrator_creates_and_manages_their_own_things() {
     let targets = ok(
         &app.mcp(o, "list_wake_targets", json!({"cook": "oc"})).await,
         "targets",
-    );
+    )["items"]
+        .clone();
     assert_eq!(targets.as_array().unwrap().len(), 4);
     ok(
         &app.mcp(o, "set_grants", json!({"name": "oc", "grants": "plan"}))
@@ -297,11 +298,11 @@ async fn an_orchestrator_cannot_touch_another_ones_team_pot_or_cooks() {
     );
     assert_eq!(app.post(o2, "/agents/oc/rotate", json!({})).await.0, 404);
     // the other orchestrator's lists hold only their own
-    let cooks = ok(&app.mcp(o2, "list_cooks", json!({})).await, "cooks");
+    let cooks = ok(&app.mcp(o2, "list_cooks", json!({})).await, "cooks")["items"].clone();
     assert_eq!(cooks.as_array().unwrap().len(), 1);
     assert_eq!(cooks[0]["name"], "pc");
     assert_eq!(
-        ok(&app.mcp(o2, "list_teams", json!({})).await, "teams"),
+        ok(&app.mcp(o2, "list_teams", json!({})).await, "teams")["items"],
         json!([])
     );
     // the teams and pots of the REST model are theirs alone, too
@@ -704,7 +705,7 @@ async fn a_demoted_owners_ownership_goes_dormant_and_returns_with_the_role() {
         refused(&app.mcp(o, tool, args).await, tool);
     }
     // still a member of the team: they see it
-    let teams = ok(&app.mcp(o, "list_teams", json!({})).await, "teams");
+    let teams = ok(&app.mcp(o, "list_teams", json!({})).await, "teams")["items"].clone();
     assert_eq!(teams[0]["role"], "owner");
     // their own cooks stay theirs: that never came from the team
     ok(
@@ -853,7 +854,7 @@ async fn the_people_directory_has_no_details() {
     let w = world().await;
     let (app, o) = (&w.app, &w.orch);
     // a person who disabled themselves out is not offered
-    let dir = ok(&app.mcp(o, "list_users", json!({})).await, "directory");
+    let dir = ok(&app.mcp(o, "list_users", json!({})).await, "directory")["items"].clone();
     let rows = dir.as_array().unwrap();
     assert!(rows.iter().any(|u| u["name"] == "mem"));
     for u in rows {
@@ -883,7 +884,8 @@ async fn the_people_directory_has_no_details() {
     let full = ok(
         &app.mcp(&w.root, "list_users", json!({})).await,
         "full list",
-    );
+    )["items"]
+        .clone();
     assert!(
         full.as_array()
             .unwrap()
@@ -928,9 +930,10 @@ async fn an_owner_may_remove_but_not_manage_a_members_cook() {
         &app.mcp(o, "list_team_members", json!({"team": "kitchen"}))
             .await,
         "chefs",
-    );
+    )["items"]
+        .clone();
     assert!(chefs.as_array().unwrap().iter().any(|c| c["name"] == "mk"));
-    let mine = ok(&app.mcp(o, "list_cooks", json!({})).await, "cooks");
+    let mine = ok(&app.mcp(o, "list_cooks", json!({})).await, "cooks")["items"].clone();
     assert!(mine.as_array().unwrap().iter().all(|c| c["name"] != "mk"));
     for (tool, args) in [
         ("rotate_token", json!({"name": "mk"})),
@@ -972,7 +975,8 @@ async fn an_owner_may_remove_but_not_manage_a_members_cook() {
         &app.mcp(o, "list_team_members", json!({"team": "kitchen"}))
             .await,
         "chefs",
-    );
+    )["items"]
+        .clone();
     assert!(chefs.as_array().unwrap().iter().all(|c| c["name"] != "mk"));
     // the cook still exists, its owner's
     ok(

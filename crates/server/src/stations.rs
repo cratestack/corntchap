@@ -387,24 +387,35 @@ pub async fn list(
     Ok(Value::Array(rows))
 }
 
-/// A page of cloud runs for the console (`cloudRunPage`), newest first (created_at desc, ref),
-/// ended ones too; same visibility as [`list`] with `kind = cloud-run`.
-pub async fn run_page(
+/// A page of stations (`stationPage`, and `cloudRunPage` with `kind = cloud-run`), newest first
+/// (created_at desc, ref). Same visibility and `kind` rules as [`list`]: without a kind the sessions
+/// and the cloud runs that have not ended. `q` matches the label, directory and session id (any case).
+#[allow(clippy::too_many_arguments)]
+pub async fn page(
     db: &PgPool,
     p: &Principal,
     project: Option<&str>,
     cook: Option<&str>,
+    kind: Option<&str>,
     live: Option<bool>,
+    q: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<(Vec<Value>, Option<String>)> {
+    if let Some(k) = kind
+        && !matches!(k, "session" | "cloud-run")
+    {
+        return invalid("kind is session or cloud-run");
+    }
+    let order = format!("-created_at,ref:{}", kind.unwrap_or("live"));
     let paging = crate::paging::paging(
         page,
-        "-created_at,ref",
+        &order,
         2,
         crate::paging::DEFAULT_LIMIT,
         crate::paging::MAX_LIMIT,
     )?;
     let who = admin::acting_or_self(db, p).await?;
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
     let sql = format!(
         "select {STATION_JSON}, array[st.created_at::text, st.ref]
          from stations st join principals a on a.id = st.agent_id
@@ -414,11 +425,12 @@ pub async fn run_page(
                                    where m.team_id = pr.team_id and m.principal_id = $2 and m.role = 'owner')))
            and ($3::text is null or pr.key = $3)
            and ($4::text is null or a.name = $4)
-           and st.kind = 'cloud-run'
-           and ($6::bool is null or $6 = (st.ended_at is null))
-           and ($7::text is null or st.created_at < $7::text::timestamptz
-                or (st.created_at = $7::text::timestamptz and st.ref > $8))
-         order by st.created_at desc, st.ref limit $9"
+           and (case when $6::text is null then (st.kind = 'session' or st.ended_at is null) else st.kind = $6 end)
+           and ($7::bool is null or $7 = (st.ended_at is null))
+           and ($8::text is null or position(lower($8) in lower(coalesce(st.label, '') || ' ' || coalesce(st.directory, '') || ' ' || st.session_ref)) > 0)
+           and ($9::text is null or st.created_at < $9::text::timestamptz
+                or (st.created_at = $9::text::timestamptz and st.ref > $10))
+         order by st.created_at desc, st.ref limit $11"
     );
     let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(who.is_super_admin())
@@ -426,7 +438,9 @@ pub async fn run_page(
         .bind(project.map(|k| k.trim().to_uppercase()))
         .bind(cook.map(|c| c.trim().to_lowercase()))
         .bind(who.can_orchestrate())
+        .bind(kind)
         .bind(live)
+        .bind(q)
         .bind(paging.key(0))
         .bind(paging.key(1))
         .bind(paging.fetch())

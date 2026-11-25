@@ -31,3 +31,9 @@ type MemoryView {
   /// The body was cut to an excerpt: read it in full with get_memory.
   truncated Boolean?
 }
+
+/// A tag used in a pot's pantry, with how many memories carry it.
+type TagCount {
+  tag String
+  count Int
+}

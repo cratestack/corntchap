@@ -126,6 +126,60 @@ pub async fn list(
     Ok(Value::Array(rows.into_iter().map(with_progress).collect()))
 }
 
+/// A page of a project's menus (`menuPage`, the `list_menus` tool): open ones first, then served,
+/// each by position and key, with its progress. `status` is `open` (default), `served` or `all`;
+/// `q` matches the key and the name (any case).
+pub async fn page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    status: Option<&str>,
+    q: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let status = status
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "open".into());
+    if !["open", "served", "all"].contains(&status.as_str()) {
+        return invalid("status is open, served or all");
+    }
+    let paging = crate::paging::paging(
+        page,
+        "served,position,key",
+        3,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
+    let sql = format!(
+        "select {MENU_JSON}, array[(m.status = 'served')::int::text, m.position::text, m.key]
+         from menus m join projects pr on pr.id = m.project_id
+         where m.project_id = $1 and ($2 = 'all' or m.status = $2)
+           and ($3::text is null or position(lower($3) in lower(m.key || ' ' || m.name)) > 0)
+           and ($4::text is null or ((m.status = 'served')::int, m.position, m.key)
+                > ($4::text::bigint, $5::text::bigint, $6::text))
+         order by (m.status = 'served'), m.position, m.key limit $7"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(&status)
+        .bind(q)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.key(2))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (with_progress(v), k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 pub struct NewMenu {
     pub project: String,
     pub name: String,

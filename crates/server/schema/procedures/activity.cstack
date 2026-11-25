@@ -12,11 +12,20 @@ part of "../corntchap.cstack"
 mutation procedure activityRecord(runtime: String, session: String, tool: String, files: String[], checkpoint: String?, summary: String?): ActivityResult
   @allow(auth() != null)
 
-/// Recent agent activity in a pot, newest first.
+/// Recent agent activity in a pot, newest first, for the console (not an MCP tool).
 /// @param project Pot key, e.g. PAY.
 /// @param station Only this station.
 /// @param task Only activity while a station held this task, e.g. PAY-12.
 /// @param limit At most this many (default 50, max 200).
 procedure activityList(project: String, station: String?, task: String?, limit: Int?): ActivityView[]
   @allow(auth() != null)
-  @mcp(tool: "list_activity", description: "Recent agent activity in a pot, newest first: which station used which tool on which files, and the git checkpoint taken. Paths only, never contents.")
+
+/// A page of the agent activity in a pot, newest first.
+/// @param project Pot key, e.g. PAY.
+/// @param station Only this station.
+/// @param task Only activity while a station held this task, e.g. PAY-12.
+/// @param cook Only this cook's sessions.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure activityPage(project: String, station: String?, task: String?, cook: String?, page: CursorPageInput?): CursorPage<ActivityView>
+  @allow(auth() != null)
+  @mcp(tool: "list_activity", description: "Recent agent activity in a pot, newest first, a page at a time (items, nextCursor): which station used which tool on which files, and the git checkpoint taken. Paths only, never contents. Narrow with station, task or cook.")

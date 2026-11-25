@@ -137,7 +137,7 @@ type TaskView {
 type TaskPage {
   items TaskView[]
   /// The cursor of the next page; absent on the last one.
-  next_cursor String?
+  nextCursor String?
   /// Tasks matching the filters, all pages together.
   total Int
 }
@@ -372,4 +372,10 @@ type SplitResult {
   parent TaskDetail
   /// The subtasks created now (none when every repository already had its part).
   subtasks TaskView[]
+}
+
+/// A label used in a pot, with how many tasks carry it.
+type LabelCount {
+  label String
+  count Int
 }

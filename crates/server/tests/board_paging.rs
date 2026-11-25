@@ -101,7 +101,7 @@ impl W {
             }
             cursor = v["nextCursor"]
                 .as_str()
-                .or(v["next_cursor"].as_str())
+                .or(v["nextCursor"].as_str())
                 .map(String::from);
             if cursor.is_none() {
                 return seen;
@@ -278,7 +278,7 @@ async fn every_column_keyset_walks_once_with_inserts_mid_walk() {
         .ok(&w.alice, "taskPage", page("ready", json!({}), json!({})))
         .await;
     assert_eq!(v["items"].as_array().unwrap().len(), 25);
-    assert!(v["next_cursor"].is_string());
+    assert!(v["nextCursor"].is_string());
     // a cursor of one column does not fit another
     let (st, _) = w
         .proc(
@@ -287,7 +287,7 @@ async fn every_column_keyset_walks_once_with_inserts_mid_walk() {
             page(
                 "claimed",
                 json!({}),
-                json!({"cursor": v["next_cursor"], "limit": 2}),
+                json!({"cursor": v["nextCursor"], "limit": 2}),
             ),
         )
         .await;
@@ -304,17 +304,37 @@ async fn totals_follow_the_holder_status_and_label_filters() {
     assert_eq!(w.total("active", json!({"holder": "alice"})).await, 5);
     assert_eq!(w.total("active", json!({"holder": "nobody"})).await, 0);
     assert_eq!(w.total("done", json!({"holder": "alice"})).await, 0);
-    // status narrows to a column, whatever list is asked for
-    assert_eq!(w.total("active", json!({"status": "claimed"})).await, 3);
-    assert_eq!(w.total("active", json!({"status": "waiting"})).await, 4);
-    assert_eq!(w.total("ready", json!({"status": "ready"})).await, 25);
-    assert_eq!(w.total("ready", json!({"status": "waiting"})).await, 0);
+    // status is the raw task status and narrows whatever list is asked for (a lapsed lease is still `claimed`)
+    assert_eq!(w.total("active", json!({"status": "claimed"})).await, 5);
+    assert_eq!(w.total("active", json!({"status": "blocked"})).await, 3);
+    assert_eq!(w.total("ready", json!({"status": "open"})).await, 23);
+    assert_eq!(w.total("ready", json!({"status": "blocked"})).await, 0);
     assert_eq!(w.total("done", json!({"status": "claimed"})).await, 0);
     assert_eq!(
-        w.total("active", json!({"status": "claimed", "holder": "alice"}))
+        w.total("active", json!({"status": " Claimed ", "holder": "alice"}))
             .await,
-        3
+        5
     );
+    // a status with no bucket looks at every bucket: `done` finds the done tasks
+    for (status, n) in [("done", 6), ("cancelled", 2), ("blocked", 3), ("open", 24)] {
+        let (st, v) = w
+            .proc(
+                &w.alice,
+                "taskPage",
+                json!({"project": "PAY", "status": status, "page": {"limit": 100}}),
+            )
+            .await;
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["total"], n, "{status}");
+        assert_eq!(v["items"].as_array().unwrap().len(), n as usize, "{status}");
+        assert!(
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|t| t["status"] == status)
+        );
+    }
     // labels: odd numbers 19..39 are ready (11 of them); 12..16 on the fire or lapsed: 13, 15 odd
     assert_eq!(w.total("ready", json!({"label": "odd"})).await, 12);
     assert_eq!(w.total("ready", json!({"label": "even"})).await, 13);
@@ -396,4 +416,29 @@ async fn columns_take_big_priorities() {
             .await;
         assert_eq!(seen, want, "{bucket}");
     }
+}
+
+/// `bucket: all` walks by number, which never changes: heartbeats and edits mid-walk skip and repeat nothing.
+#[tokio::test]
+async fn the_all_bucket_walks_by_number_whatever_changes_mid_walk() {
+    let w = board().await;
+    let db = &w.app.state.db;
+    let seen = w
+        .walk(
+            &w.alice,
+            "taskPage",
+            json!({"project": "PAY", "bucket": "all"}),
+            7,
+            id,
+            || async {
+                sqlx::query("update tasks set updated_at = now() + make_interval(secs => number)")
+                    .execute(db)
+                    .await
+                    .unwrap();
+            },
+        )
+        .await;
+    assert_eq!(seen.len(), 40, "{seen:?}");
+    assert_eq!(unique(&seen), 40);
+    assert_eq!(seen[0], "PAY-40");
 }

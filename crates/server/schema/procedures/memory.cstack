@@ -57,3 +57,11 @@ mutation procedure memoryForget(project: String, key: String, notify: Boolean?, 
 /// @param page limit (default 25, at most 200) and cursor.
 procedure memoryPage(project: String, kind: String?, tags: String?, page: CursorPageInput): CursorPage<MemoryView>
   @allow(auth() != null)
+
+/// A page of the tags used in a pot's pantry, with how many memories carry each, by tag.
+/// @param project Project key, e.g. PAY.
+/// @param q Only tags containing this (any case).
+/// @param kind Only count memories of this kind.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure tagPage(project: String, q: String?, kind: String?, page: CursorPageInput): CursorPage<TagCount>
+  @allow(auth() != null)

@@ -286,7 +286,8 @@ pub fn check_order(sql: &str) -> Result<Option<String>> {
     ))
 }
 
-/// Run a checked condition and order over a pot, read-only, at most 500 tasks.
+/// Try a checked condition and order over a pot, read-only, at most 500 tasks (what `save` does
+/// before it stores a view).
 async fn run_checked(
     db: &PgPool,
     project: Uuid,
@@ -325,18 +326,46 @@ const VIEW_JSON: &str = r#"jsonb_build_object('key', v.key, 'name', v.name, 'des
   'layout', v.layout, 'where', v.where_sql, 'order', v.order_sql, 'position', v.position,
   'created_by', (select name from principals where id = v.created_by), 'updated_at', v.updated_at)"#;
 
-pub async fn list(db: &PgPool, p: &Principal, project: &str) -> Result<Value> {
+/// A page of a pot's saved views (`savedViewPage`, the `list_views` tool), by position and key. `q`
+/// matches the key and the name (any case).
+pub async fn saved_page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    q: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
     let p = p.clone().worker()?;
+    let paging = crate::paging::paging(
+        page,
+        "position,key",
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, &p, &project.trim().to_uppercase()).await?;
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
     let sql = format!(
-        "select {VIEW_JSON} from pot_views v where v.project_id = $1 order by v.position, v.created_at"
+        "select {VIEW_JSON}, array[v.position::text, v.key] from pot_views v
+         where v.project_id = $1
+           and ($2::text is null or position(lower($2) in lower(v.key || ' ' || v.name)) > 0)
+           and ($3::text is null or (v.position, v.key) > ($3::text::bigint, $4::text))
+         order by v.position, v.key limit $5"
     );
-    let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(pr.id)
+        .bind(q)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
         .fetch_all(&mut *c)
         .await?;
-    Ok(Value::Array(rows))
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
 }
 
 pub struct Save {
@@ -444,20 +473,7 @@ pub async fn delete(db: &PgPool, p: &Principal, project: &str, key: &str) -> Res
     Ok(json!({"ok": true}))
 }
 
-/// Run a saved view (`key`), or a condition and order to try one out.
-pub async fn run(
-    db: &PgPool,
-    p: &Principal,
-    project: &str,
-    key: Option<&str>,
-    where_sql: Option<&str>,
-    order_sql: Option<&str>,
-) -> Result<Vec<Value>> {
-    let (project, w, o) = resolve(db, p, project, key, where_sql, order_sql).await?;
-    run_checked(db, project, &w, o.as_deref()).await
-}
-
-/// The pot and the checked condition and order a `run` or `page` call stands for.
+/// The pot and the checked condition and order a `page` call stands for.
 async fn resolve(
     db: &PgPool,
     p: &Principal,
@@ -491,9 +507,8 @@ async fn resolve(
     Ok((pr.id, w, o))
 }
 
-/// A page of a view's tasks for the console (`viewPage`): the same rows in the same order as
-/// [`run`], without its 500-row cap. The cursor holds the last row number; it is tied to the
-/// condition and order it was minted for.
+/// A page of a view's tasks (`viewPage`, the `run_view` tool), or of a condition and order to try
+/// out. The cursor holds the last row number; it is tied to the condition and order it was minted for.
 pub async fn page(
     db: &PgPool,
     p: &Principal,

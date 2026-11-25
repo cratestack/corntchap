@@ -510,14 +510,15 @@ pub async fn cancel(db: &PgPool, p: &Principal, id: &str) -> Result<Value> {
     Ok(out)
 }
 
-/// A page of the pot's reviews for the console (`reviewPage`): waiting ones first, then newest
-/// first (requested, created_at, number), same filters as [`list`] without the task.
+/// A page of the pot's reviews (`reviewPage`, the `list_reviews` tool): waiting ones first, then
+/// newest first (requested, created_at, number), same filters as [`list`].
 pub async fn page(
     db: &PgPool,
     p: &Principal,
     project: &str,
     mine: bool,
     state: Option<&str>,
+    task: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<(Vec<Value>, Option<String>)> {
     let state = state
@@ -544,20 +545,26 @@ pub async fn page(
     )?;
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let task_id: Option<Uuid> = match task.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => Some(task_by_ref(&mut c, p, t).await?.id),
+        None => None,
+    };
     let sql = format!(
         "select {REVIEW_JSON}, array[(rv.state = 'requested')::int::text, rv.created_at::text, rv.number::text]
          from reviews rv join projects pr on pr.id = rv.project_id
          where rv.project_id = $1 and ($2 = 'all' or rv.state = $2)
            and (not $3 or rv.reviewer = $4 or (rv.reviewer is null and rv.requested_by is distinct from $4))
-           and ($5::text is null or ((rv.state = 'requested')::int, rv.created_at, rv.number)
-                < ($5::text::int, $6::text::timestamptz, $7::text::bigint))
-         order by (rv.state = 'requested') desc, rv.created_at desc, rv.number desc limit $8"
+           and ($5::uuid is null or rv.task_id = $5)
+           and ($6::text is null or ((rv.state = 'requested')::int, rv.created_at, rv.number)
+                < ($6::text::bigint, $7::text::timestamptz, $8::text::bigint))
+         order by (rv.state = 'requested') desc, rv.created_at desc, rv.number desc limit $9"
     );
     let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(pr.id)
         .bind(&state)
         .bind(mine)
         .bind(p.id)
+        .bind(task_id)
         .bind(paging.key(0))
         .bind(paging.key(1))
         .bind(paging.key(2))
