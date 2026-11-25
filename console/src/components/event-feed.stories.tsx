@@ -78,3 +78,11 @@ const decisions: ChangeView[] = [
 export const RestaurantDecisions: Story = { args: { events: decisions } };
 
 export const RestaurantDecisionsCompact: Story = { args: { events: decisions, compact: true } };
+
+/** A paged read of the activity (`eventPage`) gives newest first, with older pages behind: the footer loads 40 more each time the end comes into view. */
+export const NewestFirstPaged: Story = {
+  render: function Newest(args) {
+    const t = usePaged((n) => makeEvents(n, 0).slice(-n).reverse(), 40, 40, 400);
+    return <EventFeed {...args} events={t.items} newestFirst hasOlder={!t.done} loadingOlder={t.loading} onLoadOlder={t.loadMore} />;
+  },
+};

@@ -3,7 +3,7 @@ import type { ChangeView } from "@corntchap/api";
 import { CONSOLE_HEADER, client, errorStatus, redirectToLogin } from "./api";
 import { useInvalidateAll } from "./data";
 
-/** How many events the live feed keeps; older ones are read on request (`useOlderEvents`). */
+/** How many events the live feed keeps; the activity page reads older ones from `eventPage`. */
 export const KEEP = 400;
 /** Coalesce bursts of events (a claim emits several) into one refetch. */
 const INVALIDATE_MS = 250;

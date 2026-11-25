@@ -113,3 +113,13 @@ export const Empty: Story = {
 export const Loading: Story = { render: () => <Bar owner={loadingSource()} label={loadingSource()} /> };
 
 export const Error: Story = { render: () => <Bar owner={errorSource()} label={errorSource()} /> };
+
+/** A list with nothing to search (the activity feed): just the chips and "Clear filters". */
+export const WithoutSearch: Story = {
+  render: function Render() {
+    const o = useMemo(() => staticSource(owners), []);
+    const f = useUrlFilters(SCHEMA);
+    const facets: FacetDef[] = [{ id: "owner", label: "Actor", source: o }];
+    return <FilterBar hideSearch q="" onQ={() => {}} facets={facets} values={{ owner: f.values.owner }} onChange={(p) => f.set(p as never)} onClear={f.clear} />;
+  },
+};

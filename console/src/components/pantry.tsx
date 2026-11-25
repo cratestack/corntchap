@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useSearchParams } from "react-router";
-import type { MemoryRememberArgs, MemoryView } from "@corntchap/api";
+import type { MemoryRememberArgs, MemoryView, TagCount } from "@corntchap/api";
 import { ChevronDown, ChevronRight, Link2, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useProc, useProcCall } from "@/lib/data";
 import { useProcInfinite } from "@/lib/paging";
+import { useTagsSource } from "@/lib/sources";
+import { useStoreValue } from "@/lib/use-store-value";
+import { useTagOptions } from "@/lib/pot-pickers";
 import { errorMessage, errorStatus } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -26,18 +29,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Avatar, EmptyState, LabelChip, RowSkeleton, SectionLabel } from "./bits";
 import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
+import { VirtualMenu } from "./ui/virtual-menu";
 
 // ---------------------------------------------------------------- kinds
 
@@ -129,12 +125,6 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
     { enabled: filtered },
   );
   const rows = filtered ? (res.data ?? []) : all.items;
-  const tagCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const r of all.items) for (const t of r.tags) m.set(t, (m.get(t) ?? 0) + 1);
-    for (const t of tags) if (!m.has(t)) m.set(t, 0);
-    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [all.items, tags]);
 
   const openMemory = (key: string) => setParam("memory", key);
   const closeSheet = () =>
@@ -179,7 +169,7 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
             </KindChip>
           ))}
           <TagFilter
-            tags={tagCounts}
+            pot={potKey}
             selected={tags}
             onChange={(next) => setParam("tag", next.length ? next.join(",") : undefined)}
           />
@@ -276,45 +266,43 @@ function KindChip({ active, count, onClick, children }: { active: boolean; count
   );
 }
 
-function TagFilter({
-  tags,
-  selected,
-  onChange,
-}: {
-  tags: [string, number][];
-  selected: string[];
-  onChange: (t: string[]) => void;
-}) {
+/** The pantry's tags (with how many memories carry each), searched and paged by the server; a memory must have all that are chosen. */
+function TagFilter({ pot, selected, onChange }: { pot: string; selected: string[]; onChange: (t: string[]) => void }) {
+  const q = useStoreValue("");
+  const source = useTagsSource(pot, { q: q.value });
   const value = selected.join(", ");
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        disabled={tags.length === 0}
-        className={cn(
-          "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] whitespace-nowrap transition-colors disabled:opacity-50 md:h-8 md:px-3 md:text-[12.5px]",
-          value ? "border-primary/60 bg-primary/10" : "border-input bg-card hover:border-foreground/30",
-        )}
-      >
-        <span className="text-muted-foreground">Tag</span>
-        {value && <span className="max-w-40 truncate font-medium">{value}</span>}
-        <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-80 min-w-48 overflow-y-auto">
-        <DropdownMenuLabel className="label-caps py-1">Memories with all of</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {tags.map(([t, n]) => (
-          <DropdownMenuCheckboxItem
-            key={t}
-            checked={selected.includes(t)}
-            onSelect={(e) => e.preventDefault()}
-            onCheckedChange={(on) => onChange(on ? [...selected, t] : selected.filter((x) => x !== t))}
-          >
-            <span className="min-w-0 flex-1 truncate">{t}</span>
-            <span className="font-mono text-[11px] text-muted-foreground">{n}</span>
-          </DropdownMenuCheckboxItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <VirtualMenu<TagCount>
+      label="Tag"
+      mode="multi"
+      source={source}
+      onQuery={q.set}
+      itemKey={(t) => t.tag}
+      selected={(t) => selected.includes(t.tag)}
+      onSelect={(t) => onChange(selected.includes(t.tag) ? selected.filter((x) => x !== t.tag) : [...selected, t.tag])}
+      header={<p className="label-caps px-3 pt-2 pb-1">Memories with all of</p>}
+      renderItem={(t) => (
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 flex-1 truncate">{t.tag}</span>
+          <span className="font-mono text-[11px] text-muted-foreground">{t.count}</span>
+        </span>
+      )}
+      empty="No tags yet."
+      trigger={
+        <button
+          type="button"
+          aria-label={value ? `Tag: ${value}` : "Tag"}
+          className={cn(
+            "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3.5 text-[13px] whitespace-nowrap transition-colors md:h-8 md:px-3 md:text-[12.5px]",
+            value ? "border-primary/60 bg-primary/10" : "border-input bg-card hover:border-foreground/30",
+          )}
+        >
+          <span className="text-muted-foreground">Tag</span>
+          {value && <span className="max-w-40 truncate font-medium">{value}</span>}
+          <ChevronDown className="size-3 text-muted-foreground" aria-hidden="true" />
+        </button>
+      }
+    />
   );
 }
 
@@ -581,6 +569,7 @@ function MemoryEditForm({
   onReload: () => Promise<void>;
   onDone: () => void;
 }) {
+  const tagOptions = useTagOptions(potKey);
   const [title, setTitle] = useState(m.title);
   const [body, setBody] = useState(m.body);
   const [kind, setKind] = useState(m.kind);
@@ -630,7 +619,7 @@ function MemoryEditForm({
       <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
         <div className="space-y-1.5">
           <Label>Tags</Label>
-          <TagInput label="Tags" value={tags} onChange={setTags} normalize={(s) => s.toLowerCase()} placeholder="add a tag" />
+          <TagInput label="Tags" value={tags} onChange={setTags} normalize={(s) => s.toLowerCase()} placeholder="add a tag" {...tagOptions} />
         </div>
         <KindSelect id="m-kind" value={kind} onChange={setKind} />
       </div>
@@ -680,6 +669,7 @@ export function NewMemoryDialog({
   onSaved: (key: string) => void;
 }) {
   const call = useProcCall();
+  const tagOptions = useTagOptions(potKey, open);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [kind, setKind] = useState("note");
@@ -749,7 +739,7 @@ export function NewMemoryDialog({
           <div className="grid gap-4 sm:grid-cols-[1fr_10rem]">
             <div className="space-y-1.5">
               <Label>Tags</Label>
-              <TagInput label="Tags" value={tags} onChange={setTags} normalize={(s) => s.toLowerCase()} placeholder="add a tag" />
+              <TagInput label="Tags" value={tags} onChange={setTags} normalize={(s) => s.toLowerCase()} placeholder="add a tag" {...tagOptions} />
             </div>
             <KindSelect id="nm-kind" value={kind} onChange={setKind} />
           </div>

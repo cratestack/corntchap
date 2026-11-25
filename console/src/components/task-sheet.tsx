@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useSearchParams } from "react-router";
-import type { TaskDetail } from "@corntchap/api";
+import type { MenuView, TaskCommentView, TaskDetail } from "@corntchap/api";
 import { CheckCheck, ChevronLeft, Flame, Loader2, MoreHorizontal, Pencil, Send, Trash2, Undo2, Unlock } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
@@ -24,6 +23,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useProc, useProcCall, useProjects, useV1Call } from "@/lib/data";
+import { useCommentsSource, useMenusSource } from "@/lib/sources";
+import { useStoreValue } from "@/lib/use-store-value";
+import { useLabelOptions } from "@/lib/pot-pickers";
 import { errorMessage } from "@/lib/api";
 import { BUCKETS, bucketOf, fmtAgo, useNow, taskNote } from "@/lib/format";
 import { useSession } from "@/lib/session";
@@ -39,7 +41,9 @@ import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
 import { PRIORITIES } from "./new-task";
-import { MenuChip, useMenus } from "./menus";
+import { MenuChip, useMenu } from "./menus";
+import { VirtualCombobox } from "./ui/virtual-combobox";
+import { VirtualThread } from "./ui/virtual-thread";
 import { Attachments } from "./files";
 import { EventFeed } from "./event-feed";
 import { ParkedQuestion, parkedQuestionRef } from "./questions";
@@ -90,15 +94,9 @@ function Prop({ children, className, title }: { children: React.ReactNode; class
   );
 }
 
-/** Comments a task opens with, and how many more "Show earlier" adds. */
-const COMMENTS_FIRST = 30;
-const COMMENTS_MORE = 50;
-
 function TaskDetailBody({ id }: { id: string }) {
-  // the newest comments come with the task; "Show earlier" asks for more, kept in the URL (`?comments=80`)
-  const [params, setParams] = useSearchParams();
-  const commentsLimit = Math.max(COMMENTS_FIRST, Number(params.get("comments")) || COMMENTS_FIRST);
-  const q = useProc("taskDetail", { id, commentsLimit }, { keepPrevious: true });
+  // the comments are their own paged list (`Comments`): the task comes without them, with their count
+  const q = useProc("taskDetail", { id, commentsLimit: 0 }, { keepPrevious: true });
   const me = useSession();
   const call = useProcCall();
   const v1 = useV1Call();
@@ -357,56 +355,7 @@ function TaskDetailBody({ id }: { id: string }) {
                 </section>
               )}
 
-              <section aria-labelledby="cm">
-                <SectionLabel>
-                  <span id="cm">Comments · {t.comments_total}</span>
-                </SectionLabel>
-                {t.comments_total > t.comments.length && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="mt-2 text-[12.5px] text-muted-foreground"
-                    onClick={() =>
-                      setParams(
-                        (p) => {
-                          const n = new URLSearchParams(p);
-                          n.set("comments", String(commentsLimit + COMMENTS_MORE));
-                          return n;
-                        },
-                        { replace: true },
-                      )
-                    }
-                  >
-                    Show earlier ({t.comments_total - t.comments.length})
-                  </Button>
-                )}
-                <ul className="mt-3 space-y-3">
-                  {t.comments_total === 0 && <li className="text-muted-foreground">No comments yet. Leave a note for the next cook.</li>}
-                  {t.comments.map((c, i) => (
-                    <li key={i} className="flex gap-3">
-                      <ActorAvatar name={c.author ?? "?"} kind={c.author_kind} className="mt-0.5 size-7 text-[12px]" />
-                      <div className="min-w-0 flex-1 rounded-xl border border-border bg-muted/40 px-3.5 py-2.5">
-                        <p className="text-[12px]">
-                          <span className="font-semibold">{c.author ?? "someone"}</span>{" "}
-                          {c.station_label && (
-                            <span className="font-mono text-[10.5px] text-muted-foreground">
-                              ·{" "}
-                              <StationLink
-                                label={c.station_url ? shortUrl(c.station_url) : c.station_label}
-                                url={c.station_url}
-                                title={c.station_url ? `Cloud run ${c.station}: ${c.station_url}` : `Session ${c.station}`}
-                              />{" "}
-                            </span>
-                          )}
-                          <span className="font-mono text-[10.5px] text-muted-foreground">{fmtAgo(c.at, now)}</span>
-                        </p>
-                        <Markdown className="mt-0.5 !text-[14px]">{c.body}</Markdown>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </section>
+              <Comments taskId={t.id} total={t.comments_total} />
 
               {activity.length > 0 && (
                 <section aria-labelledby="ac">
@@ -493,26 +442,102 @@ function MenuPicker({
   disabled: boolean;
   save: (menu: string) => void;
 }) {
-  const menus = useMenus(projectOfTask(taskId));
-  const name = current ? (menus.names[current] ?? current) : null;
-  if (closed || (menus.open.length === 0 && !current)) {
+  const pot = projectOfTask(taskId);
+  const q = useStoreValue("");
+  const menus = useMenusSource(pot, { q: q.value, status: "open" });
+  // the menu it is on may be served, so not among the open ones
+  const on = useMenu(pot, current ?? undefined).menu;
+  const name = current ? (on?.name ?? current) : null;
+  const anyOpen = menus.items.length > 0 || menus.isLoading || !!q.value.trim() || !!menus.pending;
+  if (closed || (!anyOpen && !current)) {
     return name ? <MenuChip name={name} className="h-8 px-3 text-[12.5px]" /> : null;
   }
-  const options = [...menus.open, ...menus.menus.filter((m) => m.key === current && m.status === "served")];
   return (
-    <Select value={current ?? "-"} onValueChange={(v) => save(v === "-" ? "" : v)} disabled={disabled}>
-      <SelectTrigger aria-label="Menu" size="sm" className="h-8 min-w-0 max-w-48 gap-1.5 rounded-full border-border px-3 text-[12.5px] data-[size=sm]:h-8">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="-">No menu</SelectItem>
-        {options.map((m) => (
-          <SelectItem key={m.key} value={m.key}>
-            {m.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <VirtualCombobox<MenuView>
+      trigger="pill"
+      label="Menu"
+      nullOption="No menu"
+      source={menus}
+      onQuery={q.set}
+      itemKey={(m) => m.key}
+      itemText={(m) => m.name}
+      valueText={(k) => (k === current ? on?.name : undefined)}
+      value={current}
+      onChange={(v) => v !== current && save(v ?? "")}
+      disabled={disabled}
+    />
+  );
+}
+
+/** A task's comments, oldest at the top and newest at the bottom, paged from the newest as the top comes into view. */
+function Comments({ taskId, total }: { taskId: string; total: number }) {
+  const source = useCommentsSource(taskId);
+  const now = useNow();
+  // the page is newest first; a comment has no id, so its key is when, who and how long, numbered when those repeat
+  const thread = useMemo(() => {
+    const seen = new Map<string, number>();
+    return [...source.items].reverse().map((c) => {
+      const base = `${c.at}|${c.author ?? ""}|${c.body.length}`;
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      return { key: n ? `${base}#${n}` : base, c };
+    });
+  }, [source.items]);
+  const newest = source.items[0];
+  return (
+    <section aria-labelledby="cm">
+      <SectionLabel>
+        <span id="cm">Comments · {total}</span>
+      </SectionLabel>
+      {total === 0 && source.items.length === 0 ? (
+        <p className="mt-3 text-muted-foreground">No comments yet. Leave a note for the next cook.</p>
+      ) : source.error && source.items.length === 0 ? (
+        <p role="alert" className="mt-3 text-destructive">
+          {errorMessage(source.error)}
+        </p>
+      ) : (
+        <div role="log" aria-live="polite" aria-label="Comments" className="mt-3 h-[min(26rem,60dvh)] overflow-hidden rounded-xl border border-border bg-muted/20">
+          <VirtualThread<{ key: string; c: TaskCommentView }>
+            items={thread}
+            itemKey={(r) => r.key}
+            lastSeq={newest ? Date.parse(newest.at) || 0 : 0}
+            hasOlder={!!source.hasNextPage}
+            loadingOlder={source.isFetchingNextPage}
+            onLoadOlder={source.fetchNextPage}
+            aria-label="Comments"
+            itemClassName="px-3 py-1.5"
+            empty={
+              <div role="status" aria-busy="true" className="space-y-3 p-3">
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+              </div>
+            }
+            renderItem={({ c }) => (
+              <div className="flex gap-3">
+                <ActorAvatar name={c.author ?? "?"} kind={c.author_kind} className="mt-0.5 size-7 text-[12px]" />
+                <div className="min-w-0 flex-1 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                  <p className="text-[12px]">
+                    <span className="font-semibold">{c.author ?? "someone"}</span>{" "}
+                    {c.station_label && (
+                      <span className="font-mono text-[10.5px] text-muted-foreground">
+                        ·{" "}
+                        <StationLink
+                          label={c.station_url ? shortUrl(c.station_url) : c.station_label}
+                          url={c.station_url}
+                          title={c.station_url ? `Cloud run ${c.station}: ${c.station_url}` : `Session ${c.station}`}
+                        />{" "}
+                      </span>
+                    )}
+                    <span className="font-mono text-[10.5px] text-muted-foreground">{fmtAgo(c.at, now)}</span>
+                  </p>
+                  <Markdown className="mt-0.5 !text-[14px]">{c.body}</Markdown>
+                </div>
+              </div>
+            )}
+          />
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -606,7 +631,8 @@ function EditForm({
   const [title, setTitle] = useState(t.title);
   const [body, setBody] = useState(t.body);
   const [labels, setLabels] = useState<string[]>(t.labels);
-  const potRepos = useProjects().data?.find((p) => p.key === t.project)?.repos ?? [];
+  const hasRepos = (useProjects().data?.find((p) => p.key === t.project)?.repos.length ?? 0) > 0;
+  const labelOptions = useLabelOptions(t.project);
   const [repos, setRepos] = useState<string[]>(t.repos);
   const [priority, setPriority] = useState(String(Math.max(-1, Math.min(2, t.priority))));
   const [busy, setBusy] = useState(false);
@@ -616,7 +642,7 @@ function EditForm({
     e.preventDefault();
     setBusy(true);
     try {
-      await save({ title: title.trim(), body, priority: Number(priority), labels: labels.join(","), ...(potRepos.length > 0 ? { repos: repos.join(",") } : {}) });
+      await save({ title: title.trim(), body, priority: Number(priority), labels: labels.join(","), ...(hasRepos ? { repos: repos.join(",") } : {}) });
       toast.success(`${t.id} updated`);
       onDone();
     } catch (err) {
@@ -637,17 +663,17 @@ function EditForm({
         <Label htmlFor="e-body">Description (markdown)</Label>
         <Textarea id="e-body" rows={9} value={body} onChange={(e) => setBody(e.target.value)} />
       </div>
-      {potRepos.length > 0 && (
+      {hasRepos && (
         <div className="space-y-1.5">
           <Label>Repositories</Label>
-          <RepoPicker repos={potRepos} value={repos} onChange={setRepos} label="Repositories the task is about" />
+          <RepoPicker multiple pot={t.project} value={repos} onChange={setRepos} label="Repositories the task is about" placeholder="Any repository" />
           <p className="text-[12px] text-muted-foreground">None chosen: any repository.</p>
         </div>
       )}
       <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
         <div className="space-y-1.5">
           <Label>Labels</Label>
-          <TagInput label="Labels" value={labels} onChange={setLabels} normalize={(s) => s.toLowerCase()} placeholder="add a label" />
+          <TagInput label="Labels" value={labels} onChange={setLabels} normalize={(s) => s.toLowerCase()} placeholder="add a label" {...labelOptions} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="e-prio">Priority</Label>

@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import type { TaskPage, TaskView } from "@corntchap/api";
 import type { Bucket } from "./format";
-import { useProc } from "./data";
 import { useProcInfinite } from "./paging";
 
 /** The filters the server applies (taskPage): the cook (`holder`) and the column (`status`) too. */
@@ -17,8 +16,6 @@ export interface BoardFilters {
 
 /** Tasks per page of a column (the server allows up to 200). */
 const PAGE = 25;
-/** Tasks the filter chips are read from: the best of what is in play, unfiltered. */
-const OPTIONS = 200;
 
 export interface BucketMore {
   has: boolean;
@@ -35,8 +32,6 @@ export interface BoardData {
   more: Partial<Record<Bucket, BucketMore>>;
   /** Nothing on the board at all (and no filter hiding it). */
   bare: boolean;
-  /** Tasks the filter chips offer (the board's best, unfiltered, and what the columns hold). */
-  options: TaskView[];
 }
 
 const cursorOf = (p: TaskPage) => p.nextCursor;
@@ -99,12 +94,6 @@ export function useBoardData(pot: string, f: BoardFilters, enabled: boolean): Bo
   const cancelled = useProcInfinite("taskPage", args("cancelled"), opts("cancelled"));
   const cols = { ready, claimed, waiting, done, cancelled };
 
-  const unfiltered = useProc(
-    "taskPage",
-    { project: pot, bucket: "active", label: null, menu: null, owner: null, repo: null, q: null, holder: null, status: null, page: { limit: OPTIONS, cursor: null } },
-    { enabled },
-  );
-
   const groups = useMemo(
     () => oneColumnEach({ ready: ready.items, claimed: claimed.items, waiting: waiting.items, done: done.items, cancelled: cancelled.items }),
     [ready.items, claimed.items, waiting.items, done.items, cancelled.items],
@@ -118,10 +107,6 @@ export function useBoardData(pot: string, f: BoardFilters, enabled: boolean): Bo
     const n = on(b) ? cols[b].total : 0;
     if (n != null) totals[b] = n;
   }
-  const optionTasks = useMemo(() => {
-    const all = [...(unfiltered.data?.items ?? []), ...ready.items, ...claimed.items, ...waiting.items, ...done.items, ...cancelled.items];
-    return [...new Map(all.map((t) => [t.id, t])).values()];
-  }, [unfiltered.data, ready.items, claimed.items, waiting.items, done.items, cancelled.items]);
   return {
     loading,
     error,
@@ -129,6 +114,5 @@ export function useBoardData(pot: string, f: BoardFilters, enabled: boolean): Bo
     totals,
     more: { ready: more(ready), claimed: more(claimed), waiting: more(waiting), done: more(done), cancelled: more(cancelled) },
     bare: !anyFilter && !loading && COLUMNS.every((b) => (cols[b].total ?? 0) === 0),
-    options: optionTasks,
   };
 }
