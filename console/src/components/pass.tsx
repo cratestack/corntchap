@@ -1,26 +1,37 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ExternalLink, Loader2, PanelLeftClose, PanelLeftOpen, Search, UserPlus, X } from "lucide-react";
+import type { MemberView, PassConversationView } from "@corntchap/api";
+import { ChevronDown, ExternalLink, Loader2, MessageSquarePlus, PanelLeftClose, PanelLeftOpen, Search, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/api";
-import { useProjects, useTeamChefs, useV1, useV1Call, type TeamRow } from "@/lib/data";
+import { useProjects, useV1Call } from "@/lib/data";
 import { useNow } from "@/lib/format";
+import type { ListSource } from "@/lib/listbox";
+import { useListQuery } from "@/lib/list-query";
 import { useIsDesktop, useIsPhone } from "@/lib/media";
 import { isSuperAdmin, useSession } from "@/lib/session";
-import { Button } from "@/components/ui/button";
+import { useCooksSource, useTeamMembersSource } from "@/lib/sources";
+import { useStoreValue } from "@/lib/use-store-value";
+import { useUrlFilters } from "@/lib/url-filters";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import { VirtualList } from "@/components/ui/virtual-list";
+import { VirtualMenu } from "@/components/ui/virtual-menu";
+import { Avatar } from "./bits";
 import { ConvAvatar, KindChip } from "./pass-bits";
 import { Composer, type Seed } from "./pass-composer";
 import {
   POT,
+  conversationPreview,
   oneLine,
   previewKey,
   toPreview,
+  useConversations,
   useCooks,
+  useMarkConversationRead,
   usePass,
-  usePreviews,
+  usePotPreview,
   useWakeSignals,
   type CookInfo,
   type Preview,
@@ -99,6 +110,9 @@ export interface Conv {
 
 // ---------------------------------------------------------------- the view
 
+/** The conversation list's filters in the URL: the search text and "unread only". */
+const CHAT_FILTERS = { chat: { type: "string" as const }, unread: { type: "bool" as const } };
+
 export function PassView({ potKey }: { potKey: string }) {
   const me = useSession();
   const now = useNow();
@@ -112,11 +126,7 @@ export function PassView({ potKey }: { potKey: string }) {
   const projects = useProjects();
   const project = projects.data?.find((p) => p.key === potKey);
   const team = project?.team ?? null;
-  const members = useTeamChefs(team);
-  const cooks = useCooks(now);
-  const chefs = useMemo(() => (members.data ?? []).filter((m) => m.name !== me.name), [members.data, me.name]);
-  const chefNames = useMemo(() => new Set(chefs.map((c) => c.name)), [chefs]);
-  const taskKeys = useMemo(() => (projects.data ?? []).map((p) => p.key).sort((a, b) => b.length - a.length), [projects.data]);
+  const filters = useUrlFilters(CHAT_FILTERS);
 
   const withWho = params.get("with") || POT;
   const channel = withWho === POT;
@@ -134,15 +144,34 @@ export function PassView({ potKey }: { potKey: string }) {
     );
   };
 
+  // the team's chefs as far as they are loaded: who a message author may be written to, and how many there are
+  const members = useTeamMembersSource(team ?? "", { enabled: !!team });
+  const cooks = useCooks(now, team, channel ? null : withWho);
+  const conversations = useConversations(potKey, { q: filters.values.chat, unread: filters.values.unread });
+  const opened = conversations.items.find((c) => c.chef === withWho);
+  // a conversation not started yet (picked from "Message a chef"): who it is, by name
+  const named = useTeamMembersSource(team ?? "", { q: withWho, enabled: !channel && !!team && !opened });
+  const chefNames = useMemo(() => {
+    const names = new Set<string>([...members.items.map((m) => m.name), ...conversations.items.map((c) => c.chef), ...cooks.byName.keys()]);
+    names.delete(me.name);
+    return names;
+  }, [members.items, conversations.items, cooks.byName, me.name]);
+  const withKind = opened?.kind ?? named.items.find((m) => m.name === withWho)?.kind ?? (cooks.byName.has(withWho) ? "agent" : "user");
+  const taskKeys = useMemo(() => (projects.data ?? []).map((p) => p.key).sort((a, b) => b.length - a.length), [projects.data]);
+
+  const markRead = useMarkConversationRead();
   const refetchProjects = useRef(projects.refetch);
   refetchProjects.current = projects.refetch;
-  const { page, latest, isLoading, error, hasOlder, loadingOlder, loadOlder } = usePass(potKey, withWho, () => void refetchProjects.current());
+  const { page, latest, isLoading, error, hasOlder, loadingOlder, loadOlder } = usePass(potKey, withWho, () => {
+    void refetchProjects.current();
+    markRead(withWho);
+  });
   const signals = useWakeSignals(potKey, true);
 
-  // the open conversation keeps its own list preview fresh
+  // the open conversation keeps its own list preview fresh (the pass's; a direct one comes with its row)
   const lastMessage = page?.messages[page.messages.length - 1];
   useEffect(() => {
-    if (page) qc.setQueryData(previewKey(potKey, withWho), toPreview(lastMessage));
+    if (page && withWho === POT) qc.setQueryData(previewKey(potKey, POT), toPreview(lastMessage));
   }, [qc, potKey, withWho, page, lastMessage]);
 
   const unreadDirect = useMemo(() => {
@@ -151,51 +180,32 @@ export function PassView({ potKey }: { potKey: string }) {
     return m;
   }, [latest]);
   const unreadPot = latest?.unread.pot ?? 0;
+  const potPreview = usePotPreview(potKey, !!latest && unreadPot === 0 && withWho !== POT);
 
-  // Every direct conversation you are in, the most recent first (the server lists them all).
-  const directNames = useMemo(() => {
-    const names = [...unreadDirect.keys()].filter((n) => n !== me.name);
-    if (!channel && !names.includes(withWho)) names.unshift(withWho);
-    return names;
-  }, [unreadDirect, channel, withWho, me.name]);
-
-  const previewConvs = useMemo(
-    () => [
-      { key: POT, unread: withWho === POT ? 0 : unreadPot, active: withWho === POT },
-      ...directNames.map((n) => ({ key: n, unread: withWho === n ? 0 : (unreadDirect.get(n) ?? 0), active: withWho === n })),
-    ],
-    [directNames, unreadDirect, unreadPot, withWho],
+  const conv = (c: PassConversationView): Conv => ({
+    key: c.chef,
+    name: c.chef,
+    kind: c.kind === "agent" ? "agent" : "user",
+    cook: cooks.byName.get(c.chef),
+    unread: withWho === c.chef ? 0 : c.unread,
+    preview: conversationPreview(c),
+  });
+  const pinned: Conv = { key: POT, name: "pass", channel: true, kind: "channel", unread: withWho === POT ? 0 : unreadPot, preview: potPreview };
+  const rows = useMemo<ListSource<Conv>>(
+    () => ({ ...conversations, items: conversations.items.map(conv) }),
+    // `conv` follows these
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [conversations, cooks.byName, withWho],
   );
-  const previews = usePreviews(potKey, latest ? previewConvs : []);
+  // the open conversation, until it has a row of its own
+  const current: Conv | null =
+    channel || opened || filters.values.chat || filters.values.unread
+      ? null
+      : { key: withWho, name: withWho, kind: withKind === "agent" ? "agent" : "user", cook: cooks.byName.get(withWho), unread: 0, preview: null };
 
-  const conv = (name: string, unread: number): Conv => {
-    const m = members.data?.find((x) => x.name === name);
-    const cook = cooks.byName.get(name);
-    return {
-      key: name,
-      name,
-      kind: (m?.kind ?? (cook ? "agent" : "user")) === "agent" ? "agent" : "user",
-      cook,
-      unread: withWho === name ? 0 : unread,
-      preview: previews.get(name),
-    };
-  };
-  const pinned: Conv = { key: POT, name: "pass", channel: true, kind: "channel", unread: withWho === POT ? 0 : unreadPot, preview: previews.get(POT) };
-  const direct = directNames.map((n) => conv(n, unreadDirect.get(n) ?? 0));
-  const others = chefs.filter((c) => !directNames.includes(c.name)).map((c) => conv(c.name, 0));
-
-  // your own cooks that are not chefs of this pot's team
-  const teams = useV1<TeamRow[]>("/teams");
   // your own cooks may be added by you, whatever your role in the team
-  const canManage = isSuperAdmin(me) || !!teams.data?.find((t) => t.name === team)?.role;
-  const outside = useMemo(
-    () =>
-      (cooks.agents ?? [])
-        .filter((a) => a.owner === me.name && !chefNames.has(a.name) && a.name !== me.name)
-        .map((a) => cooks.byName.get(a.name)!)
-        .filter(Boolean),
-    [cooks.agents, cooks.byName, me.name, chefNames],
-  );
+  const myTeam = useListQuery("teamPage", {}, { q: team ?? "", enabled: !!team });
+  const canManage = isSuperAdmin(me) || !!myTeam.items.find((t) => t.name === team)?.role;
 
   const unreadElsewhere = (withWho === POT ? 0 : unreadPot) + [...unreadDirect.entries()].reduce((n, [k, c]) => n + (k === withWho ? 0 : c), 0);
   const withCook = channel ? undefined : cooks.byName.get(withWho);
@@ -206,11 +216,18 @@ export function PassView({ potKey }: { potKey: string }) {
       active={withWho}
       select={select}
       pinned={pinned}
-      direct={direct}
-      others={others}
-      outside={outside}
-      team={team}
-      canManage={canManage}
+      current={current}
+      source={rows}
+      q={filters.values.chat}
+      onQ={(chat) => filters.set({ chat })}
+      unread={filters.values.unread}
+      onUnread={(unread) => filters.set({ unread })}
+      tools={
+        <>
+          <StartConversation team={team} select={select} />
+          <OutsideCooks team={team} canManage={canManage} />
+        </>
+      }
       compact={compactList}
       now={now}
       scrolls={scrolls}
@@ -220,7 +237,7 @@ export function PassView({ potKey }: { potKey: string }) {
   return (
     <PassFrame
       compact={compact}
-      aside={list(compact)}
+      aside={isPhone ? null : list(compact)}
       extra={
         <Sheet open={switcher} onOpenChange={setSwitcher}>
           <SheetContent side="bottom" className="h-[88dvh] max-h-[88dvh] gap-0 px-0 pb-0 md:hidden">
@@ -253,7 +270,7 @@ export function PassView({ potKey }: { potKey: string }) {
                 <span className="truncate">{channel ? "pass" : withWho}</span>
                 <ChevronDown className="size-4 shrink-0 text-muted-foreground md:hidden" aria-hidden="true" />
               </span>
-              <HeaderSubtitle channel={channel} potKey={potKey} chefCount={(members.data ?? []).length} who={withWho} cook={withCook} person={!channel && !withCook} />
+              <HeaderSubtitle channel={channel} potKey={potKey} chefCount={members.total ?? members.items.length} who={withWho} cook={withCook} person={!channel && !withCook} />
             </span>
             {unreadElsewhere > 0 && (
               <span className="absolute top-2 left-9 size-2.5 rounded-full bg-primary ring-2 ring-card md:hidden">
@@ -288,7 +305,7 @@ export function PassView({ potKey }: { potKey: string }) {
           loadingOlder={loadingOlder}
           onLoadOlder={loadOlder}
         />
-        <Composer potKey={potKey} withWho={withWho} chefs={chefs} cook={withCook} seed={seed} />
+        <Composer potKey={potKey} withWho={withWho} team={team} agent={withKind === "agent"} cook={withCook} seed={seed} />
       </section>
     </PassFrame>
   );
@@ -334,18 +351,21 @@ function HeaderSubtitle({
 // ---------------------------------------------------------------- the list
 
 /**
- * The conversations, one after another: as tall as they are and carried by the page (beside the thread), or, with
+ * The conversations: the pass pinned, then your direct conversations, most recent first, a page at a time and
+ * searchable on the server. As tall as the rows loaded and carried by the page (beside the thread), or, with
  * `scrolls`, filling a sheet and scrolling inside it.
  */
 export function ConvList({
   active,
   select,
   pinned,
-  direct,
-  others,
-  outside,
-  team,
-  canManage,
+  current = null,
+  source,
+  q,
+  onQ,
+  unread,
+  onUnread,
+  tools,
   compact,
   now,
   scrolls = false,
@@ -353,85 +373,112 @@ export function ConvList({
   active: string;
   select: (w: string) => void;
   pinned: Conv;
-  direct: Conv[];
-  others: Conv[];
-  outside: CookInfo[];
-  team: string | null;
-  canManage: boolean;
+  /** The open conversation when it has no row yet (nothing said so far). */
+  current?: Conv | null;
+  source: ListSource<Conv>;
+  /** The search text, as typed, and a change of it. */
+  q: string;
+  onQ: (q: string) => void;
+  unread: boolean;
+  onUnread: (unread: boolean) => void;
+  /** Buttons under the search: start a conversation, add one of your cooks. */
+  tools?: ReactNode;
   compact: boolean;
   now: number;
   scrolls?: boolean;
 }) {
-  const [q, setQ] = useState("");
-  const [allOut, setAllOut] = useState(false);
-  const total = 1 + direct.length + others.length + outside.length;
-  const needle = q.trim().toLowerCase();
-  const hit = (n: string) => !needle || n.toLowerCase().includes(needle);
-  const d = direct.filter((c) => hit(c.name));
-  const o = others.filter((c) => hit(c.name));
-  const outAll = outside.filter((c) => hit(c.name));
-  const out = allOut || needle ? outAll : outAll.slice(0, 3);
-  const showPinned = hit("pass");
-  const searchable = total > 8 && !compact;
-
-  const row = (c: Conv, fresh = false) => (
-    <ConvRow key={c.key} c={c} active={active === c.key} compact={compact} now={now} fresh={fresh} onClick={() => select(c.key)} />
-  );
+  const searching = !!q.trim() || unread;
+  const showPinned = !searching || "pass".includes(q.trim().toLowerCase());
+  const loadMore = () => {
+    if (source.hasNextPage && !source.isFetchingNextPage) source.fetchNextPage();
+  };
+  const footer = source.isFetchingNextPage ? (
+    <p role="status" className="flex items-center justify-center gap-2 py-3 text-[12px] text-muted-foreground">
+      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Loading more
+    </p>
+  ) : source.capped ? (
+    <p className="px-3 py-3 text-center text-[12px] text-muted-foreground">That is as far as this goes. Search to find a conversation.</p>
+  ) : null;
+  const empty =
+    source.isLoading && source.items.length === 0 ? (
+      <p role="status" aria-busy="true" className="px-3 py-6 text-center text-[13px] text-muted-foreground">
+        Loading
+      </p>
+    ) : source.error && source.items.length === 0 ? (
+      <p role="alert" className="px-3 py-6 text-center text-[13px] text-destructive">
+        Could not load the conversations.
+      </p>
+    ) : (
+      <p className="px-3 py-6 text-center text-[13px] text-muted-foreground">
+        {searching ? (q.trim() ? `No conversation matches “${q.trim()}”.` : "Nothing unread.") : compact ? "" : "No conversations yet. Message a chef to start one."}
+      </p>
+    );
 
   return (
     <>
-      {searchable && (
-        <div className="shrink-0 px-3 pt-3 pb-1">
-          <label className="relative block">
-            <span className="sr-only">Search conversations</span>
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-            <input
-              type="search"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search chefs"
-              className="h-10 w-full rounded-xl border border-transparent bg-muted pr-8 pl-8 text-base outline-none placeholder:text-muted-foreground focus:border-border focus:bg-card md:h-9 md:text-[13.5px]"
-            />
-            {q && (
-              <button type="button" onClick={() => setQ("")} aria-label="Clear search" className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:bg-background">
-                <X className="size-3.5" />
-              </button>
-            )}
-          </label>
+      {!compact && (
+        <div className="shrink-0 space-y-1.5 px-3 pt-3 pb-1">
+          <div className="flex items-center gap-1.5">
+            <label className="relative block min-w-0 flex-1">
+              <span className="sr-only">Search conversations</span>
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <input
+                type="search"
+                value={q}
+                onChange={(e) => onQ(e.target.value)}
+                placeholder="Search chefs"
+                autoComplete="off"
+                className="h-10 w-full rounded-xl border border-transparent bg-muted pr-8 pl-8 text-base outline-none placeholder:text-muted-foreground focus:border-border focus:bg-card md:h-9 md:text-[13.5px]"
+              />
+              {q && (
+                <button type="button" onClick={() => onQ("")} aria-label="Clear search" className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:bg-background">
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </label>
+            <button
+              type="button"
+              aria-pressed={unread}
+              onClick={() => onUnread(!unread)}
+              className={cn(
+                "h-10 shrink-0 rounded-xl border px-2.5 text-[12.5px] transition-colors md:h-9",
+                unread ? "border-primary/60 bg-primary/10 font-medium text-primary" : "border-transparent bg-muted text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Unread
+            </button>
+          </div>
+          {tools}
         </div>
       )}
-      <ul className={cn("space-y-0.5 p-2", scrolls && "scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain")}>
-        {showPinned && row(pinned)}
-        {d.length > 0 && !compact && <SectionHead>Direct</SectionHead>}
-        {compact && d.length > 0 && <li className="mx-3 my-1.5 h-px list-none bg-border" aria-hidden="true" />}
-        {d.map((c) => row(c))}
-        {o.length > 0 && !compact && <SectionHead hint="No messages yet">Start a conversation</SectionHead>}
-        {compact && o.length > 0 && <li className="mx-3 my-1.5 h-px list-none bg-border" aria-hidden="true" />}
-        {o.map((c) => row(c, true))}
-        {out.length > 0 && !compact && (
-          <SectionHead hint="Yours, but not chefs of this pot">Your cooks outside this team</SectionHead>
-        )}
-        {!compact && out.map((c) => <OutsideRow key={c.name} cook={c} team={team} canManage={canManage} />)}
-        {!compact && outAll.length > out.length && (
-          <li className="list-none px-3 py-1">
-            <button type="button" onClick={() => setAllOut(true)} className="text-[12.5px] font-medium text-primary underline-offset-2 hover:underline">
-              Show {outAll.length - out.length} more of your cooks
-            </button>
-          </li>
-        )}
-        {needle && !showPinned && d.length + o.length + outAll.length === 0 && (
-          <li className="list-none px-3 py-6 text-center text-[13px] text-muted-foreground">No chef matches “{q}”.</li>
-        )}
-      </ul>
+      <div className="shrink-0 space-y-0.5 px-2 pt-2">
+        {showPinned && <ConvRow c={pinned} active={active === pinned.key} compact={compact} now={now} fresh={false} onClick={() => select(pinned.key)} />}
+        {current && <ConvRow c={current} active={active === current.key} compact={compact} now={now} fresh onClick={() => select(current.key)} />}
+      </div>
+      {!compact && source.items.length > 0 && <SectionHead>Direct</SectionHead>}
+      <div className={cn("pb-2", scrolls && "min-h-0 flex-1")}>
+        <VirtualList<Conv>
+          items={source.items}
+          itemKey={(c) => c.key}
+          renderItem={(c) => <ConvRow c={c} active={active === c.key} compact={compact} now={now} fresh={false} onClick={() => select(c.key)} />}
+          scroll={scrolls ? "own" : "window"}
+          onEndReached={loadMore}
+          footer={footer}
+          empty={empty}
+          itemClassName="px-2 py-px"
+          defaultItemHeight={60}
+          aria-label="Direct conversations"
+        />
+      </div>
     </>
   );
 }
 
 function SectionHead({ children, hint }: { children: React.ReactNode; hint?: string }) {
   return (
-    <li className="list-none px-3 pt-3.5 pb-1" title={hint}>
+    <div className="shrink-0 px-5 pt-3.5 pb-1" title={hint}>
       <span className="label-caps">{children}</span>
-    </li>
+    </div>
   );
 }
 
@@ -443,10 +490,10 @@ function ConvRow({ c, active, compact, now, fresh, onClick }: { c: Conv; active:
   else if (c.preview) sub = <>{c.preview.from && c.preview.from !== c.name && !c.channel ? "you: " : c.channel && c.preview.from ? `${c.preview.from}: ` : ""}{oneLine(c.preview.body)}</>;
   else if (c.channel) sub = "Everyone in the pot";
   else if (cook) sub = `${cook.agentKind} · ${cook.cloud ? "cloud" : "local"} · ${cook.cloud ? "fire and forget" : cook.state}`;
-  else sub = fresh ? "Person" : "No messages yet";
+  else sub = fresh ? "No messages yet" : "";
 
   return (
-    <li className="list-none">
+    <div>
       <button
         type="button"
         onClick={onClick}
@@ -486,44 +533,87 @@ function ConvRow({ c, active, compact, now, fresh, onClick }: { c: Conv; active:
           </span>
         )}
       </button>
-    </li>
+    </div>
   );
 }
 
-/** One of your cooks that is not a chef of this pot's team: greyed, with why, and a way to fix it for a team owner. */
-function OutsideRow({ cook, team, canManage }: { cook: CookInfo; team: string | null; canManage: boolean }) {
+const TOOL =
+  "flex min-h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[12.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none pointer-coarse:min-h-11";
+
+/** Start a conversation: a menu of the team's chefs (searched on the server), picking one opens it. */
+function StartConversation({ team, select }: { team: string | null; select: (name: string) => void }) {
+  const me = useSession();
+  const query = useStoreValue("");
+  const members = useTeamMembersSource(team ?? "", { q: query.value, enabled: !!team });
+  const source = useMemo<ListSource<MemberView>>(() => ({ ...members, items: members.items.filter((m) => m.name !== me.name) }), [members, me.name]);
+  if (!team) return null;
+  return (
+    <VirtualMenu<MemberView>
+      label="Message a chef"
+      mode="action"
+      source={source}
+      onQuery={query.set}
+      itemKey={(m) => m.name}
+      onSelect={(m) => select(m.name)}
+      renderItem={(m) => (
+        <span className="flex min-h-9 items-center gap-2.5 text-[14px]">
+          <Avatar name={m.name} className="rounded-lg" />
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-medium">{m.name}</span>
+            {m.display_name && <span className="ml-1.5 text-[12px] text-muted-foreground">{m.display_name}</span>}
+          </span>
+          {m.kind === "agent" && <KindChip>cook</KindChip>}
+        </span>
+      )}
+      trigger={
+        <button type="button" className={TOOL}>
+          <MessageSquarePlus className="size-4 shrink-0" aria-hidden="true" /> Message a chef
+        </button>
+      }
+    />
+  );
+}
+
+/** Your cooks that are not chefs of this pot's team: greyed, with why, and a way to fix it for a team owner. */
+function OutsideCooks({ team, canManage }: { team: string | null; canManage: boolean }) {
+  const me = useSession();
   const call = useV1Call();
-  const [busy, setBusy] = useState(false);
-  async function add() {
-    if (!team) return;
-    setBusy(true);
+  const query = useStoreValue("");
+  const cooks = useCooksSource({ owner: me.name, q: query.value, enabled: !!team });
+  const source = useMemo(() => ({ ...cooks, items: cooks.items.filter((c) => !!team && !c.teams.includes(team) && c.name !== me.name) }), [cooks, team, me.name]);
+  if (!team) return null;
+  async function add(cook: string) {
     try {
-      await call("POST", `/teams/${team}/members`, { principal: cook.name, role: "member" });
-      toast(`${cook.name} joined ${team}`);
+      await call("POST", `/teams/${team}/members`, { principal: cook, role: "member" });
+      toast(`${cook} joined ${team}`);
     } catch (e) {
-      toast.error(`Could not add ${cook.name}`, { description: errorMessage(e) });
-    } finally {
-      setBusy(false);
+      toast.error(`Could not add ${cook}`, { description: errorMessage(e) });
     }
   }
   return (
-    <li className="list-none rounded-xl px-3 py-2">
-      <div className="flex items-center gap-3 opacity-90">
-        <span className="opacity-55 grayscale">
-          <ConvAvatar name={cook.name} cook={cook} size="size-10" ring="ring-background" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[14.5px] font-medium text-muted-foreground">{cook.name}</span>
-          <span className="block text-[12px] leading-snug text-muted-foreground">
-            Not in {team ?? "this pot's"} team yet.
+    <VirtualMenu<(typeof source.items)[number]>
+      label="Your cooks outside this team"
+      mode="action"
+      source={source}
+      onQuery={query.set}
+      itemKey={(c) => c.name}
+      isDisabled={() => !canManage}
+      onSelect={(c) => void add(c.name)}
+      empty={<p className="px-3 py-6 text-center text-[13px] text-muted-foreground">All your cooks are in {team}.</p>}
+      renderItem={(c) => (
+        <span className="flex min-h-9 items-center gap-2.5 text-[14px]">
+          <Avatar name={c.name} className="rounded-lg opacity-60 grayscale" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium">{c.name}</span>
+            <span className="block text-[11.5px] text-muted-foreground">{canManage ? `Not in ${team} yet: pick to add it` : `Not in ${team} yet`}</span>
           </span>
         </span>
-      </div>
-      {canManage && team && (
-        <Button type="button" variant="outline" size="sm" onClick={() => void add()} disabled={busy} className="mt-2 ml-[3.25rem] pointer-coarse:min-h-10">
-          {busy ? <Loader2 className="animate-spin" /> : <UserPlus />} Add to the team
-        </Button>
       )}
-    </li>
+      trigger={
+        <button type="button" className={TOOL}>
+          <UserPlus className="size-4 shrink-0" aria-hidden="true" /> Your cooks outside {team}
+        </button>
+      }
+    />
   );
 }

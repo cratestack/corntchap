@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { ReviewSummary, ReviewView, TaskDetail } from "@corntchap/api";
+import type { MemberView, ReviewSummary, ReviewView, TaskDetail } from "@corntchap/api";
 import { ClipboardCheck, CircleCheck, CircleX, Eye, Loader2, MessageSquare, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { VirtualCombobox } from "@/components/ui/virtual-combobox";
+import { VirtualList } from "@/components/ui/virtual-list";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useProcCall, useProjects, useTeamChefs } from "@/lib/data";
+import { useProcCall, useProjects } from "@/lib/data";
+import type { ListSource } from "@/lib/listbox";
+import { useTeamMembersSource } from "@/lib/sources";
+import { useStoreValue } from "@/lib/use-store-value";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useSession } from "@/lib/session";
@@ -130,7 +134,7 @@ function ReviewStrip({ r, showTask, onCancel, cancelling }: { r: ReviewView; sho
   const t = toneOf(r.state);
   const mine = canReview(r, me.name);
   return (
-    <li className={cn("rounded-lg border bg-card p-3", mine ? "border-corn/60" : "border-border")}>
+    <div className={cn("rounded-lg border bg-card p-3", mine ? "border-corn/60" : "border-border")}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <span className={cn(chip, t.cls)}>
           <t.icon className="size-3.5" aria-hidden="true" /> {t.label}
@@ -168,16 +172,26 @@ function ReviewStrip({ r, showTask, onCancel, cancelling }: { r: ReviewView; sho
           </Button>
         </div>
       )}
-    </li>
+    </div>
   );
 }
 
-/** A list of reviews with their task (the Questions page: waiting on you, and all of them). */
-export function ReviewsList({ reviews, loading }: { reviews: ReviewView[]; loading: boolean }) {
+/**
+ * A pot's reviews with their task (the Questions page: waiting on you, and all of them): a paged read
+ * (`useReviewsSource`), virtualized and carried by the page.
+ */
+export function ReviewsList({ source }: { source: ListSource<ReviewView> }) {
   const call = useProcCall();
   const [busy, setBusy] = useState<string | null>(null);
-  if (loading) return <Skeleton className="mt-4 h-24 w-full" />;
-  if (reviews.length === 0) {
+  if (source.isLoading && source.items.length === 0) return <Skeleton className="mt-4 h-24 w-full" />;
+  if (source.error && source.items.length === 0) {
+    return (
+      <EmptyState band={false} className="mt-4" title="Could not read the reviews">
+        {errorMessage(source.error)}
+      </EmptyState>
+    );
+  }
+  if (source.items.length === 0) {
     return (
       <EmptyState band={false} className="mt-4" title="No reviews yet">
         A cook asks for one when its work is ready to look at (request_review), and you can ask from a task’s sheet. They show up here, and the ones waiting on you come first.
@@ -195,12 +209,27 @@ export function ReviewsList({ reviews, loading }: { reviews: ReviewView[]; loadi
       setBusy(null);
     }
   }
+  const footer = source.isFetchingNextPage ? (
+    <p role="status" className="flex items-center justify-center gap-2 py-3 text-[12.5px] text-muted-foreground">
+      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Loading more
+    </p>
+  ) : source.capped ? (
+    <p className="py-3 text-center text-[12.5px] text-muted-foreground">That is as far as this goes.</p>
+  ) : null;
   return (
-    <ul className="space-y-2.5" aria-label="Reviews">
-      {reviews.map((r) => (
-        <ReviewStrip key={r.id} r={r} showTask onCancel={() => void cancel(r)} cancelling={busy === r.id} />
-      ))}
-    </ul>
+    <VirtualList<ReviewView>
+      items={source.items}
+      itemKey={(r) => r.id}
+      scroll="window"
+      onEndReached={() => {
+        if (source.hasNextPage && !source.isFetchingNextPage) source.fetchNextPage();
+      }}
+      footer={footer}
+      itemClassName="pb-2.5"
+      defaultItemHeight={150}
+      aria-label="Reviews"
+      renderItem={(r) => <ReviewStrip r={r} showTask onCancel={() => void cancel(r)} cancelling={busy === r.id} />}
+    />
   );
 }
 
@@ -211,15 +240,17 @@ export function RequestReviewDialog({ task, open, onClose, suggestion }: { task:
   const pot = projectOfTask(task);
   const projects = useProjects();
   const team = projects.data?.find((p) => p.key === pot)?.team ?? null;
-  const chefs = useTeamChefs(team, { enabled: open });
-  const options = useMemo(() => (chefs.data ?? []).filter((c) => c.name !== me.name), [chefs.data, me.name]);
-  const [reviewer, setReviewer] = useState("__anyone");
+  const query = useStoreValue("");
+  const chefs = useTeamMembersSource(team ?? "", { q: query.value, enabled: open && !!team });
+  const options = useMemo<ListSource<MemberView>>(() => ({ ...chefs, items: chefs.items.filter((c) => c.name !== me.name) }), [chefs, me.name]);
+  const [reviewer, setReviewer] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setReviewer("__anyone");
+      setReviewer(null);
+      query.set("");
       setNote(suggestion ?? "");
     }
     // reset only when the dialog opens
@@ -230,7 +261,7 @@ export function RequestReviewDialog({ task, open, onClose, suggestion }: { task:
     e.preventDefault();
     setBusy(true);
     try {
-      const r = await call("reviewRequest", { task, reviewer: reviewer === "__anyone" ? null : reviewer, note: note.trim() || null });
+      const r = await call("reviewRequest", { task, reviewer, note: note.trim() || null });
       toast.success(`${r.id} asked${r.reviewer ? ` of ${r.reviewer}` : ""}`);
       onClose();
     } catch (err) {
@@ -250,19 +281,22 @@ export function RequestReviewDialog({ task, open, onClose, suggestion }: { task:
         <form onSubmit={(e) => void submit(e)} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="rr-who">Who should look</Label>
-            <Select value={reviewer} onValueChange={(v) => v && setReviewer(v)}>
-              <SelectTrigger id="rr-who" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__anyone">Anyone on the team</SelectItem>
-                {options.map((c) => (
-                  <SelectItem key={c.name} value={c.name}>
-                    {c.name} <span className="text-muted-foreground">{c.kind === "agent" ? "cook" : "person"}</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <VirtualCombobox<MemberView>
+              id="rr-who"
+              label="Reviewer"
+              source={options}
+              onQuery={query.set}
+              itemKey={(c) => c.name}
+              itemText={(c) => c.name}
+              nullOption="Anyone on the team"
+              value={reviewer}
+              onChange={setReviewer}
+              renderItem={(c) => (
+                <span className="truncate">
+                  {c.name} <span className="text-muted-foreground">{c.kind === "agent" ? "cook" : "person"}</span>
+                </span>
+              )}
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="rr-note">What to look at (optional)</Label>
@@ -320,7 +354,9 @@ export function TaskReviews({ task }: { task: TaskDetail }) {
       ) : (
         <ul className="space-y-2">
           {reviews.map((r) => (
-            <ReviewStrip key={r.id} r={r} onCancel={() => void cancel(r)} cancelling={busy === r.id} />
+            <li key={r.id}>
+              <ReviewStrip r={r} onCancel={() => void cancel(r)} cancelling={busy === r.id} />
+            </li>
           ))}
         </ul>
       )}

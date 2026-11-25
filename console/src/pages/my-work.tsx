@@ -1,15 +1,22 @@
-import type { ReactNode } from "react";
+import { useMemo, type Key, type ReactNode } from "react";
 import { Link } from "react-router";
-import type { WorkComment, WorkQuestion, WorkReview, WorkTask } from "@corntchap/api";
-import { CircleHelp, ClipboardCheck, Flame, GitPullRequest, MessageSquare, Hourglass } from "lucide-react";
+import type { QuestionView, WorkComment, WorkQuestion, WorkReview, WorkTask } from "@corntchap/api";
+import { CircleHelp, ClipboardCheck, Flame, Loader2, MessageSquare, Hourglass } from "lucide-react";
 import { PageShell } from "@/components/page";
 import { Avatar, BUCKET_DOT, EmptyState, IdChip, RowSkeleton } from "@/components/bits";
 import { PrChip } from "@/components/forge-prs";
 import { ReviewChip } from "@/components/reviews";
+import { VirtualCombobox } from "@/components/ui/virtual-combobox";
+import { VirtualList } from "@/components/ui/virtual-list";
 import { useMyWork } from "@/lib/data";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
+import { useListQuery } from "@/lib/list-query";
+import type { ListSource } from "@/lib/listbox";
 import { useOpenTask } from "@/lib/nav";
+import { useMyQuestionsSource, usePotsSource } from "@/lib/sources";
+import { useStoreValue } from "@/lib/use-store-value";
+import { useUrlFilters } from "@/lib/url-filters";
 import { useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -23,11 +30,49 @@ const dotOf = (status: string) => (status === "claimed" ? BUCKET_DOT.claimed : s
 
 const ROW = "flex min-h-14 w-full items-start gap-3 px-3.5 py-3 text-left transition-colors hover:bg-muted/50 active:bg-muted/70 focus-visible:bg-muted/50 focus-visible:outline-none";
 
-function Rows({ children }: { children: ReactNode }) {
-  return <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">{children}</div>;
+/** The rows of a section read from a page source: virtualized, carried by the page, paging as the end comes into view. */
+function WorkList<T>({ source, itemKey, renderItem, empty, label }: { source: ListSource<T>; itemKey: (item: T, index: number) => Key; renderItem: (item: T) => ReactNode; empty: ReactNode; label: string }) {
+  if (source.isLoading && source.items.length === 0) return <RowSkeleton rows={3} />;
+  if (source.error && source.items.length === 0) {
+    return (
+      <EmptyState band={false} title={`Could not read ${label.toLowerCase()}`}>
+        {errorMessage(source.error)}
+      </EmptyState>
+    );
+  }
+  if (source.items.length === 0) return <>{empty}</>;
+  const footer = source.isFetchingNextPage ? (
+    <p role="status" className="flex items-center justify-center gap-2 py-3 text-[12.5px] text-muted-foreground">
+      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Loading more
+    </p>
+  ) : source.capped ? (
+    <p className="py-3 text-center text-[12.5px] text-muted-foreground">That is as far as this goes. Narrow it to one pot to see more.</p>
+  ) : null;
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
+      <VirtualList<T>
+        items={source.items}
+        itemKey={itemKey}
+        scroll="window"
+        onEndReached={() => {
+          if (source.hasNextPage && !source.isFetchingNextPage) source.fetchNextPage();
+        }}
+        footer={footer}
+        itemClassName="border-b border-border last:border-b-0"
+        defaultItemHeight={72}
+        aria-label={label}
+        renderItem={(item) => renderItem(item)}
+      />
+    </div>
+  );
 }
 
-function Section({ id, title, count, hint, children }: { id: string; title: string; count: number; hint: string; children: ReactNode }) {
+/** One section of "my work" (myWorkPage): a page of tasks, re-read from the first page when tasks change. */
+function useWorkSection(section: "owned" | "holding" | "blocked", project: string | null) {
+  return useListQuery("myWorkPage", { section, project }, { refreshLoaded: true });
+}
+
+function Section({ id, title, count, hint, children }: { id: string; title: string; count: number | string; hint: string; children: ReactNode }) {
   return (
     <section aria-labelledby={id} className="scroll-mt-20">
       <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
@@ -140,11 +185,65 @@ function CommentRow({ c, onOpen }: { c: WorkComment; onOpen: (id: string) => voi
   );
 }
 
+function AskedRow({ q }: { q: QuestionView }) {
+  const now = useNow();
+  return (
+    <Link to={`/pots/${q.project}/questions?question=${encodeURIComponent(q.id)}`} className={ROW}>
+      <CircleHelp className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <span className="min-w-0 flex-1">
+        <span className="line-clamp-2 text-[15px] leading-snug font-medium">{q.title}</span>
+        <span className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12px] text-muted-foreground">
+          <IdChip id={q.id} className="text-[11.5px] font-normal text-muted-foreground" />
+          <PotChip pot={q.project} />
+          <span>{q.to ? `asked of ${q.to}` : "asked of anyone"}</span>
+          {q.task && <span className="font-mono text-[11px]">on {q.task}</span>}
+          <span className="ml-auto font-mono text-[11px] tabular-nums">{fmtAgo(q.created_at, now)}</span>
+        </span>
+      </span>
+    </Link>
+  );
+}
+
+type Waiting = { kind: "question"; q: WorkQuestion } | { kind: "review"; r: WorkReview } | { kind: "comment"; c: WorkComment; i: number };
+
+/** The one filter: a pot, in the URL (`?pot=PAY`). */
+const FILTERS = { pot: { type: "string" as const } };
+
 export function MyWorkPage() {
-  const q = useMyWork();
   const me = useSession();
   const open = useOpenTask();
-  const w = q.data;
+  const filters = useUrlFilters(FILTERS);
+  const pot = filters.values.pot || null;
+  const potQuery = useStoreValue("");
+  const pots = usePotsSource({ q: potQuery.value });
+  const summary = useMyWork(pot ?? undefined);
+  const w = summary.data;
+  const owned = useWorkSection("owned", pot);
+  const holding = useWorkSection("holding", pot);
+  const blocked = useWorkSection("blocked", pot);
+  const asked = useMyQuestionsSource({ status: "open" });
+
+  const waiting = useMemo<Waiting[]>(
+    () =>
+      w
+        ? [
+            ...w.waiting_on_me.questions.map((q) => ({ kind: "question" as const, q })),
+            ...w.waiting_on_me.reviews.map((r) => ({ kind: "review" as const, r })),
+            ...w.waiting_on_me.comments.map((c, i) => ({ kind: "comment" as const, c, i })),
+          ]
+        : [],
+    [w],
+  );
+  const waitingSource = useMemo<ListSource<Waiting>>(
+    () => ({ items: waiting, hasNextPage: false, fetchNextPage: () => {}, isLoading: summary.isLoading, isFetchingNextPage: false, error: summary.error, total: waiting.length }),
+    [waiting, summary.isLoading, summary.error],
+  );
+  const poolSource = useMemo<ListSource<WorkQuestion>>(
+    () => ({ items: w?.waiting_on_me.open_pool ?? [], hasNextPage: false, fetchNextPage: () => {}, isLoading: false, isFetchingNextPage: false, error: null }),
+    [w],
+  );
+  const taskRow = (t: WorkTask, showPot = true) => <TaskRow t={t} onOpen={open} me={me.name} showPot={showPot} />;
+  const nums = { owned: w?.counts.owned ?? owned.total ?? "…", holding: w?.counts.holding ?? holding.total ?? "…", waiting: w?.counts.waiting ?? "…", blocked: w?.counts.blocked ?? blocked.total ?? "…", asked: asked.total ?? (asked.hasNextPage ? `${asked.items.length}+` : asked.items.length) };
 
   return (
     <PageShell
@@ -152,127 +251,135 @@ export function MyWorkPage() {
       eyebrow={`@${me.name}`}
       sub="What you answer for, what you are cooking and what waits on you, across every pot you can see."
     >
-      {q.error && !w ? (
-        <EmptyState band={false} title="Could not read your work">
-          {errorMessage(q.error)}
-        </EmptyState>
-      ) : !w ? (
-        <RowSkeleton rows={5} />
-      ) : (
-        <div className="mx-auto max-w-3xl space-y-9 md:mx-0">
-          <nav aria-label="Sections" className="flex flex-wrap gap-2">
-            {(
-              [
-                ["owned", "Owned", w.counts.owned],
-                ["holding", "Holding", w.counts.holding],
-                ["waiting", "Waiting on me", w.counts.waiting],
-                ["blocked", "Blocked on me", w.counts.blocked],
-              ] as const
-            ).map(([id, label, n]) => (
-              <a
-                key={id}
-                href={`#my-${id}`}
-                className={cn(
-                  "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] transition-colors hover:border-foreground/30",
-                  n > 0 && id === "waiting" ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-card",
-                )}
-              >
-                {label} <span className="font-mono text-[11.5px]">{n}</span>
-              </a>
-            ))}
-          </nav>
+      <div className="mx-auto max-w-3xl space-y-9 md:mx-0">
+        <nav aria-label="Sections" className="flex flex-wrap items-center gap-2">
+          {(
+            [
+              ["owned", "Owned"],
+              ["holding", "Holding"],
+              ["waiting", "Waiting on me"],
+              ["blocked", "Blocked on me"],
+              ["asked", "Asked by me"],
+            ] as const
+          ).map(([id, label]) => (
+            <a
+              key={id}
+              href={`#my-${id}`}
+              className={cn(
+                "inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] transition-colors hover:border-foreground/30",
+                id === "waiting" && (w?.counts.waiting ?? 0) > 0 ? "border-primary/40 bg-primary/10 text-primary" : "border-border bg-card",
+              )}
+            >
+              {label} <span className="font-mono text-[11.5px]">{nums[id]}</span>
+            </a>
+          ))}
+          <VirtualCombobox<(typeof pots.items)[number]>
+            label="Pot"
+            trigger="pill"
+            source={pots}
+            onQuery={potQuery.set}
+            itemKey={(x) => x.key}
+            itemText={(x) => x.key}
+            renderItem={(x) => (
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span className="font-mono text-[12px] font-bold">{x.key}</span>
+                <span className="truncate text-[13px] text-muted-foreground">{x.name}</span>
+              </span>
+            )}
+            nullOption="Every pot"
+            value={pot}
+            onChange={(v) => filters.set({ pot: v ?? "" })}
+          />
+        </nav>
 
-          <Section id="my-owned" title="Owned" count={w.counts.owned} hint="Tasks you answer for, whoever does the work.">
-            {w.owned.length === 0 ? (
+        {!!summary.error && !w && (
+          <EmptyState band={false} title="Could not read what is waiting on you">
+            {errorMessage(summary.error)}
+          </EmptyState>
+        )}
+
+        <Section id="my-owned" title="Owned" count={nums.owned} hint="Tasks you answer for, whoever does the work.">
+          <WorkList
+            source={owned}
+            label="Owned tasks"
+            itemKey={(t) => t.id}
+            renderItem={(t) => taskRow(t)}
+            empty={
               <Empty title="Nothing is yours yet">
                 A task lands here when someone makes you its owner: set the Owner on a task, or create it with an owner.
               </Empty>
-            ) : (
-              w.owned.map((pot) => (
-                <div key={pot.project}>
-                  <h3 className="mb-1.5 flex items-center gap-2 text-[13px] font-normal text-muted-foreground" style={{ fontFamily: "var(--font-sans)", letterSpacing: 0 }}>
-                    <PotChip pot={pot.project} /> <span className="truncate">{pot.name}</span>
-                    <span className="font-mono text-[11px]">{pot.tasks.length}</span>
-                  </h3>
-                  <Rows>
-                    {pot.tasks.map((t) => (
-                      <TaskRow key={t.id} t={t} onOpen={open} me={me.name} showPot={false} />
-                    ))}
-                  </Rows>
-                </div>
-              ))
-            )}
-          </Section>
+            }
+          />
+        </Section>
 
-          <Section id="my-holding" title="Holding" count={w.counts.holding} hint="Tasks you hold with a live lease.">
-            {w.holding.length === 0 ? (
-              <Empty title="Nothing in your hands">Serve or claim a task from a board and it shows here while the lease is live.</Empty>
-            ) : (
-              <Rows>
-                {w.holding.map((t) => (
-                  <TaskRow key={t.id} t={t} onOpen={open} me={me.name} />
-                ))}
-              </Rows>
-            )}
-          </Section>
+        <Section id="my-holding" title="Holding" count={nums.holding} hint="Tasks you hold with a live lease.">
+          <WorkList
+            source={holding}
+            label="Held tasks"
+            itemKey={(t) => t.id}
+            renderItem={(t) => taskRow(t)}
+            empty={<Empty title="Nothing in your hands">Serve or claim a task from a board and it shows here while the lease is live.</Empty>}
+          />
+        </Section>
 
-          <Section id="my-waiting" title="Waiting on me" count={w.counts.waiting} hint="Questions to you, reviews asked of you, comments to answer.">
-            {w.counts.waiting === 0 ? (
-              <Empty title="Nobody is waiting on you">Questions addressed to you and reviews asked of you (or of the team) land here.</Empty>
-            ) : (
-              <Rows>
-                {w.waiting_on_me.questions.map((x) => (
-                  <QuestionRow key={x.id} q={x} />
-                ))}
-                {w.waiting_on_me.reviews.map((r) => (
-                  <ReviewRow key={r.id} r={r} onOpen={open} />
-                ))}
-                {w.waiting_on_me.comments.map((c, i) => (
-                  <CommentRow key={`${c.task}-${i}`} c={c} onOpen={open} />
-                ))}
-              </Rows>
-            )}
-            {w.waiting_on_me.open_pool_total > 0 && (
-              <div>
-                <h3 className="mb-1.5 flex items-center gap-2 text-[13px] font-normal text-muted-foreground" style={{ fontFamily: "var(--font-sans)", letterSpacing: 0 }}>
-                  <Hourglass className="size-3.5" aria-hidden="true" />
-                  Open questions nobody picked
-                  <span className="font-mono text-[11px]">{w.waiting_on_me.open_pool_total}</span>
-                </h3>
-                <Rows>
-                  {w.waiting_on_me.open_pool.map((x) => (
-                    <QuestionRow key={x.id} q={x} />
-                  ))}
-                </Rows>
-                {w.waiting_on_me.open_pool_total > w.waiting_on_me.open_pool.length && (
-                  <p className="mt-1.5 text-[12.5px] text-muted-foreground">
-                    {plural(w.waiting_on_me.open_pool_total - w.waiting_on_me.open_pool.length, "more question")} in your pots: open a pot's Questions tab.
-                  </p>
-                )}
-              </div>
-            )}
-          </Section>
+        <Section id="my-waiting" title="Waiting on me" count={nums.waiting} hint="Questions to you, reviews asked of you, comments to answer.">
+          {w && waiting.length === 0 ? (
+            <Empty title="Nobody is waiting on you">Questions addressed to you and reviews asked of you (or of the team) land here.</Empty>
+          ) : (
+            <WorkList
+              source={waitingSource}
+              label="Waiting on me"
+              itemKey={(x) => (x.kind === "question" ? `q-${x.q.id}` : x.kind === "review" ? `r-${x.r.id}` : `c-${x.c.task}-${x.i}`)}
+              renderItem={(x) => (x.kind === "question" ? <QuestionRow q={x.q} /> : x.kind === "review" ? <ReviewRow r={x.r} onOpen={open} /> : <CommentRow c={x.c} onOpen={open} />)}
+              empty={null}
+            />
+          )}
+          {w && w.counts.waiting > waiting.length && (
+            <p className="mt-1.5 text-[12.5px] text-muted-foreground">
+              Showing the {waiting.length} oldest of {w.counts.waiting}: the rest are on each pot's Questions tab.
+            </p>
+          )}
+          {w && w.waiting_on_me.open_pool_total > 0 && (
+            <div>
+              <h3 className="mb-1.5 flex items-center gap-2 text-[13px] font-sans font-normal tracking-normal text-muted-foreground">
+                <Hourglass className="size-3.5" aria-hidden="true" />
+                Open questions nobody picked
+                <span className="font-mono text-[11px]">{w.waiting_on_me.open_pool_total}</span>
+              </h3>
+              <WorkList source={poolSource} label="Open questions nobody picked" itemKey={(x) => x.id} renderItem={(x) => <QuestionRow q={x} />} empty={null} />
+              {w.waiting_on_me.open_pool_total > w.waiting_on_me.open_pool.length && (
+                <p className="mt-1.5 text-[12.5px] text-muted-foreground">
+                  {plural(w.waiting_on_me.open_pool_total - w.waiting_on_me.open_pool.length, "more question")} in your pots: open a pot's Questions tab.
+                </p>
+              )}
+            </div>
+          )}
+        </Section>
 
-          <Section id="my-blocked" title="Blocked on me" count={w.counts.blocked} hint="Work held up by an answer from you or by a task you own.">
-            {w.blocked_on_me.length === 0 ? (
+        <Section id="my-blocked" title="Blocked on me" count={nums.blocked} hint="Work held up by an answer from you or by a task you own.">
+          <WorkList
+            source={blocked}
+            label="Blocked tasks"
+            itemKey={(t) => `${t.id}-${t.because}`}
+            renderItem={(t) => taskRow(t)}
+            empty={
               <Empty title="You are not holding anyone up">
                 A task parked on a question you must answer, or one that depends on a task you own that is not done, shows here.
               </Empty>
-            ) : (
-              <Rows>
-                {w.blocked_on_me.map((t) => (
-                  <TaskRow key={`${t.id}-${t.because}`} t={t} onOpen={open} me={me.name} />
-                ))}
-              </Rows>
-            )}
-            {w.counts.blocked > w.blocked_on_me.length && (
-              <p className="mt-1.5 flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
-                <GitPullRequest className="size-3.5" aria-hidden="true" /> Showing the {w.blocked_on_me.length} most recent of {w.counts.blocked}.
-              </p>
-            )}
-          </Section>
-        </div>
-      )}
+            }
+          />
+        </Section>
+
+        <Section id="my-asked" title="Asked by me" count={nums.asked} hint="Questions you asked that are still open.">
+          <WorkList
+            source={asked}
+            label="Questions I asked"
+            itemKey={(q) => q.id}
+            renderItem={(q) => <AskedRow q={q} />}
+            empty={<Empty title="No open questions from you">A question you ask a cook or a person stays here until it is answered.</Empty>}
+          />
+        </Section>
+      </div>
     </PageShell>
   );
 }

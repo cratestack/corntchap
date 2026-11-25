@@ -3,7 +3,7 @@ import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { keepPreviousData, useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
 import type { CorntchapApiClient, FileView, ProjectSummary, TaskView, ViewOut } from "@corntchap/api";
 import { client, v1 } from "./api";
-import { invalidateData, usePagedQuery, useProcInfinite } from "./paging";
+import { invalidateData, usePagedQuery } from "./paging";
 import type { Role } from "./session";
 
 type Procs = CorntchapApiClient["procedures"];
@@ -290,21 +290,6 @@ export function useOpenQuestionCounts(projects: ProjectSummary[] | undefined): R
   const out: Record<string, number> = {};
   for (const p of projects ?? []) if (p.open_questions > 0) out[p.key] = p.open_questions;
   return out;
-}
-
-// ---- reviews ----
-
-/**
- * A pot's reviews, a page at a time: the ones waiting on you (`mine`), or all of them (open ones first).
- * Live events refresh the first page (see `invalidateData`).
- */
-export function useReviews(pot: string, which: "mine" | "all", enabled = true) {
-  const args =
-    which === "mine"
-      ? { project: pot, mine: true, state: "requested" as string | null }
-      : { project: pot, mine: null, state: "all" as string | null };
-  const q = useProcInfinite("reviewPage", args, { getCursor: (p) => p.nextCursor, enabled: enabled && !!pot });
-  return { data: q.items, isLoading: q.isLoading, error: q.error, hasNextPage: q.hasNextPage, fetchNextPage: q.fetchNextPage, isFetchingNextPage: q.isFetchingNextPage };
 }
 
 // ---- my work ----
