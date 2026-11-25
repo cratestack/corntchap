@@ -29,6 +29,10 @@ pub struct Config {
     pub github_mention: String,
 }
 
+/// The restaurant: the server itself as an actor (principal row of migration 0040). Events and comments
+/// of the server's own decisions name it; it has no credentials and cannot be messaged or assigned.
+pub const RESTAURANT: Uuid = Uuid::from_u128(0x0000_0000_0000_4000_8000_5245_5354_5552);
+
 pub const DEFAULT_GITHUB_MENTION: &str = "@cook";
 
 /// `codex` and `@codex` both mean `@codex`.

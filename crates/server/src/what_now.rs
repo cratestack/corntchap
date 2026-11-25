@@ -182,6 +182,7 @@ pub async fn waiting_on_you(c: &mut PgConnection, project: Uuid, me: Uuid) -> Re
         c,
         "select jsonb_build_object('task', pr.key || '-' || t.number,
              'author', (select name from principals where id = cm.author_id),
+             'author_kind', (select kind from principals where id = cm.author_id),
              'excerpt', case when char_length(cm.body) > 160 then left(cm.body, 160) || '…' else cm.body end,
              'at', cm.created_at)
          from comment_replies cr join comments cm on cm.id = cr.comment_id
@@ -286,7 +287,7 @@ pub async fn catch_up(
     let counts: Vec<(String, i64)> = sqlx::query_as(
         "select kind, count(*) from events
          where project_id = $1 and at > $2 and actor_id is distinct from $3
-           and kind not like 'wake%' and kind <> 'activity' and audience is null
+           and kind not like 'wake%' and kind not in ('activity', 'restaurant.decided') and audience is null
          group by kind order by count(*) desc, kind",
     )
     .bind(project)
@@ -301,7 +302,7 @@ pub async fn catch_up(
                 coalesce(' ' || (select pp.key || '-' || tt.number from tasks tt join projects pp on pp.id = tt.project_id where tt.id = e.task_id), '')
          from events e
          where e.project_id = $1 and e.at > $2 and e.actor_id is distinct from $3
-           and e.kind not like 'wake%' and e.kind <> 'activity' and e.audience is null
+           and e.kind not like 'wake%' and e.kind not in ('activity', 'restaurant.decided') and e.audience is null
          order by e.seq desc limit $4",
     )
     .bind(project)
@@ -520,6 +521,12 @@ pub async fn what_now(
         .as_u64()
         .unwrap_or(0);
     let guide = guide_of(&mut c, project_id).await?;
+    // the restaurant's latest decision about this cook, when it holds it back
+    let restaurant = if p.is_agent() {
+        crate::restaurant::holding_line(&mut c, me, project_id).await?
+    } else {
+        None
+    };
     // reading the briefing is being briefed: an agent back from an absence may claim now
     brief(&mut c, p, &[project_id]).await?;
 
@@ -557,6 +564,7 @@ pub async fn what_now(
             "pantry_news": pantry_news,
         },
         "guide": guide,
+        "restaurant": restaurant,
         "next": next,
     }))
 }

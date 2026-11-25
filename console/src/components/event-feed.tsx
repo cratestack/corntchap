@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 import type { ChangeView } from "@corntchap/api";
 import {
+  ChefHat as ChefHatIcon,
   Trash2,
   CheckCheck,
   CirclePlay,
@@ -31,13 +32,22 @@ import {
   GitPullRequest,
   AlertTriangle,
   Loader2,
+  BellOff,
+  Bell,
+  Clock,
+  Cloud,
+  CloudOff,
+  Newspaper,
+  Power,
+  ShieldCheck,
+  SkipForward,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
 import { cn } from "@/lib/utils";
 import { fmtAgo, useNow } from "@/lib/format";
 import { Button } from "@/components/ui/button";
-import { Avatar } from "./bits";
+import { ActorAvatar } from "./bits";
 import { useOpenMemory, useOpenTask } from "@/lib/nav";
 import { fileHref } from "@/lib/files";
 import { questionLink } from "./questions";
@@ -49,6 +59,27 @@ interface Described {
   verb: string;
   detail?: string | undefined;
 }
+
+/** The parts of a detail line that exist, joined. */
+function joined(...parts: (string | null | undefined)[]): string | undefined {
+  const out = parts.filter(Boolean).join(" · ");
+  return out || undefined;
+}
+
+/** How each decision of the restaurant reads: `restaurant <verb> <cook / task>`. */
+const DECISIONS: Record<string, { icon: LucideIcon; tone: string; verb: string }> = {
+  "wake.held": { icon: Clock, tone: "text-muted-foreground", verb: "is holding the next wake of" },
+  "wake.capped": { icon: BellOff, tone: "text-waiting", verb: "stopped waking" },
+  "wake.withheld": { icon: BellOff, tone: "text-muted-foreground", verb: "did not wake" },
+  "claim.skipping": { icon: SkipForward, tone: "text-waiting", verb: "skips" },
+  catch_up: { icon: Newspaper, tone: "text-primary", verb: "briefed" },
+  "merge.kept_open": { icon: GitMerge, tone: "text-muted-foreground", verb: "kept open" },
+  "run.ended": { icon: Power, tone: "text-muted-foreground", verb: "ended the cloud run of" },
+  "role.kept": { icon: ShieldCheck, tone: "text-primary", verb: "kept the role of" },
+};
+
+/** Decisions that read "restaurant skips PAY-3 for bola": the task comes before the cook, or the cook is not named. */
+const TASK_FIRST = new Set(["claim.skipping", "merge.kept_open"]);
 
 /** `acme/shop#12` from a forge event's payload. */
 function forgeWord(p: { repo?: string | null | undefined; number?: number | null | undefined }): string {
@@ -72,11 +103,11 @@ export function describe(e: ChangeView): Described {
     case "task.commented":
       return { icon: MessageSquare, tone: "text-muted-foreground", verb: "commented on" };
     case "task.completed":
-      return { icon: CheckCheck, tone: "text-success", verb: "served", detail: p.result ?? undefined };
+      return { icon: CheckCheck, tone: "text-success", verb: "served", detail: joined(p.result, p.why) };
     case "task.released":
       return { icon: Undo2, tone: "text-muted-foreground", verb: "put back", detail: p.reason ?? undefined };
     case "task.blocked":
-      return { icon: Hourglass, tone: "text-waiting", verb: p.question ? "parked" : "stalled", detail: p.reason ?? undefined };
+      return { icon: Hourglass, tone: "text-waiting", verb: p.question ? "parked" : "stalled", detail: joined(p.reason, p.why) };
     case "question.asked":
       return { icon: MessageCircleQuestion, tone: "text-primary", verb: "asked", detail: p.title ?? undefined };
     case "question.answered":
@@ -152,7 +183,9 @@ export function describe(e: ChangeView): Described {
     case "project.repo_linked":
       return { icon: GitBranch, tone: "text-muted-foreground", verb: "linked repositories", detail: p.repo && p.depends_on ? `${p.repo} depends on ${p.depends_on}` : undefined };
     case "forge.linked":
-      return { icon: GitPullRequest, tone: "text-primary", verb: p.via === "explicit" ? "linked a pull request to" : "found the pull request of", detail: forgeWord(p) };
+      return { icon: GitPullRequest, tone: "text-primary", verb: p.via === "explicit" ? "linked a pull request to" : "found the pull request of", detail: joined(forgeWord(p), p.why) };
+    case "forge.backfill":
+      return { icon: GitBranch, tone: "text-muted-foreground", verb: "searched for pull requests", detail: joined(p.repo, p.why) };
     case "forge.unlinked":
       return { icon: GitPullRequest, tone: "text-muted-foreground", verb: "unlinked a pull request from" };
     case "forge.pr":
@@ -190,7 +223,17 @@ export function describe(e: ChangeView): Described {
     case "forge.conflict":
       return { icon: AlertTriangle, tone: "text-destructive", verb: "found merge conflicts on", detail: forgeWord(p) };
     case "task.lease_expired":
-      return { icon: Hourglass, tone: "text-corn-text", verb: "lease ran out on" };
+      return { icon: Hourglass, tone: "text-corn-text", verb: "ended the lease on", detail: p.why ?? p.reason ?? undefined };
+    case "wake":
+      return { icon: Bell, tone: "text-muted-foreground", verb: "woke", detail: p.agent ?? undefined };
+    case "wake.delivered":
+      return { icon: Cloud, tone: "text-success", verb: "started a cloud run for", detail: p.agent ?? undefined };
+    case "wake.failed":
+      return { icon: CloudOff, tone: "text-destructive", verb: "could not wake", detail: joined(p.agent, p.error) };
+    case "restaurant.decided": {
+      const m = DECISIONS[p.decision ?? ""];
+      return { icon: m?.icon ?? ChefHatIcon, tone: m?.tone ?? "text-muted-foreground", verb: m?.verb ?? "decided", detail: p.text ?? undefined };
+    }
     default:
       return { icon: CirclePlay, tone: "text-muted-foreground", verb: e.kind.replace(/[._]/g, " ") };
   }
@@ -226,17 +269,30 @@ function Ago({ at }: { at: string }) {
   return <>{fmtAgo(at, useNow())}</>;
 }
 
+/** The cook (or person) a restaurant decision is about: a link to its page when it is a cook. */
+function Subject({ e }: { e: ChangeView }) {
+  const p = e.payload;
+  if (!p.agent) return null;
+  if (p.decision === "role.kept") return <span className="font-semibold">{p.agent}</span>;
+  return (
+    <Link to={`/cooks/${encodeURIComponent(p.agent)}`} className="rounded font-semibold underline-offset-2 hover:underline focus-visible:underline">
+      {p.agent}
+    </Link>
+  );
+}
+
 const Item = memo(function Item({ e, compact, last }: { e: ChangeView; compact: boolean; last: boolean }) {
   const open = useOpenTask();
   const openMemory = useOpenMemory();
   const d = describe(e);
   const Icon = d.icon;
-  const actor = e.actor ?? (e.kind.startsWith("forge.") ? "GitHub" : "the kitchen");
+  const actor = e.actor ?? (e.kind.startsWith("forge.") ? "GitHub" : "someone");
+  const decision = e.kind === "restaurant.decided";
   return (
     <div className={cn("relative flex gap-3", compact ? "py-2.5" : "py-3")}>
       {!compact && !last && <span aria-hidden="true" className="absolute top-11 -bottom-1 left-3 w-px bg-border" />}
       <span className="relative mt-0.5 self-start">
-        <Avatar name={actor} className="size-6 text-[11px]" />
+        <ActorAvatar name={actor} kind={e.actor_kind} className="size-6 text-[11px]" />
         <span className="absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full bg-card ring-1 ring-border">
           <Icon className={cn("size-2.5", d.tone)} aria-hidden="true" />
         </span>
@@ -258,6 +314,8 @@ const Item = memo(function Item({ e, compact, last }: { e: ChangeView; compact: 
               {e.task && <span className="text-muted-foreground"> on </span>}
             </>
           )}
+          {decision && !TASK_FIRST.has(e.payload.decision ?? "") && <Subject e={e} />}
+          {decision && e.task && !TASK_FIRST.has(e.payload.decision ?? "") && <span className="text-muted-foreground"> on </span>}
           {e.task && (
             <button
               type="button"
@@ -267,6 +325,14 @@ const Item = memo(function Item({ e, compact, last }: { e: ChangeView; compact: 
               {e.task}
             </button>
           )}
+          {decision && e.payload.decision === "claim.skipping" && (
+            <>
+              <span className="text-muted-foreground"> for </span>
+              <Subject e={e} />
+            </>
+          )}
+          {decision && e.payload.station && <span className="font-mono text-[11px] text-muted-foreground"> {e.payload.station}</span>}
+          {decision && !!e.payload.repeated && <span className="font-mono text-[11px] text-muted-foreground"> (×{e.payload.repeated})</span>}
           {e.kind.startsWith("menu.") && (
             <>
               <Link

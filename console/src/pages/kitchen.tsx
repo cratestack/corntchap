@@ -991,6 +991,7 @@ const KIND_GROUPS: { id: string; label: string; match: (k: string) => boolean }[
   { id: "questions", label: "Questions", match: (k) => k.startsWith("question.") },
   { id: "pass", label: "Pass", match: (k) => k === "pass.posted" },
   { id: "files", label: "Files", match: (k) => k.startsWith("file.") },
+  { id: "restaurant", label: "Restaurant", match: (k) => k === "restaurant.decided" || k === "wake.failed" },
   { id: "edits", label: "New and edited", match: (k) => k === "task.created" || k === "task.updated" },
 ];
 

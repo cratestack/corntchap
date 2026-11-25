@@ -53,7 +53,7 @@ fn check_keys(order: &str, keys: &Keys) -> Result<()> {
     for (col, key) in cols.zip(keys) {
         let Some(key) = key else { continue };
         let ok = match col.trim_start_matches('-') {
-            "number" | "priority" | "requested" | "rn" => key.parse::<i64>().is_ok(),
+            "number" | "priority" | "requested" | "rn" | "seq" => key.parse::<i64>().is_ok(),
             "created_at" | "updated_at" => {
                 chrono::DateTime::parse_from_str(key, "%Y-%m-%d %H:%M:%S%.f%#z").is_ok()
             }

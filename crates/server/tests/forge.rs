@@ -127,6 +127,22 @@ async fn world(background: bool) -> World {
 }
 
 impl World {
+    /// The restaurant decided `decision` for `reason` about `task`: its event, actor and sentence.
+    async fn decided(&self, decision: &str, reason: &str, task: &str) {
+        let (actor, text, tref): (String, String, String) = sqlx::query_as(
+            "select a.name, e.payload->>'text', e.payload->>'task'
+             from events e join principals a on a.id = e.actor_id
+             where e.kind = 'restaurant.decided' and e.payload->>'decision' = $1 and e.payload->>'reason' = $2",
+        )
+        .bind(decision)
+        .bind(reason)
+        .fetch_one(&self.app.state.db)
+        .await
+        .unwrap_or_else(|e| panic!("{decision}/{reason}: {e}"));
+        assert_eq!((actor.as_str(), tref.as_str()), ("restaurant", task));
+        assert!(text.contains(task), "{text}");
+    }
+
     async fn cook(&self, name: &str, runtime: &str) -> String {
         let (_, ag) = self
             .app
@@ -433,6 +449,52 @@ async fn only_repositories_of_a_pot_are_followed() {
         .await
         .unwrap();
     assert_eq!(tasks, 1);
+}
+
+#[tokio::test]
+async fn the_link_the_server_finds_is_the_restaurants_and_a_persons_stays_theirs() {
+    let w = world(false).await;
+    for t in ["One", "Two"] {
+        w.task(t).await;
+    }
+    w.send(
+        "pull_request",
+        pr_event(
+            "opened",
+            "shop",
+            pr("shop", 1, "feat/shop-1", "a", "unrelated"),
+        ),
+    )
+    .await;
+    tool(
+        &w.app,
+        &w.alice,
+        "link_pr",
+        json!({"id": "SHOP-2", "url": "https://github.com/acme/shop/pull/9"}),
+    )
+    .await;
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "select a.name, a.kind, e.payload->>'reason', e.payload->>'why' from events e
+           join principals a on a.id = e.actor_id where e.kind = 'forge.linked' order by e.seq",
+    )
+    .fetch_all(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(
+        (rows[0].0.as_str(), rows[0].1.as_str(), rows[0].2.as_deref()),
+        ("restaurant", "restaurant", Some("auto_link"))
+    );
+    assert!(rows[0].3.as_deref().unwrap().contains("branch"), "{rows:?}");
+    assert_eq!(rows[1].0, "alice", "a link by hand is the person's");
+    // the other forge events have no actor: GitHub did them
+    let github: i64 = sqlx::query_scalar(
+        "select count(*) from events where kind = 'forge.pr' and actor_id is null",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert!(github >= 1);
 }
 
 #[tokio::test]
@@ -1130,6 +1192,15 @@ async fn a_merge_that_completes_a_task_propagates_its_repos_once() {
         titles[0]
     );
     assert_eq!(w.events("task.propagated").await, 1);
+    // the note on the upstream task is the server's: the restaurant wrote it
+    let authors: Vec<Option<String>> = sqlx::query_scalar(
+        "select (select kind from principals where id = c.author_id) from comments c
+          where c.body like 'Upstream change passed on (%'",
+    )
+    .fetch_all(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(authors, [Some("restaurant".to_string())]);
 }
 
 // ---------- cloud ----------
@@ -1321,12 +1392,22 @@ async fn a_merge_completes_a_task_nobody_holds() {
         "{t}"
     );
     let (n, actors): (i64, i64) = sqlx::query_as(
-        "select count(*), count(actor_id) from events where kind = 'task.completed'",
+        "select count(*), count(*) filter (where actor_id = '00000000-0000-4000-8000-524553545552') from events where kind = 'task.completed'",
     )
     .fetch_one(&w.app.state.db)
     .await
     .unwrap();
-    assert_eq!((n, actors), (1, 0), "one completion, no actor");
+    assert_eq!((n, actors), (1, 1), "one completion, by the restaurant");
+    let (reason, why): (String, String) = sqlx::query_as(
+        "select payload->>'reason', payload->>'why' from events where kind = 'task.completed'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(reason, "merged");
+    assert!(why.contains("merged"), "{why}");
+    // the first merge left the task open, and the restaurant said why
+    w.decided("merge.kept_open", "open_pr", "SHOP-1").await;
     // what depends on it is ready now
     let next = tool(&w.app, &w.alice, "get_task", json!({"id": "SHOP-2"})).await;
     assert_eq!(next["ready"], true, "{next}");
@@ -1441,12 +1522,12 @@ async fn a_merge_while_held_completes_the_task_on_release_or_lease_expiry() {
         "a body mention never completes"
     );
     let (n, actors): (i64, i64) = sqlx::query_as(
-        "select count(*), count(actor_id) from events where kind = 'task.completed'",
+        "select count(*), count(*) filter (where actor_id = '00000000-0000-4000-8000-524553545552') from events where kind = 'task.completed'",
     )
     .fetch_one(&w.app.state.db)
     .await
     .unwrap();
-    assert_eq!((n, actors), (3, 0));
+    assert_eq!((n, actors), (3, 3));
 }
 
 #[tokio::test]
@@ -1463,6 +1544,7 @@ async fn a_merge_waits_for_the_tasks_dependencies() {
     // the dependent is open but not ready: its own PR merging must not complete it
     w.send("pull_request", merged(2, "shop-2-x", "t", "")).await;
     assert_eq!(w.status("SHOP-2").await, "open", "a dependency is not done");
+    w.decided("merge.kept_open", "dependencies", "SHOP-2").await;
     w.send("pull_request", merged(1, "shop-1-x", "t", "")).await;
     assert_eq!(w.status("SHOP-1").await, "done");
 }
@@ -1488,6 +1570,7 @@ async fn a_merge_does_not_complete_a_task_with_open_subtasks() {
     p["merged"] = json!(true);
     w.send("pull_request", pr_event("closed", "shop", p)).await;
     assert_eq!(w.status("SHOP-1").await, "open");
+    w.decided("merge.kept_open", "subtasks", "SHOP-1").await;
 }
 
 // ---------- the manifest flow against a fake GitHub ----------

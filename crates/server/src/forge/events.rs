@@ -286,7 +286,9 @@ async fn note(c: &mut PgConnection, ctx: &Ctx, row: &Pr, kind: &str, extra: Valu
             o.insert(k.clone(), v.clone());
         }
     }
-    service::emit(c, Some(ctx.project), Some(ctx.task), kind, None, p).await?;
+    // GitHub did it, except the link the server made itself: that is the restaurant's decision
+    let actor = (kind == "forge.linked").then_some(crate::state::RESTAURANT);
+    service::emit(c, Some(ctx.project), Some(ctx.task), kind, actor, p).await?;
     Ok(())
 }
 
@@ -552,7 +554,19 @@ pub async fn apply(db: &PgPool, connection: Uuid, ev: &ForgeEvent) -> Result<App
     let mut told: Vec<String> = vec![];
     if let Some(ctx) = &ctx {
         if let Some(via) = linked_now {
-            note(c, ctx, &row, "forge.linked", json!({"via": via})).await?;
+            let why = match via {
+                "branch" => "the pull request's branch names the task",
+                "title" => "the pull request's title names the task",
+                _ => "the pull request's text names the task",
+            };
+            note(
+                c,
+                ctx,
+                &row,
+                "forge.linked",
+                json!({"via": via, "reason": "auto_link", "why": why}),
+            )
+            .await?;
         }
         told = react(c, ctx, &mut row, ev, head_changed, first_merge).await?;
     }
@@ -645,6 +659,8 @@ async fn react(
             if complete_if_merged(c, ctx.task, Some((row.id, &row.url, row.qualifies()))).await? {
                 told.push(format!("{tref} done"));
             } else if !task_finished(c, ctx.task).await? {
+                // boxed: this future is large and sits deep in the forge event path
+                Box::pin(kept_open(c, ctx, row)).await?;
                 let text = format!(
                     "{word} merged ({}); {tref}'s status is unchanged, serve it if the work is done.",
                     row.url
@@ -764,6 +780,74 @@ async fn react(
     Ok(told)
 }
 
+/// A merge that did not complete its task is a decision of the restaurant: say why the task stays as it is
+/// (`merge.kept_open`).
+async fn kept_open(c: &mut PgConnection, ctx: &Ctx, row: &Pr) -> Result<()> {
+    let (status, holder, held, open_pr, subtasks, deps): (String, Option<String>, bool, bool, bool, bool) =
+        sqlx::query_as(
+            "select t.status, (select name from principals where id = coalesce(t.claimed_by, t.reserved_for)),
+                    t.claimed_by is not null or t.reserved_for is not null or t.status <> 'open',
+                    exists (select 1 from forge_prs o where o.task_id = t.id and o.id <> $2 and o.state = 'open' and not o.unlinked),
+                    exists (select 1 from tasks c where c.parent_id = t.id and c.status not in ('done','cancelled')),
+                    exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
+                              where d.task_id = t.id and dt.status not in ('done','cancelled'))
+             from tasks t where t.id = $1",
+        )
+        .bind(ctx.task)
+        .bind(row.id)
+        .fetch_one(&mut *c)
+        .await?;
+    let word = pr_word(row);
+    let tref = &ctx.tref;
+    let (reason, why) = if held {
+        (
+            "held",
+            match &holder {
+                Some(h) => format!("{h} holds it or it is parked for them"),
+                None => format!("it is {status}, not open"),
+            },
+        )
+    } else if open_pr {
+        (
+            "open_pr",
+            "another pull request linked to it is still open".to_string(),
+        )
+    } else if subtasks {
+        (
+            "subtasks",
+            "it has subtasks that are not finished".to_string(),
+        )
+    } else if deps {
+        (
+            "dependencies",
+            "it waits on dependencies that are not done".to_string(),
+        )
+    } else {
+        (
+            "weak_link",
+            "the pull request only mentions the task: a person's link, or its ref in the branch or title, completes it".to_string(),
+        )
+    };
+    let mut d = crate::restaurant::Decision::new(
+        Some(ctx.project),
+        "merge.kept_open",
+        reason,
+        format!("{word} merged, but {tref} stays as it is: {why}."),
+    )
+    .on(Some((ctx.task, ctx.tref.clone())))
+    .keyed(word);
+    if let Some(h) = holder {
+        let id: Option<Uuid> = sqlx::query_scalar("select id from principals where name = $1")
+            .bind(&h)
+            .fetch_optional(&mut *c)
+            .await?;
+        d.agent = Some(h);
+        d.agent_id = id;
+    }
+    crate::restaurant::decide(c, d).await?;
+    Ok(())
+}
+
 /// The task is done or cancelled: a merge of another PR has nothing left to say about it.
 async fn task_finished(c: &mut PgConnection, task: Uuid) -> Result<bool> {
     Ok(
@@ -829,8 +913,9 @@ pub async fn complete_if_merged(
         Some(project),
         Some(task),
         "task.completed",
-        None,
-        json!({"result": result, "merged": merging.map(|m| m.1)}),
+        Some(crate::state::RESTAURANT),
+        json!({"result": result, "merged": merging.map(|m| m.1), "reason": "merged",
+               "why": "its pull request merged and nothing else is going on: no other open pull request, subtask or unfinished dependency"}),
     )
     .await?;
     repos::propagate(c, None, task, &result).await?;

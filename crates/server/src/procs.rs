@@ -528,6 +528,21 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn cook_decisions(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: cook_decisions::Args,
+        _z: cook_decisions::Authorized,
+    ) -> Result<cook_decisions::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            crate::restaurant::cook_log(&self.state.db, &p, &a.agent, &a.page)
+                .await
+                .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
+    }
+
     async fn wait_for_work(
         &self,
         _db: &Db,

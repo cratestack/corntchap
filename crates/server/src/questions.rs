@@ -1375,6 +1375,18 @@ pub async fn wake_from(
             .await?;
     let cloud = crate::cloud::is_fire_and_forget(&mut *c, agent).await?;
     if cloud && !(reason == "pass" && owner.is_some() && from == owner) {
+        withheld(
+            c,
+            project,
+            (agent, &name),
+            task,
+            reason,
+            "fire_and_forget",
+            format!(
+                "{name} was not woken ({reason}): it is a fire-and-forget cook, which only takes ready work and answers its owner's direct messages."
+            ),
+        )
+        .await?;
         return Ok(json!({"cook": name, "woken": false, "cloud": true}));
     }
     // its owner's message starts a run only where a cloud target serves the pot
@@ -1388,6 +1400,18 @@ pub async fn wake_from(
         .fetch_one(&mut *c)
         .await?;
         if !covered {
+            withheld(
+                c,
+                project,
+                (agent, &name),
+                task,
+                reason,
+                "uncovered",
+                format!(
+                    "{name} was not woken ({reason}): none of its cloud targets serves {key}, so there is nowhere to start a run."
+                ),
+            )
+            .await?;
             return Ok(json!({"cook": name, "woken": false, "cloud": true, "uncovered": true}));
         }
     }
@@ -1461,7 +1485,7 @@ pub async fn wake_from(
         Some(project),
         None,
         "wake",
-        None,
+        Some(crate::state::RESTAURANT),
         json!({"agent": name, "agent_id": agent, "project": key, "station": st, "text": text, "reason": reason,
                "task": task_ref}),
     )
@@ -1476,6 +1500,38 @@ pub async fn wake_from(
         out["cloud"] = json!(true);
     }
     Ok(out)
+}
+
+/// The restaurant did not wake a cook (`wake.withheld`): it says why, once in a while.
+#[allow(clippy::too_many_arguments)]
+async fn withheld(
+    c: &mut PgConnection,
+    project: Uuid,
+    (agent, name): (Uuid, &str),
+    task: Option<Uuid>,
+    wake_reason: &str,
+    why: &'static str,
+    text: String,
+) -> Result<()> {
+    let tref: Option<(Uuid, String)> = match task {
+        Some(t) => sqlx::query_scalar::<_, String>(
+            "select pr.key || '-' || t.number from tasks t join projects pr on pr.id = t.project_id where t.id = $1",
+        )
+        .bind(t)
+        .fetch_optional(&mut *c)
+        .await?
+        .map(|r| (t, r)),
+        None => None,
+    };
+    crate::restaurant::decide(
+        c,
+        crate::restaurant::Decision::new(Some(project), "wake.withheld", why, text)
+            .cook(name, agent)
+            .on(tref)
+            .keyed(wake_reason),
+    )
+    .await?;
+    Ok(())
 }
 
 /// The station to wake when none is named (answers, notes, pass messages and mentions): the

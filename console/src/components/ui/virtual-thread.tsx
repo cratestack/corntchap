@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode, type UIEvent } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type UIEvent } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -119,6 +119,35 @@ export function VirtualThread<T>({ items, itemKey, renderItem, lastSeq, hasOlder
   const { store } = bottom;
   useLayoutEffect(() => store.arrived(lastSeq), [lastSeq, store]);
 
+  // Following new messages without a jump: Virtuoso scrolls to a new last row only once it has measured it, a frame
+  // or two after the row is in the DOM, and until then the newest message sat below the fold. While following, the
+  // bottom is kept in view as soon as the list changes: a mutation observer runs right after the commit that added
+  // the row (before anything else can look or paint), a resize observer when a row grows later (an image loads).
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  const scrollerRef = useCallback((el: HTMLElement | Window | null) => setScroller(el instanceof HTMLElement ? el : null), []);
+  useLayoutEffect(() => {
+    const list = scroller?.querySelector("[data-testid=virtuoso-item-list]");
+    if (!scroller || !list || typeof ResizeObserver === "undefined" || typeof MutationObserver === "undefined") return;
+    let height = scroller.scrollHeight;
+    const stick = () => {
+      if (!store.follow()) {
+        height = 0;
+        return;
+      }
+      const h = scroller.scrollHeight;
+      if (h > height && height > 0) scroller.scrollTop = h;
+      height = h;
+    };
+    const mo = new MutationObserver(stick);
+    mo.observe(list, { childList: true });
+    const ro = new ResizeObserver(stick);
+    ro.observe(list, { box: "border-box" });
+    return () => {
+      mo.disconnect();
+      ro.disconnect();
+    };
+  }, [scroller, store]);
+
   const context = useMemo<VirtualContext>(
     () => ({
       itemClassName,
@@ -158,6 +187,7 @@ export function VirtualThread<T>({ items, itemKey, renderItem, lastSeq, hasOlder
     >
       <Virtuoso<T, VirtualContext>
         ref={ref}
+        scrollerRef={scrollerRef}
         data={items}
         context={context}
         components={virtualComponents}

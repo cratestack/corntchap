@@ -1080,7 +1080,29 @@ async fn sync_oidc_role(db: &sqlx::PgPool, user: Uuid, want: crate::state::Role)
             user = %user,
             "the IdP no longer grants the admin role to the last usable super-admin; keeping super_admin"
         );
-        return Ok(()); // dropping tx rolls the demotion back
+        tx.rollback().await?; // the demotion is undone; the restaurant says it kept the role
+        let name: Option<String> = sqlx::query_scalar("select name from principals where id = $1")
+            .bind(user)
+            .fetch_optional(db)
+            .await?;
+        let name = name.unwrap_or_else(|| "someone".into());
+        let mut c = db.acquire().await?;
+        crate::restaurant::decide(
+            &mut c,
+            crate::restaurant::Decision::new(
+                None,
+                "role.kept",
+                "last_super_admin",
+                format!(
+                    "The identity provider no longer grants {name} the admin role, but they are the last usable super-admin: the restaurant kept super_admin so the instance is not locked out."
+                ),
+            )
+            .cook(&name, user)
+            .keyed(user.to_string())
+            .quiet_for(crate::restaurant::DAY_SECS),
+        )
+        .await?;
+        return Ok(());
     }
     tx.commit().await?;
     Ok(())

@@ -14,6 +14,20 @@ pub fn admin_url() -> String {
         .unwrap_or_else(|_| "postgres://corn:corn@127.0.0.1/postgres".into())
 }
 
+/// The invariant of the restaurant: whatever the server did on its own has an actor. No event is anonymous
+/// except the forge's own (GitHub did them), and `forge.linked` and `forge.backfill` are the server's.
+pub async fn assert_no_anonymous_events(db: &sqlx::PgPool) {
+    let bad: Vec<(i64, String)> = sqlx::query_as(
+        "select seq, kind from events
+          where actor_id is null and (kind not like 'forge.%' or kind in ('forge.linked', 'forge.backfill'))
+          order by seq",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap();
+    assert!(bad.is_empty(), "events with no actor: {bad:?}");
+}
+
 /// A fresh, migrated database per test.
 pub async fn fresh_db() -> (sqlx::PgPool, String) {
     let admin = sqlx::PgPool::connect(&admin_url())

@@ -86,6 +86,20 @@ async fn a_new_agents_first_claim_is_a_catch_up_not_a_lease() {
         "{first}"
     );
     assert_eq!(w.live_leases().await, 0, "no lease was taken");
+    // the restaurant held the claim back: that is its decision, said once per absence
+    let (actor, reason, agent, text): (String, String, String, String) = sqlx::query_as(
+        "select a.name, e.payload->>'reason', e.payload->>'agent', e.payload->>'text'
+         from events e join principals a on a.id = e.actor_id
+         where e.kind = 'restaurant.decided' and e.payload->>'decision' = 'catch_up'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (actor.as_str(), reason.as_str(), agent.as_str()),
+        ("restaurant", "away", "c1")
+    );
+    assert!(text.contains("briefing instead of a lease"), "{text}");
     // the second claim takes work
     let second = ok(
         &w.app
@@ -95,6 +109,13 @@ async fn a_new_agents_first_claim_is_a_catch_up_not_a_lease() {
     );
     assert_eq!(second["task"]["id"], "PAY-1", "{second}");
     assert!(second["lease"]["epoch"].is_i64());
+    let n: i64 = sqlx::query_scalar(
+        "select count(*) from events where kind = 'restaurant.decided' and payload->>'decision' = 'catch_up'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(n, 1, "a claim that goes through says nothing");
     assert!(second["catch_up"].is_null());
     // claim_task is gated the same way for another agent, and so is REST
     let c2 = w.cook("c2").await;

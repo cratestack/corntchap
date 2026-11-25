@@ -87,6 +87,28 @@ async fn a_cook_that_gave_a_task_back_three_times_is_not_handed_it_again() {
     for _ in 0..3 {
         w.bounce(0).await;
     }
+    // the third give-back is a decision of the restaurant, said once, where it is taken
+    let (actor, reason, agent, task, text): (String, String, String, String, String) = sqlx::query_as(
+        "select a.name, e.payload->>'reason', e.payload->>'agent', e.payload->>'task', e.payload->>'text'
+         from events e join principals a on a.id = e.actor_id
+         where e.kind = 'restaurant.decided' and e.payload->>'decision' = 'claim.skipping'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            actor.as_str(),
+            reason.as_str(),
+            agent.as_str(),
+            task.as_str()
+        ),
+        ("restaurant", "bounce", "c1", "PAY-1")
+    );
+    assert!(
+        text.contains("3 times") && text.contains("claim_next skips"),
+        "{text}"
+    );
     // claim_next: nothing, and it says why
     let none = ok(
         &w.app
@@ -98,6 +120,34 @@ async fn a_cook_that_gave_a_task_back_three_times_is_not_handed_it_again() {
     assert_eq!(none["bounced"], "PAY-1", "{none}");
     let hint = none["hint"].as_str().unwrap();
     assert!(hint.contains("PAY-1") && hint.contains("3 times"), "{hint}");
+    // reading it again says nothing new, and what_now tells the cook the restaurant's decision
+    let again: i64 = sqlx::query_scalar(
+        "select count(*) from events where kind = 'restaurant.decided' and payload->>'decision' = 'claim.skipping'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(again, 1, "not on reads");
+    let now = ok(
+        &w.app
+            .mcp(&w.cooks[0], "what_now", json!({"project": "PAY"}))
+            .await,
+        "what_now",
+    );
+    assert!(
+        now["restaurant"]
+            .as_str()
+            .unwrap_or("")
+            .contains("claim_next skips"),
+        "{now}"
+    );
+    let other = ok(
+        &w.app
+            .mcp(&w.cooks[1], "what_now", json!({"project": "PAY"}))
+            .await,
+        "what_now of another cook",
+    );
+    assert!(other["restaurant"].is_null(), "{other}");
     assert!(
         !hint.contains("Take one by name"),
         "claim_task refuses it too: {hint}"
@@ -171,16 +221,38 @@ async fn five_give_backs_block_the_task_for_a_person() {
     w.bounce(1).await;
     assert_eq!(w.status().await, "blocked");
     let reason: String = sqlx::query_scalar(
-        "select payload->>'reason' from events where kind = 'task.blocked' and actor_id is null",
+        "select payload->>'reason' from events where kind = 'task.blocked' and actor_id = '00000000-0000-4000-8000-524553545552'",
     )
     .fetch_one(&w.app.state.db)
     .await
     .unwrap();
     assert_eq!(reason, "bounced 5×: needs a person");
-    let note: String = sqlx::query_scalar("select body from comments where author_id is null")
-        .fetch_one(&w.app.state.db)
-        .await
-        .unwrap();
+    let (actor, kind, why): (String, String, String) = sqlx::query_as(
+        "select a.name, a.kind, e.payload->>'why' from events e join principals a on a.id = e.actor_id
+         where e.kind = 'task.blocked'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (actor.as_str(), kind.as_str()),
+        ("restaurant", "restaurant")
+    );
+    assert!(why.contains("5 give-backs"), "{why}");
+    // no prefix in the note: its author says who wrote it
+    let note: String = sqlx::query_scalar(
+        "select body from comments where author_id = '00000000-0000-4000-8000-524553545552'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
+    assert!(!note.starts_with('['), "{note}");
+    let note: String = sqlx::query_scalar(
+        "select body from comments where author_id = '00000000-0000-4000-8000-524553545552'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
     assert!(note.contains("bounced 5"), "{note}");
     // nobody is handed it any more
     let none = ok(
@@ -352,10 +424,12 @@ async fn giving_back_a_task_with_a_failing_pr_is_bouncing() {
     assert_eq!(w.status().await, "open");
     w.bounce(1).await;
     assert_eq!(w.status().await, "blocked");
-    let note: String = sqlx::query_scalar("select body from comments where author_id is null")
-        .fetch_one(&w.app.state.db)
-        .await
-        .unwrap();
+    let note: String = sqlx::query_scalar(
+        "select body from comments where author_id = '00000000-0000-4000-8000-524553545552'",
+    )
+    .fetch_one(&w.app.state.db)
+    .await
+    .unwrap();
     assert!(note.contains("bounced 5"), "{note}");
 }
 

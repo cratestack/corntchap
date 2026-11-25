@@ -727,8 +727,9 @@ pub async fn pass_on(
                 Some(project),
                 Some(sub),
                 "task.created",
-                actor,
-                json!({"title": ftitle, "labels": [], "repos": [dep], "upstream": tref}),
+                actor.or(Some(crate::state::RESTAURANT)),
+                json!({"title": ftitle, "labels": [], "repos": [dep], "upstream": tref, "reason": "upstream",
+                       "why": format!("{tref} {did} in {up}, which {dep} depends on: a follow-up task was opened for it")}),
             )
             .await?;
             told.push(json!({"repo": dep, "mode": "task", "task": format!("{key}-{n}")}));
@@ -784,19 +785,22 @@ pub async fn pass_on(
         })
         .collect();
     if let Some(task) = task {
-        sqlx::query("insert into comments (task_id, author_id, body) values ($1, null, $2)")
-            .bind(task)
-            .bind(format!("Upstream change passed on ({}).", line.join("; ")))
-            .execute(&mut *c)
-            .await?;
+        // the server's own note: its author is the restaurant
+        service::system_comment(
+            c,
+            task,
+            &format!("Upstream change passed on ({}).", line.join("; ")),
+        )
+        .await?;
     }
     service::emit(
         c,
         Some(project),
         task,
         "task.propagated",
-        actor,
-        json!({"upstream": repos.join(", "), "told": told}),
+        actor.or(Some(crate::state::RESTAURANT)),
+        json!({"upstream": repos.join(", "), "told": told, "reason": "propagate",
+               "why": format!("{tref} {did} in {}: what depends on it was told", repos.join(", "))}),
     )
     .await?;
     Ok(Value::Array(told))

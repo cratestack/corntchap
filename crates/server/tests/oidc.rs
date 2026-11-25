@@ -688,6 +688,21 @@ async fn dropping_the_admin_claim_keeps_the_last_super_admin() {
         row(&app, "sub-solo").await,
         ("super_admin".to_string(), "oidc".to_string())
     );
+    // the restaurant kept the role and said so, once (a second sign-in the same day adds nothing)
+    app.browser_login("/").await;
+    let kept: Vec<(String, String, String)> = sqlx::query_as(
+        "select a.name, e.payload->>'reason', e.payload->>'text' from events e join principals a on a.id = e.actor_id
+          where e.kind = 'restaurant.decided' and e.payload->>'decision' = 'role.kept'",
+    )
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert_eq!(
+        (kept[0].0.as_str(), kept[0].1.as_str()),
+        ("restaurant", "last_super_admin")
+    );
+    assert!(kept[0].2.contains("last usable super-admin"), "{kept:?}");
     // with a second usable super-admin the sync demotes as usual
     app.sign_in_as("sub-two", "Two", true);
     app.browser_login("/").await;

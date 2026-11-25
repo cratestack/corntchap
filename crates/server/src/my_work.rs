@@ -220,6 +220,7 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
             format!(
                 "select jsonb_build_object('task', pr.key || '-' || t.number, 'project', pr.key,
                      'author', (select name from principals where id = cm.author_id),
+                     'author_kind', (select kind from principals where id = cm.author_id),
                      'excerpt', case when char_length(cm.body) > 160 then left(cm.body, 160) || '…' else cm.body end,
                      'at', cm.created_at)
                  from comment_replies cr join comments cm on cm.id = cr.comment_id

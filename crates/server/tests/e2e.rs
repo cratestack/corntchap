@@ -306,6 +306,8 @@ async fn sso_device_flow_rest_and_mcp() {
         .await;
     assert_eq!(app.get(&agent_token, "/me").await.0, 401);
     assert_eq!(app.get(rot["token"].as_str().unwrap(), "/me").await.0, 200);
+    // nothing the server did on its own is anonymous
+    common::assert_no_anonymous_events(&app.state.db).await;
 }
 
 /// The dispatcher wakes the owner's relay over SSE, with Last-Event-ID replay.
@@ -389,4 +391,13 @@ async fn relay_stream_receives_wakes() {
     .unwrap_or(false);
     assert!(got, "no wake received: {text}");
     assert!(text.contains("\"project\":\"PAY\""), "{text}");
+    // the wake is the restaurant's
+    let actor: String = sqlx::query_scalar(
+        "select a.name from events e join principals a on a.id = e.actor_id where e.kind = 'wake' order by e.seq limit 1",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(actor, "restaurant");
+    common::assert_no_anonymous_events(&app.state.db).await;
 }

@@ -647,7 +647,7 @@ async fn mark_ready(db: &PgPool, state: &AppState, id: Uuid, size: i64) -> Resul
             Some(project),
             task,
             "file.ready",
-            by,
+            by.or(Some(crate::state::RESTAURANT)),
             json!({"file": fref, "title": name, "url": link(&state.config.public_url, &fref, &name)}),
         )
         .await?;
@@ -673,7 +673,7 @@ async fn mark_failed(db: &PgPool, id: Uuid, why: &str) -> Result<()> {
             Some(project),
             task,
             "file.failed",
-            by,
+            by.or(Some(crate::state::RESTAURANT)),
             json!({"file": format!("{key}-F{number}"), "title": name, "reason": why}),
         )
         .await?;

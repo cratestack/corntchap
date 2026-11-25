@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import { ChevronRight, GitBranch } from "lucide-react";
+import { ChefHat, ChevronRight, GitBranch } from "lucide-react";
 import type { TaskView } from "@corntchap/api";
 import { cn } from "@/lib/utils";
 import { colorFor, fmtLease, initial, leaseLeftMs, useNow, type Bucket } from "@/lib/format";
@@ -32,6 +32,25 @@ export function Avatar({ name, className, title }: { name: string; className?: s
       {initial(name)}
     </span>
   );
+}
+
+/** The server itself: a squared saffron tile with a chef's hat, so it never passes for a person or a cook. */
+export function RestaurantAvatar({ className }: { className?: string }) {
+  return (
+    <span
+      title="restaurant: the server itself"
+      aria-hidden="true"
+      className={cn("inline-grid size-6 shrink-0 place-items-center rounded-[5px] bg-corn text-corn-foreground ring-1 ring-foreground/30", className)}
+    >
+      <ChefHat className="size-[62%]" />
+    </span>
+  );
+}
+
+/** Who did it: the restaurant (kind `restaurant`, or the name when the kind is unknown) gets its own tile; everyone else a coloured initial. */
+export function ActorAvatar({ name, kind, className, title }: { name: string; kind?: string | null | undefined; className?: string; title?: string }) {
+  if (kind === "restaurant" || (!kind && name === "restaurant")) return <RestaurantAvatar {...(className ? { className } : {})} />;
+  return <Avatar name={name} {...(className ? { className } : {})} {...(title ? { title } : {})} />;
 }
 
 export type CookState = "cooking" | "awake" | "idle" | "disabled";
