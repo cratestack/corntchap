@@ -43,6 +43,7 @@ import { Attachments } from "./files";
 import { EventFeed } from "./event-feed";
 import { ParkedQuestion, parkedQuestionRef } from "./questions";
 import { projectOfTask } from "@/lib/nav";
+import { StationLink, shortUrl } from "./station-link";
 import { cn } from "@/lib/utils";
 
 export function TaskSheet({ id, onClose }: { id: string | null; onClose: () => void }) {
@@ -220,6 +221,9 @@ function TaskDetailBody({ id }: { id: string }) {
                 {t.claimed_by && (
                   <Prop>
                     <Avatar name={t.claimed_by} className="size-4 rounded-[5px] text-[9px]" /> {t.claimed_by}
+                    {t.station_url && (
+                      <StationLink label={shortUrl(t.station_url)} url={t.station_url} title={`Cloud run ${t.station}: ${t.station_url}`} className="font-mono text-[11px] text-muted-foreground" />
+                    )}
                   </Prop>
                 )}
                 {t.status === "claimed" && (
@@ -357,8 +361,13 @@ function TaskDetailBody({ id }: { id: string }) {
                         <p className="text-[12px]">
                           <span className="font-semibold">{c.author ?? "someone"}</span>{" "}
                           {c.station_label && (
-                            <span className="font-mono text-[10.5px] text-muted-foreground" title={`Session ${c.station}`}>
-                              · {c.station_label}{" "}
+                            <span className="font-mono text-[10.5px] text-muted-foreground">
+                              ·{" "}
+                              <StationLink
+                                label={c.station_url ? shortUrl(c.station_url) : c.station_label}
+                                url={c.station_url}
+                                title={c.station_url ? `Cloud run ${c.station}: ${c.station_url}` : `Session ${c.station}`}
+                              />{" "}
                             </span>
                           )}
                           <span className="font-mono text-[10.5px] text-muted-foreground">{fmtAgo(c.at, now)}</span>

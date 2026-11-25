@@ -156,6 +156,8 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
   'owner', (select name from principals where id = t.owner_id),
   'station', case when t.status in ('claimed','blocked') then (select ref from stations where id = t.station_id) end,
   'last_station', case when t.status not in ('claimed','blocked') then (select ref from stations where id = t.station_id) end,
+  'station_url', case when t.status in ('claimed','blocked') then (select session_url from stations where id = t.station_id) end,
+  'last_station_url', case when t.status not in ('claimed','blocked') then (select session_url from stations where id = t.station_id) end,
   'lease_epoch', t.lease_epoch, 'lease_expires_at', t.lease_expires_at,
   'lease_live', (t.status = 'claimed' and t.lease_expires_at > now()),
   'ready', (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
@@ -361,7 +363,8 @@ pub(crate) async fn task_full(c: &mut PgConnection, id: Uuid) -> Result<Value> {
         "select coalesce(jsonb_agg(jsonb_build_object('author', (select name from principals where id = cm.author_id),
             'body', cm.body, 'at', cm.created_at,
             'station', (select s.ref from stations s where s.id = cm.station_id),
-            'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = cm.station_id))
+            'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = cm.station_id),
+            'station_url', (select s.session_url from stations s where s.id = cm.station_id))
             order by cm.created_at), '[]'::jsonb)
          from comments cm where cm.task_id = $1",
     )
@@ -1458,7 +1461,11 @@ pub async fn comment(
     }
     let comment_id = add_comment(&mut tx, &t, p.id, body).await?;
     // which of the cook's sessions wrote it, when it said
-    if let Some(st) = crate::stations::for_claim(&mut tx, p, station, t.project_id).await? {
+    let call = crate::stations::Call {
+        task: Some(t.id),
+        ..Default::default()
+    };
+    if let Some(st) = crate::stations::for_call(&mut tx, p, station, t.project_id, call).await? {
         sqlx::query("update comments set station_id = $2 where id = $1")
             .bind(comment_id)
             .bind(st)
@@ -1716,6 +1723,13 @@ pub async fn complete(
         });
     }
     save_learned(&mut tx, p, &t, Some(learned)).await?;
+    let station: Option<Uuid> = sqlx::query_scalar("select station_id from tasks where id = $1")
+        .bind(t.id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if let Some(st) = station {
+        crate::stations::end_if_idle(&mut tx, st).await?;
+    }
     emit(
         &mut tx,
         Some(t.project_id),
@@ -1759,8 +1773,23 @@ async fn end_lease(
     if n == 0 {
         return Err(Error::LeaseLost);
     }
+    // the run (station) that held it, still on the task: its reason is that run's comment
+    let station: Option<Uuid> = sqlx::query_scalar("select station_id from tasks where id = $1")
+        .bind(t.id)
+        .fetch_one(&mut *tx)
+        .await?;
     if !reason.trim().is_empty() {
-        add_comment(&mut tx, &t, p.id, &format!("[{kind}] {reason}")).await?;
+        let cid = add_comment(&mut tx, &t, p.id, &format!("[{kind}] {reason}")).await?;
+        if station.is_some() {
+            sqlx::query("update comments set station_id = $2 where id = $1")
+                .bind(cid)
+                .bind(station)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    if let Some(st) = station {
+        crate::stations::end_if_idle(&mut tx, st).await?;
     }
     save_learned(&mut tx, p, &t, learned).await?;
     // given back while a healthy pull request is open: it waits on CI or review, which is not

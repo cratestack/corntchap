@@ -17,7 +17,10 @@ pub async fn prs_of(c: &mut PgConnection, task: Uuid) -> Result<Value> {
         "select coalesce(jsonb_agg(jsonb_build_object('provider', x.provider, 'repo', x.repo, 'number', x.number,
             'url', x.url, 'title', x.title, 'author', x.author, 'state', x.state, 'draft', x.draft,
             'head_branch', x.head_branch, 'checks', x.checks, 'failing', to_jsonb(x.failing), 'checks_url', x.checks_url,
-            'review', x.review, 'mergeable', x.mergeable, 'explicit', x.explicit, 'updated_at', x.updated_at)
+            'review', x.review, 'mergeable', x.mergeable, 'explicit', x.explicit, 'updated_at', x.updated_at,
+            'station', (select s.ref from stations s where s.id = x.station_id),
+            'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = x.station_id),
+            'station_url', (select s.session_url from stations s where s.id = x.station_id))
             order by (x.state = 'open') desc, x.updated_at desc), '[]'::jsonb)
          from forge_prs x where x.task_id = $1",
     )
@@ -87,13 +90,16 @@ pub async fn link_pr(st: &AppState, p: &Principal, task: &str, url: &str) -> Res
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "update forge_prs set task_id = $4, explicit = true, unlinked = false, linked_via = null, updated_at = now()
+        "update forge_prs set task_id = $4, explicit = true, unlinked = false, linked_via = null, updated_at = now(),
+            station_id = coalesce((select t.station_id from tasks t
+                                   where t.id = $4 and t.claimed_by = $5 and t.status = 'claimed'), station_id)
          where provider = $1 and lower(repo) = lower($2) and number = $3",
     )
     .bind(&provider)
     .bind(&repo)
     .bind(number)
     .bind(t.id)
+    .bind(p.id)
     .execute(&mut *tx)
     .await?;
     service::emit(

@@ -36,6 +36,7 @@ use uuid::Uuid;
 use crate::{
     cloud::{Delivered, Failed, WakeText, cut},
     state::AppState,
+    stations::RunStation,
 };
 
 /// What goes in front of the first message of a Coder run (later wakes are follow-ups in the same
@@ -123,6 +124,7 @@ pub async fn deliver(
     config: &Value,
     project: &str,
     text: &WakeText,
+    station: Option<&RunStation>,
 ) -> Result<Delivered, Failed> {
     let base = config["url"]
         .as_str()
@@ -134,8 +136,8 @@ pub async fn deliver(
         .ok_or_else(|| fail("missing token"))?;
     let api = api_of(config);
     let c = Client { state, base, token };
-    let wake = cut(&text.full, MAX_TEXT);
-    let first = cut(&format!("{CODER_PROMPT}\n\n{wake}"), MAX_TEXT);
+    let mut full = text.full.clone();
+    let wake = cut(&full, MAX_TEXT);
 
     // the run this cook already has in this pot (a test wake has no target: always a new run)
     let known: Option<String> = match target {
@@ -176,23 +178,109 @@ pub async fn deliver(
         if let Sent::Ok(_) = sent {
             if let Some(t) = target {
                 let _ = sqlx::query(
-                    "update coder_runs set updated_at = now() where target_id = $1 and project = $2",
+                    "update coder_runs set updated_at = now(), station_id = coalesce(station_id, $3)
+                     where target_id = $1 and project = $2",
                 )
                 .bind(t)
                 .bind(project)
+                .bind(station.map(|s| s.id))
                 .execute(&state.db)
                 .await;
             }
             return Ok(Delivered {
                 status: 200,
                 session_url: None,
+                session_id: Some(id.clone()),
+                station: None,
                 chars: wake.chars().count(),
             });
         }
-        // the run is gone: start a new one below
+        // the run is gone: start a new one below, with a station of its own
     }
+    let mut run_station = station.map(|s| s.id);
+    let mut fresh: Option<RunStation> = None;
+    // only the station of a run that went on is replaced: one opened for this wake is the new run's
+    if known.is_some()
+        && let Some(old) = station
+        && old.reused
+        && let Ok(mut conn) = state.db.acquire().await
+        && let Ok(new) =
+            crate::stations::new_run(&mut conn, old.agent, old.project, old.target, &old.typ).await
+    {
+        full = full.replace(&old.reference, &new.reference);
+        run_station = Some(new.id);
+        fresh = Some(new);
+    }
+    let first = cut(
+        &format!("{CODER_PROMPT}\n\n{}", cut(&full, MAX_TEXT)),
+        MAX_TEXT,
+    );
 
-    let created = if api == "chats" {
+    let created = match create_run(&c, config, api, owner, &first).await {
+        Ok(v) => v,
+        Err(f) => {
+            // told to wait: nothing was sent and its new station is not needed; any other failure
+            // may have started the run, whose station then ends instead
+            if let (Some(n), Ok(mut conn)) = (&fresh, state.db.acquire().await) {
+                if f.retry_after.is_some() {
+                    let _ = crate::stations::drop_run(&mut conn, n.id).await;
+                } else {
+                    let _ = crate::stations::end_if_idle(&mut conn, n.id).await;
+                }
+            }
+            return Err(f);
+        }
+    };
+    let Sent::Ok(v) = created else {
+        // the service refused to start a run: nothing runs for the new station
+        if let (Some(n), Ok(mut conn)) = (&fresh, state.db.acquire().await) {
+            let _ = crate::stations::drop_run(&mut conn, n.id).await;
+        }
+        return Err(fail("Coder: could not start a run"));
+    };
+    let Some(remote) = v["id"]
+        .as_str()
+        .or_else(|| v["name"].as_str())
+        .map(String::from)
+    else {
+        // the run started: its station stays, ended
+        if let (Some(n), Ok(mut conn)) = (&fresh, state.db.acquire().await) {
+            let _ = crate::stations::end_if_idle(&mut conn, n.id).await;
+        }
+        return Err(fail("Coder started a run but its answer has no id"));
+    };
+    if let Some(t) = target {
+        let _ = sqlx::query(
+            "insert into coder_runs (target_id, project, api, remote_id, station_id) values ($1, $2, $3, $4, $5)
+             on conflict (target_id, project) do update
+               set api = $3, remote_id = $4, station_id = $5, created_at = now(), updated_at = now()",
+        )
+        .bind(t)
+        .bind(project)
+        .bind(api)
+        .bind(&remote)
+        .bind(run_station)
+        .execute(&state.db)
+        .await;
+    }
+    Ok(Delivered {
+        status: 200,
+        session_url: None,
+        session_id: Some(remote),
+        station: fresh.map(|n| n.id),
+        chars: first.chars().count(),
+    })
+}
+
+/// Start a new Coder run with the first message.
+async fn create_run(
+    c: &Client<'_>,
+    config: &Value,
+    api: &str,
+    owner: &str,
+    first: &str,
+) -> Result<Sent, Failed> {
+    Ok(if api == "chats" {
         let org = config["organization"]
             .as_str()
             .ok_or_else(|| fail("missing organization"))?;
@@ -210,7 +298,7 @@ pub async fn deliver(
         let version = if Uuid::parse_str(template).is_ok() {
             template.to_string()
         } else {
-            resolve_template(&c, template).await?
+            resolve_template(c, template).await?
         };
         let mut body = json!({"template_version_id": version, "input": first});
         if let Some(p) = config["preset"].as_str() {
@@ -223,32 +311,6 @@ pub async fn deliver(
             &[],
         )
         .await?
-    };
-    let Sent::Ok(v) = created else {
-        return Err(fail("Coder: could not start a run"));
-    };
-    let remote = v["id"]
-        .as_str()
-        .or_else(|| v["name"].as_str())
-        .ok_or_else(|| fail("Coder started a run but its answer has no id"))?
-        .to_string();
-    if let Some(t) = target {
-        let _ = sqlx::query(
-            "insert into coder_runs (target_id, project, api, remote_id) values ($1, $2, $3, $4)
-             on conflict (target_id, project) do update
-               set api = $3, remote_id = $4, created_at = now(), updated_at = now()",
-        )
-        .bind(t)
-        .bind(project)
-        .bind(api)
-        .bind(&remote)
-        .execute(&state.db)
-        .await;
-    }
-    Ok(Delivered {
-        status: 200,
-        session_url: None,
-        chars: first.chars().count(),
     })
 }
 

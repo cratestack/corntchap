@@ -20,6 +20,8 @@ type TaskCommentView {
   /// The session (station) that wrote it, when the cook said which.
   station String?
   station_label String?
+  /// The station's session page (a cloud run's URL), when it has one.
+  station_url String?
 }
 
 type TaskLinkView {
@@ -52,6 +54,10 @@ type PrView {
   mergeable String
   /// A person linked it by hand (not found from the branch or title).
   explicit Boolean
+  /// The station (cloud run or session) that linked it, when its cook held the task.
+  station String?
+  station_label String?
+  station_url String?
   updated_at String
 }
 
@@ -99,6 +105,9 @@ type TaskView {
   /// The station that held the task last, once nobody holds it (released, lapsed, done):
   /// where to look for leftover work.
   last_station String?
+  /// The session page of the station (a cloud run's session URL), when it has one.
+  station_url String?
+  last_station_url String?
   /// Fencing token of the current lease: pass it to every lease call; a newer claim makes older epochs stale.
   lease_epoch Int
   /// When the lease lapses unless extended (RFC 3339).
@@ -151,6 +160,9 @@ type TaskDetail {
   /// The station that held the task last, once nobody holds it (released, lapsed, done):
   /// where to look for leftover work.
   last_station String?
+  /// The session page of the station (a cloud run's session URL), when it has one.
+  station_url String?
+  last_station_url String?
   /// Fencing token of the current lease: pass it to every lease call; a newer claim makes older epochs stale.
   lease_epoch Int
   /// When the lease lapses unless extended (RFC 3339).

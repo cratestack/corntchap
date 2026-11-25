@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { IdChip, LabelChip, RepoChip } from "./bits";
+import { StationLink } from "./station-link";
 
 const RUNTIME: Record<string, string> = {
   opencode: "OpenCode",
@@ -33,6 +34,11 @@ const RUNTIME: Record<string, string> = {
   copilot: "Copilot",
   antigravity: "Antigravity",
   other: "Other",
+  "claude-routine": "Claude routine",
+  devin: "Devin",
+  coder: "Coder",
+  webhook: "Webhook",
+  "github-comment": "GitHub comment",
 };
 
 const shortSession = (s: string) => (s.length > 14 ? `${s.slice(0, 12)}…` : s);
@@ -392,5 +398,57 @@ function StartSessionDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A cook's cloud runs, newest first: one station per Claude routine run, Devin or Coder session, webhook or GitHub-comment run. */
+export function CloudRunList({ stations }: { stations: StationView[] }) {
+  const now = useNow();
+  const runs = [...stations].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  if (runs.length === 0) {
+    return <p className="text-[12.5px] text-muted-foreground">No cloud runs yet. Each wake of a cloud target opens one, and what the run does is attributed to it.</p>;
+  }
+  return (
+    <ul className="space-y-2">
+      {runs.map((s) => {
+        const live = !s.ended_at;
+        return (
+          <li key={s.id} className="rounded-xl border border-border bg-muted/40 px-3.5 py-3 text-[12.5px]">
+            <div className="flex items-start gap-2">
+              <p className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium">
+                <StationLink label={s.label ?? s.session} url={s.session_url} title={s.session_url ?? s.id} />
+              </p>
+              <span className={cn("label-caps shrink-0", live ? "text-primary" : "text-muted-foreground")}>{live ? "live" : "ended"}</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+              <span className="inline-flex items-center gap-1 text-muted-foreground">
+                <SquareTerminal className="size-3.5" aria-hidden="true" /> {RUNTIME[s.target_type ?? s.runtime] ?? s.runtime}
+              </span>
+              <LabelChip className="font-mono">
+                <Link to={`/pots/${s.project}/about`} className="hover:underline focus-visible:underline">{s.project}</Link>
+              </LabelChip>
+              <span className="font-mono text-[11px] text-muted-foreground" title={`Station ${s.id}`}>{s.id}</span>
+            </div>
+            {(s.holding.length > 0 || s.waiting.length > 0) && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {s.holding.length > 0 && <span className="text-[11.5px] text-muted-foreground">holding</span>}
+                {s.holding.map((t) => (
+                  <TaskButton key={t} id={t} />
+                ))}
+                {s.waiting.map((t) => (
+                  <TaskButton key={t} id={t}>
+                    <Hourglass className="size-3 text-corn-text" aria-hidden="true" />
+                  </TaskButton>
+                ))}
+              </div>
+            )}
+            <p className="mt-1.5 font-mono text-[10.5px] text-muted-foreground">
+              started {fmtAgo(s.created_at, now)}
+              {s.ended_at && ` · ended ${fmtAgo(s.ended_at, now)}`}
+            </p>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

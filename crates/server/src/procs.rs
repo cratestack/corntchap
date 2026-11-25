@@ -1133,7 +1133,8 @@ impl ProcedureRegistry for Procedures {
         _z: task_link_pr::Authorized,
     ) -> Result<task_link_pr::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(crate::forge::link::link_pr(&self.state, &p, &a.id, &a.url).await)
+        // boxed: its future is large and the whole request runs on one (test) thread's stack
+        typed(Box::pin(crate::forge::link::link_pr(&self.state, &p, &a.id, &a.url)).await)
     }
 
     async fn task_refresh_pr(
@@ -1356,7 +1357,18 @@ impl ProcedureRegistry for Procedures {
     ) -> Result<station_list::Output, CratestackError> {
         let p = principal(ctx)?;
         let db = &self.state.db;
-        typed(stations::list(db, &p, a.project.as_deref(), a.cook.as_deref()).await)
+        typed(
+            stations::list(
+                db,
+                &p,
+                a.project.as_deref(),
+                a.cook.as_deref(),
+                a.kind.as_deref(),
+                a.live,
+                a.limit,
+            )
+            .await,
+        )
     }
 
     async fn station_remove(

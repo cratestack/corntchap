@@ -308,11 +308,11 @@ pub async fn test(state: &AppState, p: &Principal, code: &str) -> Result<Value> 
         pointer: text.clone(),
         meta: json!({"reasons": ["test"], "test": true}),
     };
-    let result = match cloud::deliver(state, s.target, &typ, &config, &s.cook, &project, &wt).await
-    {
-        Ok(d) => json!({"ok": true, "status": d.status, "session_url": d.session_url}),
-        Err(f) => json!({"ok": false, "error": f.error}),
-    };
+    let result =
+        match cloud::deliver(state, s.target, &typ, &config, &s.cook, &project, &wt, None).await {
+            Ok(d) => json!({"ok": true, "status": d.status, "session_url": d.session_url}),
+            Err(f) => json!({"ok": false, "error": f.error}),
+        };
     let result = json!({"at": chrono::Utc::now().to_rfc3339(), "result": result});
     sqlx::query("update cloud_setups set test = $2 where id = $1")
         .bind(s.id)

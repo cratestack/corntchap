@@ -490,7 +490,17 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
             .await?;
         return Err(crate::cloud::refusal(&name));
     }
-    let mut station = stations::for_claim(&mut tx, p, a.station.as_deref(), pr.id).await?;
+    let mut station = stations::for_call(
+        &mut tx,
+        p,
+        a.station.as_deref(),
+        pr.id,
+        stations::Call {
+            task: task.as_ref().map(|t| t.id),
+            ..Default::default()
+        },
+    )
+    .await?;
     if station.is_none()
         && let Some(t) = &task
     {
@@ -1337,7 +1347,10 @@ pub async fn wake_from(
         .await?,
         None => None,
     };
+    // a cloud run is one session's station of its own: the dispatcher opens it and names it in the
+    // wake, so this text names none
     let station = match station {
+        _ if cloud => None,
         Some(s) => Some(s),
         None => infer_station(&mut *c, project, agent, task).await?,
     };
@@ -1424,7 +1437,7 @@ async fn infer_station(
     if let Some(t) = task {
         let on_task: Option<Uuid> = sqlx::query_scalar(
             "select t.station_id from tasks t join stations s on s.id = t.station_id
-             where t.id = $1 and s.agent_id = $2",
+             where t.id = $1 and s.agent_id = $2 and s.kind = 'session'",
         )
         .bind(t)
         .bind(agent)
@@ -1437,7 +1450,7 @@ async fn infer_station(
     }
     // the cook's main station in the pot, else the one woken last
     Ok(sqlx::query_scalar(
-        "select id from stations where agent_id = $1 and project_id = $2
+        "select id from stations where agent_id = $1 and project_id = $2 and kind = 'session'
          order by main desc, last_woken_at desc nulls last, created_at desc limit 1",
     )
     .bind(agent)

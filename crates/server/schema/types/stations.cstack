@@ -9,7 +9,7 @@ type StationView {
   cook String
   /// Pot key, e.g. PAY.
   project String
-  /// opencode, claude-code, codex, copilot, antigravity or other.
+  /// opencode, claude-code, codex, copilot, antigravity or other; for a cloud run its target type (claude-routine, devin, coder, webhook, github-comment).
   runtime String
   /// The runtime's own session id.
   session String
@@ -24,6 +24,14 @@ type StationView {
   guide String?
   /// The cook's main station in this pot: the session that answers messages and mentions.
   main Boolean
+  /// session (a registered agent session) or cloud-run (one station per cloud run: a Claude routine run, a Devin session, a Coder run, a webhook or GitHub-comment run).
+  kind String
+  /// The cloud run's own page (a Claude routine's session URL, a Devin session), when it has one.
+  session_url String?
+  /// A cloud run that holds nothing any more (its last task was released or completed, or it went quiet); a later call naming it reopens it.
+  ended_at String?
+  /// The wake target type of a cloud run: claude-routine, devin, coder, webhook or github-comment.
+  target_type String?
   created_at String
   last_woken_at String?
   /// Tasks this station holds a live lease on.

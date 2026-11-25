@@ -98,6 +98,12 @@ async fn run_jobs(state: AppState) {
             {
                 tracing::warn!("retention: {e}");
             }
+            // cloud runs that went quiet without releasing anything
+            if n % 80 == 1
+                && let Err(e) = crate::stations::end_stale_runs(&s.db).await
+            {
+                tracing::warn!("ending stale cloud runs: {e}");
+            }
         }
     };
     let w = state.clone();
@@ -151,18 +157,28 @@ pub async fn reap(state: &AppState) -> Result<u64, sqlx::Error> {
                                      'on_pr', (select not ({np}) from tasks t where t.id = expired.id),
                                      'station', (select s.ref from stations s where s.id = expired.station_id))
            from expired returning task_id)
-         select id, project_id, was, why from expired",
+         select id, project_id, was, why, station_id from expired",
         stall = crate::service::stall_secs(),
         max = crate::service::max_hold_secs(),
         np = crate::service::NO_OPEN_PR_SQL,
     );
-    let reaped: Vec<(Uuid, Uuid, Option<Uuid>, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
-        .fetch_all(&mut *tx)
-        .await?;
-    for (id, project, was, why) in &reaped {
+    let reaped: Vec<(Uuid, Uuid, Option<Uuid>, String, Option<Uuid>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .fetch_all(&mut *tx)
+            .await?;
+    for (id, project, was, why, station) in &reaped {
         // a savepoint: one task that cannot be settled must not undo the reaping of the rest
         let mut sp = tx.begin().await?;
-        match settle_reaped(&mut sp, *id, *project, *was, why).await {
+        let settled = async {
+            settle_reaped(&mut sp, *id, *project, *was, why).await?;
+            // a cloud run whose last lease lapsed is over
+            if let Some(st) = station {
+                crate::stations::end_if_idle(&mut sp, *st).await?;
+            }
+            Ok::<(), crate::error::Error>(())
+        }
+        .await;
+        match settled {
             Ok(_) => sp.commit().await?,
             Err(e) => {
                 tracing::warn!("reaper: settling {id}: {e}");
@@ -336,6 +352,12 @@ pub async fn retain(state: &AppState) -> Result<(), sqlx::Error> {
     .execute(&state.db)
     .await?;
     crate::usage::prune(state).await?;
+    // Cloud runs (stations) that ended are kept as long as the events that mention them.
+    sqlx::query(
+        "delete from stations where kind = 'cloud-run' and ended_at < now() - interval '90 days'",
+    )
+    .execute(&state.db)
+    .await?;
     // Forge deliveries (src/forge): kept a week, enough to dedupe a redelivery and show the last one.
     sqlx::query("delete from forge_deliveries where at < now() - interval '7 days'")
         .execute(&state.db)
@@ -684,10 +706,6 @@ impl Dispatcher {
             .await
             .unwrap_or_default();
             for (target, typ, config, labels) in targets {
-                let text = crate::cloud::messages_text(
-                    &mut conn, agent, &name, project, &key, &wakes, &labels,
-                )
-                .await;
                 if self
                     .cloud_wait
                     .get(&target)
@@ -697,6 +715,28 @@ impl Dispatcher {
                     keep.extend(wakes.iter().map(|w| (agent, project, w.clone())));
                     continue;
                 }
+                // this run's station, opened first so the text can name it
+                let run =
+                    match crate::stations::open_run(&mut conn, agent, project, Some(target), &typ)
+                        .await
+                    {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            tracing::warn!("cloud run station for {name}: {e}");
+                            None
+                        }
+                    };
+                let text = crate::cloud::messages_text(
+                    &mut conn,
+                    agent,
+                    &name,
+                    project,
+                    &key,
+                    &wakes,
+                    &labels,
+                    run.as_ref().map(|r| r.reference.as_str()),
+                )
+                .await;
                 let res = crate::cloud::deliver(
                     &self.state,
                     Some(target),
@@ -705,6 +745,7 @@ impl Dispatcher {
                     &name,
                     &key,
                     &text,
+                    run.as_ref(),
                 )
                 .await;
                 let deferred = matches!(&res, Err(f) if f.retry_after.is_some());
@@ -726,6 +767,7 @@ impl Dispatcher {
                     &key,
                     &typ,
                     wakes.len(),
+                    run.as_ref(),
                     res,
                 )
                 .await;
@@ -817,8 +859,30 @@ impl Dispatcher {
                         let _ = failed.send((target, agent_id, project, None));
                         return;
                     };
+                    // this run's station, opened first so the text can name it
+                    let run = match crate::stations::open_run(
+                        &mut conn,
+                        agent_id,
+                        project,
+                        Some(target),
+                        &typ,
+                    )
+                    .await
+                    {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            tracing::warn!("cloud run station for {agent}: {e}");
+                            None
+                        }
+                    };
                     let text = crate::cloud::work_text(
-                        &mut conn, agent_id, &agent, project, &key2, &labels,
+                        &mut conn,
+                        agent_id,
+                        &agent,
+                        project,
+                        &key2,
+                        &labels,
+                        run.as_ref().map(|r| r.reference.as_str()),
                     )
                     .await;
                     let res = crate::cloud::deliver(
@@ -829,13 +893,24 @@ impl Dispatcher {
                         &agent,
                         &key2,
                         &text,
+                        run.as_ref(),
                     )
                     .await;
                     if let Err(f) = &res {
                         let _ = failed.send((target, agent_id, project, f.retry_after));
                     }
-                    record_delivery(&mut conn, agent_id, project, &agent, &key2, &typ, 0, res)
-                        .await;
+                    record_delivery(
+                        &mut conn,
+                        agent_id,
+                        project,
+                        &agent,
+                        &key2,
+                        &typ,
+                        0,
+                        run.as_ref(),
+                        res,
+                    )
+                    .await;
                 });
             }
             _ => {}
@@ -852,8 +927,11 @@ async fn record_delivery(
     key: &str,
     typ: &str,
     messages: usize,
+    run: Option<&crate::stations::RunStation>,
     res: Result<crate::cloud::Delivered, crate::cloud::Failed>,
 ) {
+    // the station the run ended up with (a follow-up to a gone run starts a new one)
+    let mut settled: Option<(Uuid, Option<String>, Option<String>)> = None;
     let (kind, payload) = match res {
         Ok(d) => {
             crate::usage::record_in(
@@ -865,13 +943,41 @@ async fn record_delivery(
                 d.chars,
             )
             .await;
+            let station_ref: Option<String> = match (d.station, run) {
+                (Some(id), _) => sqlx::query_scalar("select ref from stations where id = $1")
+                    .bind(id)
+                    .fetch_optional(&mut *c)
+                    .await
+                    .ok()
+                    .flatten(),
+                (None, Some(r)) => Some(r.reference.clone()),
+                _ => None,
+            };
+            // a follow-up whose run was gone started a new one: the old station is over
+            if let (Some(_), Some(r)) = (d.station, run) {
+                let _ = crate::stations::end_if_idle(&mut *c, r.id).await;
+            }
+            if let Some(id) = d.station.or(run.map(|r| r.id)) {
+                settled = Some((id, d.session_id.clone(), d.session_url.clone()));
+            }
             (
                 "wake.delivered",
                 json!({"agent": agent, "project": key, "type": typ, "status": d.status,
-                   "session_url": d.session_url, "messages": messages}),
+                   "session_url": d.session_url, "messages": messages, "station": station_ref}),
             )
         }
         Err(f) => {
+            if let Some(r) = run {
+                if f.retry_after.is_some() && !r.reused {
+                    // told to wait: nothing was sent, so the station was never needed
+                    let _ = crate::stations::drop_run(&mut *c, r.id).await;
+                } else {
+                    // the run may have started all the same (a timeout, an answer without an id):
+                    // it keeps its station, which ends unless it holds something; a reused one that
+                    // was reopened for this wake goes back to ended
+                    let _ = crate::stations::end_if_idle(&mut *c, r.id).await;
+                }
+            }
             tracing::warn!("cloud wake for {agent} ({typ}) failed: {}", f.error);
             (
                 "wake.failed",
@@ -880,7 +986,13 @@ async fn record_delivery(
             )
         }
     };
-    let _ = emit(c, Some(project), None, kind, None, payload).await;
+    let seq = emit(c, Some(project), None, kind, None, payload).await.ok();
+    if let Some((id, session, url)) = settled
+        && let Err(e) =
+            crate::stations::settle_run(&mut *c, id, session.as_deref(), url.as_deref(), seq).await
+    {
+        tracing::warn!("settling the station of a cloud run: {e}");
+    }
 }
 
 #[cfg(test)]

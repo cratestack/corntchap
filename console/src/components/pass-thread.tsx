@@ -10,6 +10,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Avatar, IdChip, RowSkeleton } from "./bits";
 import { Markdown } from "./markdown";
 import { KindChip } from "./pass-bits";
+import { StationLink, shortUrl } from "./station-link";
 import { isEveryone, wakeState, wokenName, type CookInfo, type WakeSignals, type WakeState } from "./pass-data";
 
 function dayLabel(iso: string, now: number): string {
@@ -310,7 +311,7 @@ function Message({
             {m.from_kind === "agent" && !inDirect && <KindChip>{cook?.agentKind ?? "cook"}</KindChip>}
             {m.station_label && (
               <span className="max-w-[12rem] truncate font-mono text-[10.5px] text-muted-foreground" title={`Session ${m.station}: ${m.station_label}`}>
-                {m.station_label}
+                <StationLink label={m.station_url ? shortUrl(m.station_url) : m.station_label} url={m.station_url} title={m.station_url ?? undefined} />
               </span>
             )}
             {m.via && (
