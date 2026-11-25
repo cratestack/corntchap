@@ -192,7 +192,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
             {projects.isLoading && [0, 1, 2].map((i) => <li key={i} className="mx-2.5 my-2 h-4 animate-pulse rounded bg-sidebar-panel" />)}
             {(projects.data ?? []).map((p) => {
               const active = loc.pathname.toLowerCase().startsWith(`/pots/${p.key.toLowerCase()}/`);
-              const live = p.open + p.claimed + p.blocked;
+              const live = p.ready + p.claimed + p.blocked;
               return (
                 <li key={p.key}>
                   <NavLink
