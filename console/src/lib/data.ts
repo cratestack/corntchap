@@ -1,10 +1,9 @@
 import { useCallback } from "react";
 import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
 import { keepPreviousData, useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
-import type { CorntchapApiClient, FileView, ProjectSummary, TaskView, ViewOut } from "@corntchap/api";
-import { client, v1 } from "./api";
-import { invalidateData, usePagedQuery, useProcInfinite } from "./paging";
-import type { Role } from "./session";
+import type { CorntchapApiClient, ProjectSummary, TaskView } from "@corntchap/api";
+import { v1 } from "./api";
+import { invalidateData } from "./paging";
 
 type Procs = CorntchapApiClient["procedures"];
 export type ProcName = keyof Procs;
@@ -72,97 +71,6 @@ export function useV1<T>(path: string, opts: { enabled?: boolean } = {}) {
   return { data: q.data, isLoading: q.isLoading, error: q.error as unknown, refetch: q.refetch };
 }
 
-/**
- * Read a generated model (`/api/v2/<model>`): the server applies the model's read policy, so these
- * lists hold only what the signed-in person may see. Lives under ["data"] like every other query.
- */
-function useModel<T>(key: unknown[], fn: () => Promise<T>, enabled = true) {
-  const q = useQuery({ queryKey: ["data", "model", ...key], queryFn: fn, enabled, staleTime: 1500 });
-  return { data: q.data, isLoading: q.isLoading, error: q.error as unknown, refetch: q.refetch };
-}
-
-const num = (v: bigint | number | null | undefined) => (v === null || v === undefined ? null : Number(v));
-
-/** A team's chefs (people and cooks) with their role, from the TeamMember model. */
-export function useTeamChefs(team: string | null | undefined, opts: { enabled?: boolean } = {}) {
-  return useModel(
-    ["team-members", team],
-    async (): Promise<MemberRow[]> => {
-      const rows = await client.teamMembers.list({ query: { filters: { "team.name": team ?? "" }, include: ["principal"] } });
-      return rows
-        .filter((m) => m.principal?.name)
-        .map((m) => ({ name: m.principal!.name!, display_name: m.principal!.displayName ?? null, kind: m.principal!.kind ?? "user", role: m.role ?? "member" }))
-        .sort((a, b) => a.name.localeCompare(b.name));
-    },
-    !!team && (opts.enabled ?? true),
-  );
-}
-
-/** Files per page of a pot's file list. */
-const FILES_PAGE = 50;
-
-/** A pot's files (newest first, a page at a time), from the File model's keyset-paged list. */
-export function usePotFiles(pot: string) {
-  return usePagedQuery(
-    ["files", pot],
-    async (limit, cursor): Promise<{ items: FileView[]; total: number | null; nextCursor: string | null }> => {
-      const page = await client.files.list({
-        query: {
-          filters: { "project.key": pot },
-          include: ["project", "task", "question", "creator"],
-          sort: ["-createdAt", "-id"],
-          limit,
-          cursor: cursor ?? "",
-        },
-      });
-      const items = page.items.map((f): FileView => {
-        const key = f.project?.key ?? pot;
-        const id = `${key}-F${num(f.number)}`;
-        return {
-          id,
-          project: key,
-          name: f.name ?? "",
-          content_type: f.contentType ?? "application/octet-stream",
-          size: num(f.size),
-          size_expected: num(f.sizeExpected),
-          status: f.status ?? "uploading",
-          url: `/files/${id}/${encodeURIComponent(f.name ?? "")}`,
-          task: f.task ? `${key}-${num(f.task.number)}` : null,
-          question: f.question ? `${key}-Q${num(f.question.number)}` : null,
-          created_by: f.creator?.name ?? null,
-          created_at: f.createdAt ?? "",
-          ready_at: f.readyAt ?? null,
-          error: f.error ?? null,
-        };
-      });
-      return { items, total: page.totalCount, nextCursor: page.pageInfo.nextCursor ?? null };
-    },
-    { getCursor: (p) => p.nextCursor, pageSize: FILES_PAGE, maxLimit: 1000 },
-  );
-}
-
-/** A pot's saved views in tab order, from the PotView model. */
-export function usePotViews(pot: string, opts: { enabled?: boolean } = {}) {
-  return useModel(
-    ["views", pot],
-    async (): Promise<ViewOut[]> => {
-      const rows = await client.potViews.list({ query: { filters: { "project.key": pot }, include: ["creator"], sort: ["position"] } });
-      return rows.map((v) => ({
-        key: v.key ?? "",
-        name: v.name ?? "",
-        description: v.description ?? null,
-        layout: v.layout ?? "list",
-        where: v.whereSql ?? "true",
-        order: v.orderSql ?? null,
-        position: num(v.position) ?? 0,
-        created_by: v.creator?.name ?? null,
-        updated_at: v.updatedAt ?? "",
-      }));
-    },
-    opts.enabled ?? true,
-  );
-}
-
 /** POST/DELETE/... on /api/v1, then refresh everything. */
 export function useV1Call() {
   const invalidate = useInvalidateAll();
@@ -180,20 +88,34 @@ export function useProjects() {
   return useProc("projectOverview", {});
 }
 
-/** Live (claimed) tasks across every pot: who is cooking what. */
+/** Rows per request when reading a pot's claimed tasks (the server's most). */
+const CLAIMED_PAGE = 200;
+
+/**
+ * Live (claimed) tasks across every pot: who is cooking what. Each pot's claimed tasks are read through `taskPage`
+ * (`status` claimed), page after page to the end: a cook holds a few leases, so what is claimed stays small however
+ * long the pot's lists are.
+ */
 export function useClaimedTasks(projects: ProjectSummary[] | undefined) {
   const dp = useDataProvider();
   const results = useQueries({
     queries: (projects ?? []).map((p) => ({
       queryKey: ["data", "claimed", p.key],
       queryFn: async () => {
-        const res = await dp().custom!({
-          url: "",
-          method: "get",
-          meta: { procedure: "projectTasks" },
-          payload: { project: p.key, status: "claimed" },
-        });
-        return (res as { data: TaskView[] }).data;
+        const tasks: TaskView[] = [];
+        let cursor: string | null = null;
+        do {
+          const res: { data: unknown } = await dp().custom!({
+            url: "",
+            method: "get",
+            meta: { procedure: "taskPage" },
+            payload: { project: p.key, status: "claimed", page: { limit: CLAIMED_PAGE, cursor } },
+          });
+          const page = res.data as { items: TaskView[]; nextCursor?: string | null };
+          tasks.push(...page.items);
+          cursor = page.nextCursor ?? null;
+        } while (cursor);
+        return tasks;
       },
       staleTime: 1500,
     })),
@@ -202,109 +124,11 @@ export function useClaimedTasks(projects: ProjectSummary[] | undefined) {
   return { tasks, isLoading: results.some((r) => r.isLoading) };
 }
 
-// ---- /api/v1 shapes (hand-written endpoints; no generated types) ----
-
-export interface AgentRow {
-  id: string;
-  name: string;
-  kind: string;
-  agent_kind: string | null;
-  runtime: string | null;
-  max_leases: number;
-  owner: string | null;
-  /** Cooks: what a person granted beyond working tasks (plan, manage, admin). */
-  grants?: string[];
-  /** Repositories the cook handles per pot (a pot not listed: all of its repositories). */
-  repo_scopes?: { project: string; repos: string[] }[];
-  /** Teams the cook is in (empty: it sees no pot). */
-  teams?: string[];
-  disabled: boolean;
-  last_seen_at: string | null;
-  busy: number;
-  /** Cloud targets only: takes ready work, opens a pull request and stops (see the README). */
-  fireAndForget?: boolean;
-}
-
-export interface UserRow {
-  /** The handle: what others @mention and super-admins type. */
-  name: string;
-  /** How the person is shown (from the identity provider); never used for lookup. */
-  display_name: string | null;
-  role: Role;
-  /** Super-admins only: orchestrators get the directory (handle, name, role) without these. */
-  linked?: boolean;
-  disabled?: boolean;
-}
-
-export interface TeamRow {
-  name: string;
-  role: string | null;
-  members: number;
-  projects: string[];
-}
-
-export interface MemberRow {
-  name: string;
-  display_name?: string | null;
-  kind: string;
-  role: string;
-  /** Cloud targets only: takes ready work, opens a pull request and stops. */
-  fireAndForget?: boolean;
-}
-
-export interface WakeTargetRow {
-  id: string;
-  type: string;
-  projects: string[];
-  labels: string[];
-  config: Record<string, unknown>;
-}
-
-/** Rows per page of the people list. */
-const USERS_PAGE = 50;
-
-/**
- * People (`/api/v1/users`), a page at a time and narrowed by `q` (handle or display name): super-admins see every
- * sign-in, orchestrators the directory.
- */
-export function useUsers(q: string) {
-  return usePagedQuery(
-    ["users", q],
-    async (limit, cursor) => {
-      const qs = new URLSearchParams({ limit: String(limit) });
-      if (q) qs.set("q", q);
-      if (cursor) qs.set("cursor", cursor);
-      const page = await v1<{ items: UserRow[]; nextCursor?: string | null }>("GET", `/users?${qs}`);
-      return { items: page.items, total: null, nextCursor: page.nextCursor ?? null };
-    },
-    { getCursor: (p) => p.nextCursor, pageSize: USERS_PAGE, itemKey: (u) => u.name },
-  );
-}
-
-export function useAgents() {
-  return useV1<AgentRow[]>("/agents");
-}
-
 /** Open-question counts per pot, for the sidebar badges (from the pot summaries, no extra requests). */
 export function useOpenQuestionCounts(projects: ProjectSummary[] | undefined): Record<string, number> {
   const out: Record<string, number> = {};
   for (const p of projects ?? []) if (p.open_questions > 0) out[p.key] = p.open_questions;
   return out;
-}
-
-// ---- reviews ----
-
-/**
- * A pot's reviews, a page at a time: the ones waiting on you (`mine`), or all of them (open ones first).
- * Live events refresh the first page (see `invalidateData`).
- */
-export function useReviews(pot: string, which: "mine" | "all", enabled = true) {
-  const args =
-    which === "mine"
-      ? { project: pot, mine: true, state: "requested" as string | null }
-      : { project: pot, mine: null, state: "all" as string | null };
-  const q = useProcInfinite("reviewPage", args, { getCursor: (p) => p.nextCursor, enabled: enabled && !!pot });
-  return { data: q.items, isLoading: q.isLoading, error: q.error, hasNextPage: q.hasNextPage, fetchNextPage: q.fetchNextPage, isFetchingNextPage: q.isFetchingNextPage };
 }
 
 // ---- my work ----

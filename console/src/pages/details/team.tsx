@@ -2,39 +2,42 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { Minus, Pencil, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
+import type { MemberView, ProjectSummary } from "@corntchap/api";
 import { PageShell } from "@/components/page";
 import { Avatar, EmptyState, Group, GroupRow, PersonName, RowSkeleton } from "@/components/bits";
 import { ConfirmDialog, DeleteDialog, RenameDialog } from "@/components/rename-delete";
+import { SourceList } from "@/components/source-list";
 import { AddMember } from "@/pages/admin";
 import { Button } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api";
-import { useAgents, useProcCall, useProjects, useTeamChefs, useV1, useV1Call, type MemberRow, type TeamRow } from "@/lib/data";
+import { useProcCall, useV1Call } from "@/lib/data";
+import { usePotsSource, useTeamMembersSource } from "@/lib/sources";
+import { useTeamByName } from "@/lib/people";
 import { canManageTeam, useSession } from "@/lib/session";
 import { Crumb, linkClass } from "./common";
+
+const memberKey = (m: MemberView) => `${m.kind}:${m.name}`;
+const potKey = (p: ProjectSummary) => p.key;
 
 export function TeamDetailsPage() {
   const { name = "" } = useParams();
   const me = useSession();
-  const teams = useV1<TeamRow[]>("/teams");
-  const projects = useProjects();
+  const found = useTeamByName(name);
+  const team = found.item;
   const call = useV1Call();
   const proc = useProcCall();
   const navigate = useNavigate();
   const [adding, setAdding] = useState(false);
-  const [removing, setRemoving] = useState<MemberRow | null>(null);
+  const [removing, setRemoving] = useState<MemberView | null>(null);
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
 
-  const team = (teams.data ?? []).find((t) => t.name.toLowerCase() === name.toLowerCase());
-  const members = useTeamChefs(team?.name);
-  const agents = useAgents();
-  // a chef may remove the cooks they own
-  const ownCooks = new Set((agents.data ?? []).filter((a) => a.owner === me.name).map((a) => a.name));
+  const members = useTeamMembersSource(team?.name ?? "", { enabled: !!team });
+  const pots = usePotsSource({ team: team?.name ?? "", enabled: !!team });
   const canManage = !!team && canManageTeam(me, team.role);
-  const pots = (projects.data ?? []).filter((p) => p.team?.toLowerCase() === name.toLowerCase());
 
   const crumb = <Crumb to="/teams" parent="Teams" here={name} />;
 
-  if (teams.isLoading) {
+  if (found.isLoading) {
     return (
       <>
         {crumb}
@@ -44,13 +47,13 @@ export function TeamDetailsPage() {
       </>
     );
   }
-  if (teams.error || !team) {
+  if (found.error || !team) {
     return (
       <>
         {crumb}
         <PageShell eyebrow="Team" title={name} className="pt-2">
-          <EmptyState title={teams.error ? "Could not reach the teams" : "No such team"} action={<Button asChild variant="outline"><Link to="/teams">Back to Teams</Link></Button>}>
-            {teams.error ? errorMessage(teams.error) : `${name} is not a team you are in.`}
+          <EmptyState title={found.error ? "Could not reach the teams" : "No such team"} action={<Button asChild variant="outline"><Link to="/teams">Back to Teams</Link></Button>}>
+            {found.error ? errorMessage(found.error) : `${name} is not a team you are in.`}
           </EmptyState>
         </PageShell>
       </>
@@ -82,16 +85,20 @@ export function TeamDetailsPage() {
         }
       >
         <div className="space-y-6 lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-6 lg:space-y-0 lg:gap-y-6">
-          <Group title="Chefs" aside={<span className="font-mono text-[11px] text-muted-foreground">{members.data?.length ?? team.members}</span>}>
-            {members.isLoading ? (
-              <div className="p-3">
-                <RowSkeleton rows={2} />
-              </div>
-            ) : (members.data ?? []).length === 0 ? (
-              <GroupRow label="Nobody is in this team yet" hint={canManage ? "Add a person or a cook." : "Add one of your cooks."} />
-            ) : (
-              members.data!.map((m) => (
-                <div key={m.name} className="flex min-h-14 items-center gap-3 px-4 py-2">
+          <Group title="Chefs" aside={<span className="font-mono text-[11px] text-muted-foreground">{team.members}</span>}>
+            <SourceList<MemberView>
+              source={members}
+              more="button"
+              itemKey={memberKey}
+              label="Chefs"
+              empty={
+                <>
+                  <p className="font-medium text-foreground">Nobody is in this team yet</p>
+                  <p>{canManage ? "Add a person or a cook." : "Add one of your cooks."}</p>
+                </>
+              }
+              renderItem={(m) => (
+                <div className="flex min-h-14 items-center gap-3 px-4 py-2">
                   <Avatar name={m.name} className="size-8 rounded-lg text-[14px]" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[14px] leading-tight">
@@ -108,35 +115,33 @@ export function TeamDetailsPage() {
                       {m.fireAndForget && " · fire and forget"}
                     </p>
                   </div>
-                  {(canManage || ownCooks.has(m.name)) && (
+                  {(canManage || m.mine) && (
                     <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${m.name} from ${team.name}`} onClick={() => setRemoving(m)}>
                       <Minus />
                     </Button>
                   )}
                 </div>
-              ))
-            )}
+              )}
+            />
             <GroupRow icon={<UserPlus />} label={canManage ? "Add a chef" : "Add my cook"} onClick={() => setAdding(true)} />
           </Group>
 
           <div className="space-y-6">
             <Group title="Pots" hint="The pots this team owns: its chefs see them.">
-              {projects.isLoading ? (
-                <div className="p-3">
-                  <RowSkeleton rows={1} />
-                </div>
-              ) : pots.length === 0 ? (
-                <GroupRow label="No pot yet" hint="An owner or a super-admin starts pots for a team." />
-              ) : (
-                pots.map((p) => (
-                  <GroupRow
-                    key={p.key}
-                    label={p.name}
-                    hint={<span className="font-mono">{p.key} · {p.open + p.claimed + p.blocked} not served</span>}
-                    to={`/pots/${p.key}/about`}
-                  />
-                ))
-              )}
+              <SourceList<ProjectSummary>
+                source={pots}
+                itemKey={potKey}
+                label="Pots"
+                empty={
+                  <>
+                    <p className="font-medium text-foreground">No pot yet</p>
+                    <p>An owner or a super-admin starts pots for a team.</p>
+                  </>
+                }
+                renderItem={(p) => (
+                  <GroupRow label={p.name} hint={<span className="font-mono">{p.key} · {p.open + p.claimed + p.blocked} not served</span>} to={`/pots/${p.key}/about`} />
+                )}
+              />
             </Group>
 
             {canManage && (
@@ -145,7 +150,7 @@ export function TeamDetailsPage() {
                 <GroupRow
                   icon={<Trash2 />}
                   label="Delete"
-                  hint={pots.length > 0 ? "It still has pots: delete or empty them first" : "Memberships go; people and cooks stay. This cannot be undone"}
+                  hint={team.projects.length > 0 ? "It still has pots: delete or empty them first" : "Memberships go; people and cooks stay. This cannot be undone"}
                   destructive
                   onClick={() => setDialog("delete")}
                 />

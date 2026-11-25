@@ -68,7 +68,6 @@ export function Thread({
   me,
   who,
   cooks,
-  chefNames,
   taskKeys,
   signals,
   actions,
@@ -84,7 +83,6 @@ export function Thread({
   /** The other chef of a direct conversation, or null on the pass. */
   who: string | null;
   cooks: Map<string, CookInfo>;
-  chefNames: Set<string>;
   taskKeys: string[];
   signals: WakeSignals;
   actions: ThreadActions;
@@ -134,7 +132,7 @@ export function Thread({
             me={me}
             inDirect={who !== null}
             cooks={cooks}
-            canDirect={!!it.m.from && it.m.from !== me && it.m.from !== who && chefNames.has(it.m.from)}
+            canDirect={!!it.m.from && it.m.from !== me && it.m.from !== who && (it.m.from_kind === "user" || it.m.from_kind === "agent")}
             taskKeys={taskKeys}
             messages={all}
             signals={signals}

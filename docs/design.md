@@ -47,6 +47,8 @@ Wax-print band (concentric circles + zigzag, SVG, `aria-hidden`) only on sign-in
 - Pickers: `VirtualCombobox` for data-driven selects (`ui/select` only for fixed enums), `VirtualMenu` for data-driven menus, `VirtualCommand` for the palette, `TagInput` v2 for tags, `MentionPopup` for `@` mentions. All are virtualized, with listbox roles and `aria-activedescendant` keyboard navigation.
 - Filters: `FilterBar` (search + facet chips) over `useUrlFilters`, so a filtered list is a link.
 - Pages: `ListPage` (title, filters, states: loading, empty, error, loading more, capped, end). Pages scroll with the window; internal scroll only inside popovers and dialogs.
+- One page, one scroll, so only the LAST list on a page loads more as its end scrolls into view. Every list that has more content below it (another list or section) reads its next page on an explicit "Show more" button. The shared list parts take `more: "scroll" | "button"` (default `"scroll"`): `SourceList`, `StationList`, `CloudRunList`, `ReviewsList`, `MenuCards`, `UsagePanel` (default `"button"`, it sits above other sections), and `listFooter(source, more)` / `loadMore(source, more)` in `components/list-footer.tsx` for a hand-built `VirtualList`. A page of one list (`ListPage`) is its own last list. Lists side by side count in reading order (DOM order).
+- Server-backed menus and chips read only while open: pass the picker's `onOpenChange` to a `useListQuery`'s `enabled`, so a page of filter chips or a views menu does not read every list up front. A hook for a page's filters takes a flag for whether the page shows them at all.
 
 ## Mobile and tablet (mobile first)
 

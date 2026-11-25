@@ -14,6 +14,8 @@ export interface ListQueryOptions {
   getCursor?: (page: never) => string | null | undefined;
   /** Rows per request (the server's default 25 when left out). */
   pageSize?: number;
+  /** A live refresh re-reads every row loaded, not only the first page: for a list whose rows move anywhere in its order (see `usePagedQuery`). */
+  refreshLoaded?: boolean;
   enabled?: boolean;
 }
 
@@ -33,6 +35,7 @@ export function useListQuery<N extends PagedProc>(name: N, args: Omit<ProcArgs<N
     maxPages: Infinity,
     keepPrevious: true,
     ...(opts.pageSize ? { pageSize: opts.pageSize } : {}),
+    ...(opts.refreshLoaded ? { refreshLoaded: true } : {}),
     ...(opts.enabled === undefined ? {} : { enabled: opts.enabled }),
   });
   const { items, hasNextPage, fetchNextPage, isLoading, isFetchingNextPage, error, capped, total, isPlaceholderData } = r;

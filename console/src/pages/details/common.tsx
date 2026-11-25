@@ -1,10 +1,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { ChevronLeft } from "lucide-react";
-import { useQueries } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-import { v1 } from "@/lib/api";
-import type { WakeTargetRow } from "@/lib/data";
 
 /** "Back to Cooks": the breadcrumb on top of every details page. */
 export function Crumb({ to, parent, here }: { to: string; parent: string; here: string }) {
@@ -78,18 +75,4 @@ export function PotLink({ pot, children }: { pot: string; children?: ReactNode }
       {children ?? pot}
     </Link>
   );
-}
-
-/** The wake targets of several cooks at once (same query keys as `useV1`, so the cooks page and this share the cache). */
-export function useWakeTargetsOf(names: string[]) {
-  const results = useQueries({
-    queries: names.map((n) => ({
-      queryKey: ["data", "v1", `/agents/${n}/wake-targets`],
-      queryFn: () => v1<WakeTargetRow[]>("GET", `/agents/${n}/wake-targets`),
-      staleTime: 1500,
-    })),
-  });
-  const byCook = new Map<string, WakeTargetRow[]>();
-  names.forEach((n, i) => byCook.set(n, results[i]?.data ?? []));
-  return { byCook, isLoading: results.some((r) => r.isLoading) };
 }

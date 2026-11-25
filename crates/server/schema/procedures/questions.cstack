@@ -23,10 +23,11 @@ mutation procedure questionAsk(title: String?, description: String?, kind: Strin
 
 /// A page of the questions you asked, newest first.
 /// @param status open, answered, dismissed or all (default).
+/// @param project Only this pot (key, e.g. PAY).
 /// @param page limit (default 25, at most 200) and cursor.
-procedure questionMinePage(status: String?, page: CursorPageInput?): CursorPage<QuestionView>
+procedure questionMinePage(status: String?, project: String?, page: CursorPageInput?): CursorPage<QuestionView>
   @allow(auth() != null)
-  @mcp(tool: "my_questions", description: "Questions you asked and their answers, newest first, a page at a time (items, nextCursor).")
+  @mcp(tool: "my_questions", description: "Questions you asked and their answers, newest first, a page at a time (items, nextCursor). Narrow with status or project.")
 
 /// One question with its thread.
 /// @param id Question id, e.g. PAY-Q3.

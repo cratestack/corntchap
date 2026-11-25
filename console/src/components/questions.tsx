@@ -21,7 +21,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useProc, useProcCall, useProjects, useReviews } from "@/lib/data";
+import { useProc, useProcCall, useProjects } from "@/lib/data";
+import { useReviewsSource } from "@/lib/sources";
 import { useProcInfinite } from "@/lib/paging";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
@@ -474,8 +475,8 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
   // the closed lists load when their tab is open, or to find where a linked question is
   const answered = useStatusPage("answered", filter === "answered" || !!focus);
   const dismissed = useStatusPage("dismissed", filter === "dismissed" || !!focus);
-  const waitingReviews = useReviews(potKey, "mine");
-  const allReviews = useReviews(potKey, "all", filter === "reviews");
+  const waitingReviews = useReviewsSource(potKey, { mine: true, state: "requested" });
+  const allReviews = useReviewsSource(potKey, { state: "all", enabled: filter === "reviews" });
 
   const openList = open.items;
   // the open tab counts every open question, not only the loaded pages (the pot summary has the count)
@@ -504,9 +505,9 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
     { id: "open", label: "Open", n: open.hasNextPage ? Math.max(openTotal, openList.length) : openList.length },
     { id: "answered", label: "Answered", n: answered.items.length },
     { id: "dismissed", label: "Dismissed", n: dismissed.items.length },
-    { id: "reviews", label: "Reviews", n: allReviews.data.length },
+    { id: "reviews", label: "Reviews", n: allReviews.total ?? allReviews.items.length },
   ];
-  const waiting = waitingReviews.data;
+  const waiting = waitingReviews.items;
   const closed = filter === "answered" ? answered : dismissed;
   const shown = closed.items;
 
@@ -541,10 +542,7 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
       </div>
 
       {filter === "reviews" ? (
-        <>
-          <ReviewsList reviews={allReviews.data} loading={allReviews.isLoading} />
-          <MoreButton more={allReviews} what="reviews" />
-        </>
+        <ReviewsList source={allReviews} />
       ) : filter === "open" ? (
         openList.length === 0 && waiting.length === 0 ? (
           <EmptyState
@@ -562,8 +560,8 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
           <>
             {waiting.length > 0 && (
               <>
-                <p className="label-caps mt-4 mb-2 px-0.5">{plural(waiting.length, "review")} waiting on you</p>
-                <ReviewsList reviews={waiting} loading={false} />
+                <p className="label-caps mt-4 mb-2 px-0.5">{plural(waiting.length, "review")}{waitingReviews.hasNextPage ? "+" : ""} waiting on you</p>
+                <ReviewsList source={waitingReviews} more="button" />
               </>
             )}
             {openList.length > 0 && (

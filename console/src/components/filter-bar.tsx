@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode, type Ref } from "react";
 import { ChevronDown, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ListSource } from "@/lib/listbox";
@@ -30,6 +30,8 @@ export interface FacetDef {
   /** Whether the menu has a search box (default true). */
   searchable?: boolean | undefined;
   disabled?: boolean | undefined;
+  /** The chip's menu opened or closed: a server-backed source reads its options only while it is open. */
+  onOpenChange?: ((open: boolean) => void) | undefined;
 }
 
 export type FacetValue = string | string[] | undefined;
@@ -84,20 +86,26 @@ export interface FilterBarProps {
   /** Drop the search text and every facet. */
   onClear: () => void;
   searchPlaceholder?: string | undefined;
+  /** No search box (a list with no text to search): just the chips and "Clear filters". */
+  hideSearch?: boolean | undefined;
+  /** The search box's element, to focus it from outside. */
+  searchRef?: Ref<HTMLInputElement> | undefined;
   className?: string | undefined;
 }
 
 const toList = (v: FacetValue): string[] => (Array.isArray(v) ? v : v ? [v] : []);
 
 /** A list page's filters: a search box and one chip per facet. The values live with the caller (`useUrlFilters`). */
-export function FilterBar({ q, onQ, facets, values, onChange, onClear, searchPlaceholder = "Search", className }: FilterBarProps) {
+export function FilterBar({ q, onQ, facets, values, onChange, onClear, searchPlaceholder = "Search", hideSearch = false, searchRef, className }: FilterBarProps) {
   const anyActive = !!q.trim() || facets.some((f) => toList(values[f.id]).length > 0);
   return (
     <div role="search" className={cn("flex flex-wrap items-center gap-2", className)}>
+      {!hideSearch && (
       <label className="relative min-w-48 flex-1 basis-56 md:max-w-xs">
         <span className="sr-only">{searchPlaceholder}</span>
         <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
         <input
+          ref={searchRef}
           type="search"
           value={q}
           onChange={(e) => onQ(e.target.value)}
@@ -106,6 +114,7 @@ export function FilterBar({ q, onQ, facets, values, onChange, onClear, searchPla
           className="h-8 w-full rounded-full border border-input bg-card pr-3 pl-8 text-base outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-[13px]"
         />
       </label>
+      )}
       {facets.map((f) => (
         <Facet key={f.id} f={f} chosen={toList(values[f.id])} onChange={onChange} />
       ))}
@@ -140,6 +149,7 @@ function Facet({ f, chosen, onChange }: { f: FacetDef; chosen: string[]; onChang
       onClear={() => onChange({ [f.id]: f.multiple ? [] : "" })}
       source={f.source}
       onQuery={f.onQuery}
+      onOpenChange={f.onOpenChange}
       itemText={(o) => `${o.label} ${o.hint ?? ""}`}
       itemKey={(o) => o.value}
       searchable={f.searchable}

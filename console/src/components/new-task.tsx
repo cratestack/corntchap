@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -8,14 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { MenuView, ProjectSummary } from "@corntchap/api";
 import { useUi } from "@/lib/ui";
-import { useProc, useProcCall, useProjects } from "@/lib/data";
+import { useProcCall, useProjects } from "@/lib/data";
+import { useMenusSource, usePotsSource } from "@/lib/sources";
+import { useMenu } from "./menus";
+import { useStoreValue } from "@/lib/use-store-value";
+import { useLabelOptions, useTaskIdOptions } from "@/lib/pot-pickers";
 import { errorMessage } from "@/lib/api";
 import { lastView } from "@/lib/views";
 import { TagInput } from "./tag-input";
 import { RepoPicker } from "./repos";
 import { OwnerPicker } from "./owner-picker";
-import { useMenus } from "./menus";
+import { VirtualCombobox } from "./ui/virtual-combobox";
 
 export const PRIORITIES = [
   { v: -1, label: "Low" },
@@ -65,13 +70,16 @@ export function NewTaskDialog() {
     if (newTask.open && !pot && first) setPot((p) => p || first);
   }, [newTask.open, pot, projects.data]);
 
-  const potRepos = projects.data?.find((p) => p.key === pot)?.repos ?? [];
-  const menus = useMenus(pot, newTask.open);
-  const tasks = useProc("projectTasks", { project: pot }, { enabled: newTask.open && !!pot });
-  const depSuggestions = useMemo(
-    () => (tasks.data ?? []).filter((t) => t.status !== "cancelled").map((t) => t.id),
-    [tasks.data],
-  );
+  const hasRepos = (projects.data?.find((p) => p.key === pot)?.repos.length ?? 0) > 0;
+  const potQ = useStoreValue("");
+  const pots = usePotsSource({ q: potQ.value, enabled: newTask.open });
+  const menuQ = useStoreValue("");
+  const menus = useMenusSource(pot, { q: menuQ.value, enabled: newTask.open && !!pot });
+  // the menu to put the task on is kept only while it is an open one of this pot (a filter in the URL may name a served menu)
+  const chosenMenu = useMenu(pot, newTask.open && menu !== "-" ? menu : undefined).menu;
+  const showMenu = menus.items.length > 0 || menus.isLoading || !!menuQ.value.trim() || menus.pending;
+  const labelOptions = useLabelOptions(pot, newTask.open);
+  const depOptions = useTaskIdOptions(pot, newTask.open);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -86,8 +94,8 @@ export function NewTaskDialog() {
         labels: labels.length ? labels.join(",") : null,
         dependsOn: deps.length ? deps.join(",") : null,
         priority: Number(priority),
-        repos: potRepos.length > 0 && repos.length > 0 ? repos.join(",") : null,
-        menu: menu !== "-" && menus.open.some((m) => m.key === menu) ? menu : null,
+        repos: hasRepos && repos.length > 0 ? repos.join(",") : null,
+        menu: menu !== "-" && chosenMenu?.status === "open" ? menu : null,
         owner: owner || null,
       });
       toast.success(`${t.id} is in the pot`, {
@@ -123,28 +131,33 @@ export function NewTaskDialog() {
               <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,8.5rem)] gap-3 sm:grid-cols-[1fr_9rem] sm:gap-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="nt-pot">Pot</Label>
-                  <Select
-                    value={pot}
-                    // Radix reports "" while its options mount: keep the pot the dialog was opened for
-                    onValueChange={(v) => {
+                  <VirtualCombobox<ProjectSummary>
+                    id="nt-pot"
+                    label="Pot"
+                    placeholder="Choose a pot"
+                    source={pots}
+                    onQuery={potQ.set}
+                    itemKey={(p) => p.key}
+                    itemText={(p) => `${p.key} ${p.name}`}
+                    valueText={(k) => {
+                      const p = projects.data?.find((x) => x.key === k);
+                      return p ? `${p.key} ${p.name}` : undefined;
+                    }}
+                    renderItem={(p) => (
+                      <span className="flex min-w-0 items-baseline gap-2">
+                        <span className="font-mono text-[12px] font-bold">{p.key}</span>
+                        <span className="truncate">{p.name}</span>
+                      </span>
+                    )}
+                    value={pot || null}
+                    onChange={(v) => {
                       if (!v || v === pot) return;
                       setPot(v);
                       setMenu("-");
                       setRepos([]);
                       setOwner("");
                     }}
-                  >
-                    <SelectTrigger id="nt-pot" className="w-full">
-                      <SelectValue placeholder="Choose a pot" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(projects.data ?? []).map((p) => (
-                        <SelectItem key={p.key} value={p.key}>
-                          <span className="font-mono text-[12px] font-bold">{p.key}</span> {p.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="nt-prio">Priority</Label>
@@ -167,28 +180,26 @@ export function NewTaskDialog() {
                 <OwnerPicker id="nt-owner" pot={pot} value={owner || null} onChange={setOwner} />
                 <p className="text-[12px] text-muted-foreground">Who answers for it, whoever does the work. Optional.</p>
               </div>
-              {menus.open.length > 0 && (
+              {showMenu && (
                 <div className="space-y-1.5">
                   <Label htmlFor="nt-menu">Menu</Label>
-                  <Select value={menu} onValueChange={setMenu}>
-                    <SelectTrigger id="nt-menu" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="-">No menu</SelectItem>
-                      {menus.open.map((m) => (
-                        <SelectItem key={m.key} value={m.key}>
-                          {m.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <VirtualCombobox<MenuView>
+                    id="nt-menu"
+                    label="Menu"
+                    nullOption="No menu"
+                    source={menus}
+                    onQuery={menuQ.set}
+                    itemKey={(m) => m.key}
+                    itemText={(m) => m.name}
+                    value={menu === "-" ? null : menu}
+                    onChange={(v) => setMenu(v ?? "-")}
+                  />
                 </div>
               )}
-              {potRepos.length > 0 && (
+              {hasRepos && (
                 <div className="space-y-1.5">
                   <Label>Repositories</Label>
-                  <RepoPicker repos={potRepos} value={repos} onChange={setRepos} label="Repositories the task is about" />
+                  <RepoPicker multiple pot={pot} value={repos} onChange={setRepos} label="Repositories the task is about" placeholder="Any repository" />
                   <p className="text-[12px] text-muted-foreground">None chosen: any repository. A cook that handles other repositories will not scoop it.</p>
                 </div>
               )}
@@ -203,11 +214,11 @@ export function NewTaskDialog() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label>Labels</Label>
-                  <TagInput label="Labels" value={labels} onChange={setLabels} placeholder="backend, urgent" normalize={(s) => s.toLowerCase()} />
+                  <TagInput label="Labels" value={labels} onChange={setLabels} placeholder="backend, urgent" normalize={(s) => s.toLowerCase()} {...labelOptions} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Depends on</Label>
-                  <TagInput label="Depends on" value={deps} onChange={setDeps} placeholder={`${pot || "PAY"}-1`} suggestions={depSuggestions} normalize={(s) => s.toUpperCase()} />
+                  <TagInput label="Depends on" value={deps} onChange={setDeps} placeholder={`${pot || "PAY"}-1`} normalize={(s) => s.toUpperCase()} {...depOptions} />
                 </div>
               </div>
             </div>

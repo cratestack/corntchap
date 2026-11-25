@@ -339,15 +339,11 @@ async fn task_page_walks_every_bucket_once() {
         assert_eq!(st, 400, "{bucket} {keys:?}: {v}");
     }
 
-    // another team's pot answers as the unpaged list does
-    let (listed, _) = w
-        .proc(&w.bob, "projectTasks", json!({"project": "PAY"}))
-        .await;
+    // another team's pot is not found
     let (paged, _) = w
         .proc(&w.bob, "taskPage", page("active", json!({}), json!({})))
         .await;
-    assert_eq!(listed, 404);
-    assert_eq!(paged, listed);
+    assert_eq!(paged, 404);
 }
 
 /// Priorities are 64-bit: a cursor after a task with a priority past 2^31 still reads the next page.
@@ -611,8 +607,8 @@ async fn cloud_run_and_view_pages() {
     let runs = w
         .walk(
             &w.root,
-            "cloudRunPage",
-            json!({"project": "PAY"}),
+            "stationPage",
+            json!({"project": "PAY", "kind": "cloud-run"}),
             3,
             id,
             add,
@@ -629,24 +625,24 @@ async fn cloud_run_and_view_pages() {
     let live = w
         .ok(
             &w.root,
-            "cloudRunPage",
-            json!({"live": true, "page": {"limit": 100}}),
+            "stationPage",
+            json!({"kind": "cloud-run", "live": true, "page": {"limit": 100}}),
         )
         .await;
     assert_eq!(live["items"].as_array().unwrap().len(), 4, "{live}");
     let ended = w
         .ok(
             &w.root,
-            "cloudRunPage",
-            json!({"cook": "cloudy", "live": false, "page": {"limit": 100}}),
+            "stationPage",
+            json!({"kind": "cloud-run", "cook": "cloudy", "live": false, "page": {"limit": 100}}),
         )
         .await;
     assert_eq!(ended["items"].as_array().unwrap().len(), 5);
     let none = w
         .ok(
             &w.bob,
-            "cloudRunPage",
-            json!({"project": "PAY", "page": {}}),
+            "stationPage",
+            json!({"kind": "cloud-run", "project": "PAY", "page": {}}),
         )
         .await;
     assert!(none["items"].as_array().unwrap().is_empty(), "{none}");

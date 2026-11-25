@@ -15,20 +15,11 @@ procedure projectOverview(): ProjectSummary[]
 /// A page of the projects you can see, with task counts, by key.
 /// @param q Only pots whose key or name contains this (any case).
 /// @param team Only pots of this team (its name).
+/// @param cook Only pots where this cook has a session station (a folder it works in); only cooks you own or see through your teams.
 /// @param page limit (default 25, at most 200) and cursor.
-procedure potPage(q: String?, team: String?, page: CursorPageInput?): CursorPage<ProjectSummary>
+procedure potPage(q: String?, team: String?, cook: String?, page: CursorPageInput?): CursorPage<ProjectSummary>
   @allow(auth() != null)
-  @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts, by key, a page at a time (items, nextCursor). Narrow with q (key or name) or team.")
-
-/// Tasks in a project, all at once, for the console's pickers (not an MCP tool).
-/// @param project Project key, e.g. PAY.
-/// @param status Only tasks in this status: open, claimed, blocked, done or cancelled.
-/// @param label Only tasks carrying this label.
-/// @param readyOnly Only tasks you could claim now (open, dependencies and subtasks done).
-/// @param menu Only tasks on this menu (key, e.g. mvp); - for tasks on no menu.
-/// @param owner Only tasks owned by this handle; me for yours; - for tasks nobody owns.
-procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?, menu: String?, owner: String?): TaskView[]
-  @allow(auth() != null)
+  @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts, by key, a page at a time (items, nextCursor). Narrow with q (key or name), team or cook.")
 
 /// A page of a project's tasks (the console's board and the `list_tasks` tool).
 /// @param project Project key, e.g. PAY.

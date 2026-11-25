@@ -556,6 +556,7 @@ async fn human_transitions_are_procedures_and_mcp_is_typed() {
             "update_menu",
             "update_task",
             "upload_file",
+            "usage_by_cook",
             "usage_report",
             "wait_for_work",
             "what_now",

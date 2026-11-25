@@ -2,12 +2,6 @@ part of "../corntchap.cstack"
 
 // Menus: a project's milestones (see src/menus.rs).
 
-/// A project's menus with their progress, all at once, for the console (not an MCP tool).
-/// @param project Project key, e.g. PAY.
-/// @param includeServed Also list menus already served (shipped).
-procedure menuList(project: String, includeServed: Boolean?): MenuView[]
-  @allow(auth() != null)
-
 /// A page of a project's menus with their progress, open ones first, each by position and key.
 /// @param project Project key, e.g. PAY.
 /// @param status open (default), served or all.

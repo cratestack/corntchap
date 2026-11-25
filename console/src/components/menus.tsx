@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import type { MenuView } from "@corntchap/api";
 import { ChevronRight, Loader2, MoreHorizontal, PartyPopper, Pencil, Plus, RotateCcw, Soup } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useProc, useProcCall } from "@/lib/data";
+import { useProcCall } from "@/lib/data";
+import { useMenusSource } from "@/lib/sources";
+import { useUrlFilters } from "@/lib/url-filters";
 import { errorMessage } from "@/lib/api";
 import { plural } from "@/lib/format";
+import type { ListSource } from "@/lib/listbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,16 +27,28 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { EmptyState, RowSkeleton } from "./bits";
+import { FilterBar } from "./filter-bar";
+import { listFooter, loadMore, type MoreMode } from "./list-footer";
+import { VirtualList } from "./ui/virtual-list";
 
-/** All of a pot's menus (milestones), open ones first, served ones after. */
-export function useMenus(pot: string, enabled = true) {
-  const q = useProc("menuList", { project: pot, includeServed: true }, { enabled: enabled && !!pot });
-  const menus = useMemo(() => q.data ?? [], [q.data]);
-  const open = useMemo(() => menus.filter((m) => m.status !== "served"), [menus]);
-  const served = useMemo(() => menus.filter((m) => m.status === "served"), [menus]);
-  const names = useMemo(() => Object.fromEntries(menus.map((m) => [m.key, m.name])) as Record<string, string>, [menus]);
-  return { ...q, menus, open, served, names };
+/**
+ * One menu (milestone) of a pot by its key: the paged read narrowed by the key (it matches key and name), and the
+ * row that is exactly it, pulling further pages while it is not among them. `menu` is undefined while that runs
+ * and for a key that is not a menu of the pot.
+ */
+export function useMenu(pot: string, key: string | undefined) {
+  const on = !!pot && !!key && key !== "-";
+  const source = useMenusSource(pot, { q: key ?? "", status: "all", enabled: on });
+  const menu = on ? source.items.find((m) => m.key === key) : undefined;
+  const { hasNextPage, isFetchingNextPage, pending, fetchNextPage } = source;
+  useEffect(() => {
+    if (on && !menu && hasNextPage && !isFetchingNextPage && !pending) fetchNextPage();
+  }, [on, menu, hasNextPage, isFetchingNextPage, pending, fetchNextPage]);
+  return { menu, isLoading: on && !menu && (source.isLoading || !!hasNextPage) };
 }
+
+/** A menu as a facet or picker option: its key, its name and how far along it is. */
+export const menuOption = (m: MenuView) => ({ value: m.key, label: m.name, hint: m.status === "served" ? "served" : `${m.done}/${m.total}` });
 
 /** Whole days from today (local) to a YYYY-MM-DD date; negative when it has passed. */
 export function daysUntil(dueOn: string, from = new Date()): number {
@@ -73,19 +88,22 @@ export function MenuChip({ name, className }: { name: string; className?: string
 }
 
 export function MenuBar({ menu, className }: { menu: MenuView; className?: string }) {
-  const pct = Math.round(menu.progress * 100);
   const full = menu.total > 0 && menu.done === menu.total;
   return (
-    <div
-      role="progressbar"
+    <progress
       aria-label={`${menu.name} progress`}
-      aria-valuemin={0}
-      aria-valuemax={menu.total}
-      aria-valuenow={menu.done}
-      className={cn("h-2 overflow-hidden rounded-full bg-muted", className)}
-    >
-      <div className={cn("h-full rounded-full transition-[width] duration-500", full ? "bg-success" : "bg-primary")} style={{ width: `${pct}%` }} />
-    </div>
+      value={menu.done}
+      max={Math.max(1, menu.total)}
+      className={cn(
+        "block h-2 w-full appearance-none overflow-hidden rounded-full bg-muted",
+        "[&::-webkit-progress-bar]:bg-muted [&::-webkit-progress-value]:rounded-full [&::-webkit-progress-value]:transition-[width] [&::-webkit-progress-value]:duration-500",
+        "[&::-moz-progress-bar]:rounded-full",
+        full
+          ? "[&::-webkit-progress-value]:bg-success [&::-moz-progress-bar]:bg-success"
+          : "[&::-webkit-progress-value]:bg-primary [&::-moz-progress-bar]:bg-primary",
+        className,
+      )}
+    />
   );
 }
 
@@ -137,27 +155,35 @@ export function MenuStrip({ menu }: { menu: MenuView }) {
 
 // ---------------------------------------------------------------- panel
 
-export function MenusView({
-  potKey,
-  menus,
-  open,
-  served,
-  loading,
-  onNew,
-  onEdit,
-}: {
-  potKey: string;
-  menus: MenuView[];
-  open: MenuView[];
-  served: MenuView[];
-  loading: boolean;
-  onNew: () => void;
-  onEdit: (m: MenuView) => void;
-}) {
+const NO_FILTERS = {};
+
+/** A list of menu cards that scrolls with the page; it pages as its end comes into view when it is the page's last list, else on a "Show more" button. */
+export function MenuCards({ label, source, render, more = "scroll" }: { label: string; source: ListSource<MenuView>; render: (m: MenuView) => React.ReactNode; more?: MoreMode }) {
+  return (
+    <VirtualList<MenuView>
+      items={source.items}
+      itemKey={(m) => m.key}
+      renderItem={render}
+      scroll="window"
+      onEndReached={loadMore(source, more)}
+      footer={listFooter(source, more)}
+      aria-label={label}
+      itemClassName="pb-2.5"
+      defaultItemHeight={120}
+    />
+  );
+}
+
+/** The Menus tab: the open menus (paged, searchable) and, folded away, the served ones. */
+export function MenusView({ potKey, onNew, onEdit }: { potKey: string; onNew: () => void; onEdit: (m: MenuView) => void }) {
   const call = useProcCall();
+  const f = useUrlFilters(NO_FILTERS);
+  const open = useMenusSource(potKey, { status: "open", q: f.q });
+  const served = useMenusSource(potKey, { status: "served", q: f.q });
   const [serving, setServing] = useState<MenuView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [showServed, setShowServed] = useState(false);
+  const searching = !!f.q.trim();
 
   async function reopen(m: MenuView) {
     setBusy(m.key);
@@ -171,11 +197,20 @@ export function MenusView({
     }
   }
 
-  if (loading) return <RowSkeleton rows={3} />;
+  const loading = (open.isLoading && open.items.length === 0) || (served.isLoading && served.items.length === 0);
+  const failed = (open.error && open.items.length === 0 ? open.error : null) ?? (served.error && served.items.length === 0 ? served.error : null);
+  const none = !loading && !failed && open.items.length === 0 && served.items.length === 0 && !searching && !open.pending && !served.pending;
+  const count = (s: ListSource<MenuView>) => `${s.items.length}${s.hasNextPage ? "+" : ""}`;
 
   return (
     <div className="mx-auto max-w-3xl">
-      {menus.length === 0 ? (
+      {loading ? (
+        <RowSkeleton rows={3} />
+      ) : failed ? (
+        <EmptyState band={false} title="The menus would not load">
+          {errorMessage(failed)}
+        </EmptyState>
+      ) : none ? (
         <EmptyState
           title="No menus yet"
           action={
@@ -188,18 +223,17 @@ export function MenusView({
         </EmptyState>
       ) : (
         <>
-          <div className="flex items-center justify-between gap-3">
-            <p className="label-caps">{open.length === 0 ? "Nothing is cooking right now" : `Cooking · ${open.length}`}</p>
+          <FilterBar q={f.q} onQ={f.setQ} facets={[]} values={{}} onChange={() => {}} onClear={f.clear} searchPlaceholder="Search menus" />
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <p className="label-caps">{open.items.length === 0 ? (searching ? "No open menu matches" : "Nothing is cooking right now") : `Cooking · ${count(open)}`}</p>
             <Button variant="outline" size="sm" onClick={onNew}>
               <Plus /> New menu
             </Button>
           </div>
-          <ul className="mt-3 space-y-2.5">
-            {open.map((m) => (
-              <MenuCard key={m.key} potKey={potKey} menu={m} onEdit={() => onEdit(m)} onServe={() => setServing(m)} />
-            ))}
-          </ul>
-          {served.length > 0 && (
+          <div className="mt-3">
+            <MenuCards label="Menus cooking" source={open} more={served.items.length > 0 ? "button" : "scroll"} render={(m) => <MenuCard potKey={potKey} menu={m} onEdit={() => onEdit(m)} onServe={() => setServing(m)} />} />
+          </div>
+          {served.items.length > 0 && (
             <section className="mt-7" aria-labelledby="served-menus">
               <h2 id="served-menus" className="m-0 text-base">
                 <button
@@ -210,15 +244,17 @@ export function MenusView({
                 >
                   <ChevronRight className={cn("size-4 text-muted-foreground transition-transform", showServed && "rotate-90")} aria-hidden="true" />
                   <span className="font-display text-[16px]">Served</span>
-                  <span className="font-mono text-[11.5px] text-muted-foreground">{served.length}</span>
+                  <span className="font-mono text-[11.5px] text-muted-foreground">{count(served)}</span>
                 </button>
               </h2>
               {showServed && (
-                <ul className="mt-1.5 space-y-2">
-                  {served.map((m) => (
-                    <MenuCard key={m.key} potKey={potKey} menu={m} onEdit={() => onEdit(m)} onReopen={() => void reopen(m)} reopening={busy === m.key} />
-                  ))}
-                </ul>
+                <div className="mt-1.5">
+                  <MenuCards
+                    label="Menus served"
+                    source={served}
+                    render={(m) => <MenuCard potKey={potKey} menu={m} onEdit={() => onEdit(m)} onReopen={() => void reopen(m)} reopening={busy === m.key} />}
+                  />
+                </div>
               )}
             </section>
           )}
@@ -229,7 +265,7 @@ export function MenusView({
   );
 }
 
-function MenuCard({
+export function MenuCard({
   potKey,
   menu,
   onEdit,
@@ -247,7 +283,7 @@ function MenuCard({
   const served = menu.status === "served";
   const finished = menu.total > 0 && menu.open + menu.claimed + menu.blocked === 0;
   return (
-    <li className={cn("rounded-[14px] border border-border bg-card px-3.5 py-3.5 md:px-4", served && "bg-card/60")}>
+    <div className={cn("rounded-[14px] border border-border bg-card px-3.5 py-3.5 md:px-4", served && "bg-card/60")}>
       <div className="flex items-start justify-between gap-x-3">
         <div className="min-w-0">
           <h3 className="flex flex-wrap items-center gap-x-2 text-[17px]">
@@ -257,7 +293,7 @@ function MenuCard({
             >
               {menu.name}
             </Link>
-            <span className="font-mono text-[11px] font-normal text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
+            <span className="font-mono text-[11px] font-normal text-muted-foreground">
               {menu.key}
             </span>
           </h3>
@@ -314,7 +350,7 @@ function MenuCard({
           </>
         )}
       </p>
-    </li>
+    </div>
   );
 }
 

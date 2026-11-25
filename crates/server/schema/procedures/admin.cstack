@@ -9,10 +9,11 @@ part of "../corntchap.cstack"
 /// @param q Only handles or display names that contain this (any case).
 /// @param role Only people with this role: super_admin, orchestrator or member.
 /// @param disabled true: only people who are disabled; false: only those who are not (super-admins; others see enabled people only).
+/// @param notInTeam Only people who are not in this team (a team you belong to; super-admins: any; else 404).
 /// @param page limit (default 25, at most 200) and cursor.
-procedure userPage(q: String?, role: String?, disabled: Boolean?, page: CursorPageInput?): CursorPage<UserView>
+procedure userPage(q: String?, role: String?, disabled: Boolean?, notInTeam: String?, page: CursorPageInput?): CursorPage<UserView>
   @allow(auth() != null)
-  @mcp(tool: "list_users", description: "People who can sign in, a page at a time (items, nextCursor). Super-admins see everyone with their sign-in state; orchestrators get the directory (handle, display name and role, to add people to their teams); members are refused. Narrow with q, role or disabled; pass page: {cursor: nextCursor} for the next page.")
+  @mcp(tool: "list_users", description: "People who can sign in, a page at a time (items, nextCursor). Super-admins see everyone with their sign-in state; orchestrators get the directory (handle, display name and role, to add people to their teams); members are refused. Narrow with q, role, disabled or notInTeam; pass page: {cursor: nextCursor} for the next page.")
 
 /// Set a person's role (super-admins only): super_admin, orchestrator or member.
 /// @param user The person's handle.
@@ -74,17 +75,25 @@ mutation procedure adminAddProject(team: String, key: String, name: String, repo
 /// @param team Only cooks in this team.
 /// @param owner Only cooks owned by this person (handle).
 /// @param disabled true: only disabled cooks; false: only enabled ones.
+/// @param state awake (cooking or seen in the last five minutes, not disabled), cloud or local.
+/// @param notInTeam Only cooks that are not in this team (a team you belong to; super-admins: any).
+/// @param wokenBy Only cooks with a relay wake target that this fire (relay) wakes: its owner's cooks that have one.
 /// @param page limit (default 25, at most 200) and cursor.
-procedure cookPage(q: String?, team: String?, owner: String?, disabled: Boolean?, page: CursorPageInput?): CursorPage<PrincipalView>
+procedure cookPage(q: String?, team: String?, owner: String?, disabled: Boolean?, state: String?, notInTeam: String?, wokenBy: String?, page: CursorPageInput?): CursorPage<PrincipalView>
   @allow(auth() != null)
-  @mcp(tool: "list_cooks", description: "Cooks (agents) you own (super-admins: all), a page at a time (items, nextCursor), with their runtime, leases held and last activity. Narrow with q, team, owner or disabled. fireAndForget cooks (cloud targets only) take ready work, open a PR and stop: give them a task rather than messaging them.")
+  @mcp(tool: "list_cooks", description: "Cooks (agents) you own (super-admins: all), a page at a time (items, nextCursor), with their runtime, leases held and last activity. Narrow with q, team, owner, disabled, state (awake, cloud or local), notInTeam or wokenBy (a fire). fireAndForget cooks (cloud targets only) take ready work, open a PR and stop: give them a task rather than messaging them.")
 
 /// A page of the fires (relays) you own (super-admins: all), by name.
 /// @param q Only names that contain this (any case).
+/// @param lit true: only the fires that are lit (seen in the last five minutes, not put out); false: only the others.
 /// @param page limit (default 25, at most 200) and cursor.
-procedure firePage(q: String?, page: CursorPageInput?): CursorPage<PrincipalView>
+procedure firePage(q: String?, lit: Boolean?, page: CursorPageInput?): CursorPage<PrincipalView>
   @allow(auth() != null)
-  @mcp(tool: "list_fires", description: "Fires (relays that wake local cooks) you own (super-admins: all), a page at a time (items, nextCursor). Narrow with q.")
+  @mcp(tool: "list_fires", description: "Fires (relays that wake local cooks) you own (super-admins: all), a page at a time (items, nextCursor). Narrow with q or lit.")
+
+/// The fires you own in one line (the sidebar): how many, how many lit, and when one was last seen. For the console (not an MCP tool).
+procedure fireSummary(): FireSummary
+  @allow(auth() != null)
 
 /// Create a cook (people only). Returns its token once.
 /// @param name Cook name, e.g. codex-laptop.

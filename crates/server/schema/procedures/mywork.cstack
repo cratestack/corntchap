@@ -14,3 +14,22 @@ procedure myWork(project: String?): MyWorkView
 /// @param page limit (default 25, at most 200) and cursor.
 procedure myWorkPage(section: String, project: String?, page: CursorPageInput): CursorPage<WorkTask>
   @allow(auth() != null)
+
+/// A page of the questions waiting on you, oldest first.
+/// @param project Only this pot (key, e.g. PAY).
+/// @param pool People: the open questions in your pots that nobody picked, instead of those addressed to you.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure myWorkQuestionPage(project: String?, pool: Boolean?, page: CursorPageInput): CursorPage<WorkQuestion>
+  @allow(auth() != null)
+
+/// A page of the reviews waiting on you: those named to you first, then those asked of anyone on the team.
+/// @param project Only this pot (key, e.g. PAY).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure myWorkReviewPage(project: String?, page: CursorPageInput): CursorPage<WorkReview>
+  @allow(auth() != null)
+
+/// A page of the people's comments on tasks a cook holds that it has not answered, oldest first (empty for a person).
+/// @param project Only this pot (key, e.g. PAY).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure myWorkCommentPage(project: String?, page: CursorPageInput): CursorPage<WorkComment>
+  @allow(auth() != null)

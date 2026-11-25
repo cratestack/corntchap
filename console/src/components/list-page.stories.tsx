@@ -109,3 +109,16 @@ export const Empty: Story = { render: () => <ListPage<FixturePerson> {...common}
 export const Loading: Story = { render: () => <ListPage<FixturePerson> {...common} source={loadingSource<FixturePerson>()} /> };
 
 export const Error: Story = { render: () => <ListPage<FixturePerson> {...common} source={errorSource<FixturePerson>()} /> };
+
+/** Inside a page that has its own header (a pot's tabs): no page padding, the title is only for screen readers, the actions stay. */
+export const Embedded: Story = {
+  render: function Render() {
+    const source = useMemo(() => staticSource(people), []);
+    return (
+      <div className="mx-auto max-w-3xl px-4 pt-6">
+        <p className="mb-4 text-sm text-muted-foreground">The pot's header and tabs are above this.</p>
+        <ListPage<FixturePerson> {...common} embedded source={source} />
+      </div>
+    );
+  },
+};

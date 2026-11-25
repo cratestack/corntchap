@@ -105,7 +105,6 @@ pub async fn prune(state: &AppState) -> std::result::Result<(), sqlx::Error> {
 #[derive(sqlx::FromRow)]
 struct Row {
     day: String,
-    cook: String,
     kind: String,
     name: String,
     calls: i64,
@@ -143,7 +142,7 @@ pub async fn report(
     let today = Utc::now().date_naive();
     let first = today - Duration::days(days - 1);
     let rows: Vec<Row> = sqlx::query_as(
-        "select u.day::text as day, a.name as cook, u.kind, u.name,
+        "select u.day::text as day, u.kind, u.name,
                 sum(u.calls)::bigint as calls, sum(u.chars)::bigint as chars
          from usage_daily u
          join principals a on a.id = u.principal_id
@@ -154,7 +153,7 @@ pub async fn report(
                                    where m.team_id = pr.team_id and m.principal_id = $3 and m.role = 'owner')))
            and ($4::text is null or pr.key = $4)
            and ($5::text is null or a.name = $5)
-         group by 1, 2, 3, 4",
+         group by 1, 2, 3",
     )
     .bind(first.to_string())
     .bind(who.is_super_admin())
@@ -169,12 +168,10 @@ pub async fn report(
     let mut by_day: std::collections::BTreeMap<String, Sum> = (0..days)
         .map(|i| ((first + Duration::days(i)).to_string(), Sum::default()))
         .collect();
-    let mut by_cook: std::collections::BTreeMap<String, Sum> = Default::default();
     let mut top: std::collections::BTreeMap<(String, String), Sum> = Default::default();
     for r in &rows {
         total.add(r);
         by_day.entry(r.day.clone()).or_default().add(r);
-        by_cook.entry(r.cook.clone()).or_default().add(r);
         top.entry((r.kind.clone(), r.name.clone()))
             .or_default()
             .add(r);
@@ -185,8 +182,6 @@ pub async fn report(
         }
         v
     };
-    let mut cooks: Vec<(String, Sum)> = by_cook.into_iter().collect();
-    cooks.sort_by(|a, b| b.1.chars.cmp(&a.1.chars).then(a.0.cmp(&b.0)));
     let mut tops: Vec<((String, String), Sum)> = top.into_iter().collect();
     tops.sort_by(|a, b| b.1.chars.cmp(&a.1.chars).then(a.0.cmp(&b.0)));
     Ok(json!({
@@ -194,13 +189,12 @@ pub async fn report(
         "note": NOTE,
         "totals": total.json(),
         "by_day": by_day.into_iter().map(|(d, s)| with(s.json(), json!({"day": d}))).collect::<Vec<_>>(),
-        "by_cook": cooks.into_iter().map(|(c, s)| with(s.json(), json!({"cook": c}))).collect::<Vec<_>>(),
         "top": tops.into_iter().take(10).map(|((k, n), s)| with(s.json(), json!({"kind": k, "name": n}))).collect::<Vec<_>>(),
     }))
 }
 
 /// A page of the cooks whose usage you may see, the biggest senders first (chars desc, then name),
-/// for the last `days` days: the `by_cook` rows of [`report`], paged. `q` matches the cook's name.
+/// for the last `days` days, paged (`usageCookPage`; [`report`] has no per-cook rows). `q` matches the cook's name.
 pub async fn cook_page(
     db: &sqlx::PgPool,
     p: &Principal,

@@ -380,7 +380,7 @@ interface Row {
 }
 
 /** Newest-first events cut into days; a group's `label` is the ISO time of its first event, shown by `DayLabel`. */
-function byDay(shown: ChangeView[]): { groups: VirtualGroup[]; rows: Row[] } {
+function byDay(shown: readonly ChangeView[]): { groups: VirtualGroup[]; rows: Row[] } {
   const groups: VirtualGroup[] = [];
   const rows: Row[] = [];
   shown.forEach((e, i) => {
@@ -405,8 +405,10 @@ export function EventFeed({
   hasOlder = false,
   loadingOlder = false,
   onLoadOlder,
+  newestFirst: given = false,
 }: {
-  events: ChangeView[];
+  /** Oldest first, like the live feed; with `newestFirst`, as a paged read gives them. */
+  events: readonly ChangeView[];
   compact?: boolean;
   limit?: number;
   empty?: string;
@@ -414,11 +416,12 @@ export function EventFeed({
   hasOlder?: boolean;
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
+  newestFirst?: boolean;
 }) {
   const shown = useMemo(() => {
-    const newestFirst = [...events].reverse();
+    const newestFirst = given ? events : [...events].reverse();
     return limit ? newestFirst.slice(0, limit) : newestFirst;
-  }, [events, limit]);
+  }, [events, limit, given]);
   const days = useMemo(() => (compact ? null : byDay(shown)), [compact, shown]);
   if (shown.length === 0) {
     return <p className="py-6 text-center text-muted-foreground">{empty ?? "Nothing has happened yet."}</p>;

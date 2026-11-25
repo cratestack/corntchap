@@ -66,6 +66,7 @@ type WorkReview {
 
 /// A people's comment on a task I hold that I have not answered (cooks).
 type WorkComment {
+  id String
   task String
   project String
   author String?

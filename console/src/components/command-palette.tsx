@@ -1,24 +1,23 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router";
+import type { MenuView, ProjectSummary, TaskView } from "@corntchap/api";
 import { BookMarked, ChefHat, GitBranch, MessageCircleQuestion, Soup, Flame, FolderKanban, LogOut, Monitor, Moon, Plus, Sun, UserRound, Users } from "lucide-react";
-import {
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
-} from "@/components/ui/command";
 import { useUi } from "@/lib/ui";
-import { useProc, useProjects } from "@/lib/data";
+import { useProjects } from "@/lib/data";
+import { useMenusSource, usePotsSource, useTasksSource } from "@/lib/sources";
+import { useMappedSource, useStaticSource } from "@/lib/listbox";
+import { useStoreValue } from "@/lib/use-store-value";
 import { useTheme } from "@/lib/theme";
 import { canOrchestrate, isSuperAdmin, logout, useSession } from "@/lib/session";
 import { lastView } from "@/lib/views";
 import { useOpenTask } from "@/lib/nav";
-import { useMenus } from "./menus";
 import { BUCKETS, bucketOf } from "@/lib/format";
+import { VirtualCommand, type CommandItem, type CommandSection } from "./ui/virtual-command";
 
+/**
+ * Search or jump: the pages and actions (narrowed here), and the pots, the open menus and the tasks of the pot you
+ * are in (narrowed by the server as you type, a page at a time).
+ */
 export function CommandPalette() {
   const { paletteOpen, setPaletteOpen, openNewTask } = useUi();
   const navigate = useNavigate();
@@ -27,151 +26,112 @@ export function CommandPalette() {
   const { setTheme } = useTheme();
   const openTask = useOpenTask();
   const projects = useProjects();
+  const query = useStoreValue("");
   const pot = /^\/pots\/([^/]+)/.exec(loc.pathname)?.[1]?.toUpperCase();
-  // the palette lists the first 80 tasks still in play, best first
-  const tasks = useProc(
-    "taskPage",
-    { project: pot ?? "", bucket: "active", label: null, menu: null, owner: null, repo: null, q: null, holder: null, status: null, page: { limit: 80, cursor: null } },
-    { enabled: !!pot && paletteOpen },
+  const asks = projects.data?.find((p) => p.key === pot)?.open_questions ?? 0;
+  const anyPot = (projects.data ?? []).length > 0;
+
+  const potRows = usePotsSource({ q: query.value, enabled: paletteOpen });
+  const menuRows = useMenusSource(pot ?? "", { q: query.value, enabled: !!pot && paletteOpen });
+  const taskRows = useTasksSource(pot ?? "", { q: query.value, enabled: !!pot && paletteOpen });
+
+  const go = useCallback((to: string) => () => void navigate(to), [navigate]);
+
+  const potItem = useCallback(
+    (p: ProjectSummary): CommandItem => ({ id: p.key, label: p.name, hint: p.key, icon: <FolderKanban />, onSelect: go(`/pots/${p.key}/${lastView(p.key)}`) }),
+    [go],
+  );
+  const menuItem = useCallback(
+    (m: MenuView): CommandItem => ({
+      id: m.key,
+      label: m.name,
+      hint: `${m.done}/${m.total}`,
+      icon: <Soup />,
+      onSelect: go(`/pots/${pot}/board?menu=${encodeURIComponent(m.key)}`),
+    }),
+    [go, pot],
+  );
+  const taskItem = useCallback(
+    (t: TaskView): CommandItem => ({ id: t.id, label: t.title, hint: `${t.id} · ${BUCKETS.find((b) => b.id === bucketOf(t))?.label ?? ""}`, onSelect: () => openTask(t.id) }),
+    [openTask],
+  );
+  const pots = useMappedSource(potRows, potItem);
+  const menus = useMappedSource(menuRows, menuItem);
+  const tasks = useMappedSource(taskRows, taskItem);
+
+  const doItems = useMemo<CommandItem[]>(
+    () => [
+      ...(pot ? [{ id: "pantry", label: `Search the pantry in ${pot}`, keywords: ["memory", "memories", "recall"], icon: <BookMarked />, onSelect: () => void navigate(`/pots/${pot}/pantry`, { state: { focus: true } }) }] : []),
+      ...(pot
+        ? [
+            { id: "questions", label: `Questions in ${pot}`, keywords: ["ask", "answer", "decisions", "chef"], icon: <MessageCircleQuestion />, hint: asks > 0 ? `${asks} open` : undefined, onSelect: go(`/pots/${pot}/questions`) },
+            { id: "new-menu", label: `New menu in ${pot}`, keywords: ["milestone", "create", "add"], icon: <Plus />, onSelect: go(`/pots/${pot}/menus?new=1`) },
+            { id: "all-menus", label: `All menus in ${pot}`, keywords: ["switch menu", "board"], icon: <Soup />, onSelect: go(`/pots/${pot}/board`) },
+          ]
+        : []),
+      ...(anyPot ? [{ id: "new-task", label: `New task${pot ? ` in ${pot}` : ""}`, keywords: ["add", "create"], icon: <Plus />, onSelect: () => openNewTask(pot) }] : []),
+    ],
+    [pot, asks, anyPot, navigate, go, openNewTask],
+  );
+  const goItems = useMemo<CommandItem[]>(
+    () => [
+      { id: "cooks", label: "Cooks", keywords: ["agents"], icon: <ChefHat />, onSelect: go("/cooks") },
+      { id: "fires", label: "Fires", keywords: ["relays"], icon: <Flame />, onSelect: go("/fires") },
+      { id: "teams", label: "Teams", keywords: ["chefs"], icon: <Users />, onSelect: go("/teams") },
+      ...(canOrchestrate(me)
+        ? [
+            { id: "admin-pots", label: "Pots", keywords: ["admin", "projects"], icon: <FolderKanban />, onSelect: go("/admin/pots") },
+            { id: "new-team", label: "New team", keywords: ["create team"], icon: <Users />, onSelect: go("/teams") },
+          ]
+        : []),
+      ...(isSuperAdmin(me)
+        ? [
+            { id: "admin-users", label: "Users (admin)", keywords: ["admin"], icon: <UserRound />, onSelect: go("/admin/users") },
+            { id: "admin-forges", label: "Forges (admin)", keywords: ["admin", "github"], icon: <GitBranch />, onSelect: go("/admin/forges") },
+          ]
+        : []),
+    ],
+    [me, go],
+  );
+  const settingItems = useMemo<CommandItem[]>(
+    () => [
+      { id: "light", label: "Light theme", keywords: ["theme"], icon: <Sun />, onSelect: () => setTheme("light") },
+      { id: "dark", label: "Dark theme", keywords: ["theme"], icon: <Moon />, onSelect: () => setTheme("dark") },
+      { id: "system", label: "Follow the system theme", keywords: ["theme"], icon: <Monitor />, onSelect: () => setTheme("system") },
+      { id: "logout", label: "Log out", keywords: ["sign out"], icon: <LogOut />, onSelect: () => logout(me.csrf) },
+    ],
+    [setTheme, me.csrf],
+  );
+  const doSource = useStaticSource(doItems);
+  const goSource = useStaticSource(goItems);
+  const settingSource = useStaticSource(settingItems);
+
+  const sections = useMemo<CommandSection[]>(
+    () => [
+      { id: "do", heading: "Do", source: doSource, filter: "client" },
+      ...(pot ? [{ id: "menus", heading: `Switch menu in ${pot}`, source: menus, filter: "server" as const }] : []),
+      { id: "pots", heading: "Pots", source: pots, filter: "server" },
+      ...(pot ? [{ id: "tasks", heading: `Tasks in ${pot}`, source: tasks, filter: "server" as const }] : []),
+      { id: "go", heading: "Go to", source: goSource, filter: "client" },
+      { id: "settings", heading: "Settings", source: settingSource, filter: "client" },
+    ],
+    [pot, doSource, menus, pots, tasks, goSource, settingSource],
   );
 
-  const menus = useMenus(pot ?? "", !!pot && paletteOpen);
-  const asks = projects.data?.find((p) => p.key === pot)?.open_questions ?? 0;
-
-  const run = (fn: () => void) => () => {
-    setPaletteOpen(false);
-    fn();
-  };
-
-  const taskItems = useMemo(() => (tasks.data?.items ?? []).slice(0, 80), [tasks.data]);
-
   return (
-    <CommandDialog
+    <VirtualCommand
       open={paletteOpen}
-      onOpenChange={setPaletteOpen}
+      onOpenChange={(o) => {
+        setPaletteOpen(o);
+        if (!o) query.set("");
+      }}
       title="Search or jump"
       description="Jump to a pot, a task or a page, or start something new."
-      className="max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:rounded-none max-sm:border-0 max-sm:pt-[env(safe-area-inset-top)] max-sm:pb-[env(safe-area-inset-bottom)]"
-    >
-      <CommandInput placeholder="Jump to a pot, a task, a page…" className="max-sm:pr-8 max-sm:text-base" />
-      <CommandList className="max-h-[min(420px,60vh)] max-sm:max-h-none max-sm:flex-1 max-sm:pb-4 max-sm:[&_[cmdk-item]]:min-h-12 max-sm:[&_[cmdk-item]]:text-[15px]">
-        <CommandEmpty>Nothing in the pot matches that.</CommandEmpty>
-        <CommandGroup heading="Do">
-          {pot && (
-            <CommandItem
-              value="search the pantry memory memories recall"
-              onSelect={run(() => navigate(`/pots/${pot}/pantry`, { state: { focus: true } }))}
-            >
-              <BookMarked /> Search the pantry in {pot}
-            </CommandItem>
-          )}
-          {pot && (
-            <CommandItem value="questions for the chef ask answer decisions" onSelect={run(() => navigate(`/pots/${pot}/questions`))}>
-              <MessageCircleQuestion /> Questions in {pot}
-              {asks > 0 && <span className="ml-auto font-mono text-[11px] text-muted-foreground">{asks} open</span>}
-            </CommandItem>
-          )}
-          {pot && (
-            <CommandItem value="new menu milestone create add" onSelect={run(() => navigate(`/pots/${pot}/menus?new=1`))}>
-              <Plus /> New menu in {pot}
-            </CommandItem>
-          )}
-          {(projects.data ?? []).length > 0 && (
-            <CommandItem value="new task add create" onSelect={run(() => openNewTask(pot))}>
-              <Plus /> New task{pot ? ` in ${pot}` : ""}
-            </CommandItem>
-          )}
-        </CommandGroup>
-        {pot && menus.open.length > 0 && (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading={`Switch menu in ${pot}`}>
-              <CommandItem value="switch menu all menus" onSelect={run(() => navigate(`/pots/${pot}/board`))}>
-                <Soup /> All menus
-              </CommandItem>
-              {menus.open.map((m) => (
-                <CommandItem key={m.key} value={`switch menu ${m.key} ${m.name}`} onSelect={run(() => navigate(`/pots/${pot}/board?menu=${encodeURIComponent(m.key)}`))}>
-                  <Soup /> {m.name}
-                  <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-                    {m.done}/{m.total}
-                  </span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </>
-        )}
-        <CommandSeparator />
-        <CommandGroup heading="Pots">
-          {(projects.data ?? []).map((p) => (
-            <CommandItem key={p.key} value={`pot ${p.key} ${p.name}`} onSelect={run(() => navigate(`/pots/${p.key}/${lastView(p.key)}`))}>
-              <FolderKanban />
-              <span className="font-mono text-[12px] font-bold">{p.key}</span>
-              <span className="text-muted-foreground">{p.name}</span>
-            </CommandItem>
-          ))}
-        </CommandGroup>
-        {taskItems.length > 0 && (
-          <>
-            <CommandSeparator />
-            <CommandGroup heading={`Tasks in ${pot}`}>
-              {taskItems.map((t) => (
-                <CommandItem key={t.id} value={`task ${t.id} ${t.title} ${t.labels.join(" ")}`} onSelect={run(() => openTask(t.id))}>
-                  <span className="w-14 shrink-0 font-mono text-[12px] font-bold">{t.id}</span>
-                  <span className="min-w-0 flex-1 truncate">{t.title}</span>
-                  <span className="text-[11px] text-muted-foreground">{BUCKETS.find((b) => b.id === bucketOf(t))?.label}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </>
-        )}
-        <CommandSeparator />
-        <CommandGroup heading="Go to">
-          <CommandItem value="cooks agents" onSelect={run(() => navigate("/cooks"))}>
-            <ChefHat /> Cooks
-          </CommandItem>
-          <CommandItem value="fires relays" onSelect={run(() => navigate("/fires"))}>
-            <Flame /> Fires
-          </CommandItem>
-          <CommandItem value="teams chefs" onSelect={run(() => navigate("/teams"))}>
-            <Users /> Teams
-          </CommandItem>
-          {canOrchestrate(me) && (
-            <>
-              <CommandItem value="admin pots projects" onSelect={run(() => navigate("/admin/pots"))}>
-                <FolderKanban /> Pots
-              </CommandItem>
-              <CommandItem value="new team create team" onSelect={run(() => navigate("/teams"))}>
-                <Users /> New team
-              </CommandItem>
-            </>
-          )}
-          {isSuperAdmin(me) && (
-            <>
-              <CommandItem value="admin users" onSelect={run(() => navigate("/admin/users"))}>
-                <UserRound /> Users (admin)
-              </CommandItem>
-              <CommandItem value="admin forges github" onSelect={run(() => navigate("/admin/forges"))}>
-                <GitBranch /> Forges (admin)
-              </CommandItem>
-            </>
-          )}
-        </CommandGroup>
-        <CommandSeparator />
-        <CommandGroup heading="Settings">
-          <CommandItem value="theme light" onSelect={run(() => setTheme("light"))}>
-            <Sun /> Light theme
-          </CommandItem>
-          <CommandItem value="theme dark" onSelect={run(() => setTheme("dark"))}>
-            <Moon /> Dark theme
-          </CommandItem>
-          <CommandItem value="theme system" onSelect={run(() => setTheme("system"))}>
-            <Monitor /> Follow the system theme
-          </CommandItem>
-          <CommandItem value="log out sign out" onSelect={run(() => logout(me.csrf))}>
-            <LogOut /> Log out
-          </CommandItem>
-        </CommandGroup>
-      </CommandList>
-    </CommandDialog>
+      placeholder="Jump to a pot, a task, a page…"
+      query={query.value}
+      onQuery={query.set}
+      sections={sections}
+      empty="Nothing in the pot matches that."
+    />
   );
 }

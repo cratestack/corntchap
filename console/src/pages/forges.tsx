@@ -2,27 +2,30 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { ExternalLink, GitBranch, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import type { ForgeUnfollowedView, ProjectSummary } from "@corntchap/api";
 import { PageShell } from "@/components/page";
 import { EmptyState, RowSkeleton } from "@/components/bits";
+import { FilterBar } from "@/components/filter-bar";
 import { ConfirmDialog } from "@/components/rename-delete";
 import { CopyLine } from "@/components/secret-dialog";
+import { SourceList } from "@/components/source-list";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useProjects, useV1, useV1Call } from "@/lib/data";
+import { VirtualCombobox } from "@/components/ui/virtual-combobox";
+import { useV1, useV1Call } from "@/lib/data";
+import { useForgeUnfollowedSource, usePotsSource } from "@/lib/sources";
+import { useUrlFilters, type UrlFilterSchema } from "@/lib/url-filters";
+import { useStoreValue } from "@/lib/use-store-value";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { FormDialog } from "@/pages/admin";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-interface Unfollowed {
-  repo: string;
-  url: string;
-  installation: number | null;
-  events: number;
-  last_seen: string;
-}
+const NO_FILTERS: UrlFilterSchema = {};
+const unfollowedKey = (u: ForgeUnfollowedView) => u.repo;
+const potKey = (p: ProjectSummary) => p.key;
+const potText = (p: ProjectSummary) => `${p.key} ${p.name}`;
 
 interface Installation {
   id: number;
@@ -66,7 +69,7 @@ const STATUS: Record<Delivery["status"], string> = {
 
 /** Admin: the git hosts corntchap listens to (GitHub Apps), where they are installed and what they last sent. */
 export function ForgesPage() {
-  const forges = useV1<{ public_url: string; connections: Connection[]; unfollowed: Unfollowed[] }>("/forges");
+  const forges = useV1<{ public_url: string; connections: Connection[] }>("/forges");
   const call = useV1Call();
   const now = useNow();
   const [params, setParams] = useSearchParams();
@@ -74,11 +77,13 @@ export function ForgesPage() {
   const [org, setOrg] = useState("");
   const [host, setHost] = useState("");
   const [removing, setRemoving] = useState<Connection | null>(null);
-  const [adding, setAdding] = useState<Unfollowed | null>(null);
-  const pots = useProjects().data ?? [];
+  const [adding, setAdding] = useState<ForgeUnfollowedView | null>(null);
+  const f = useUrlFilters(NO_FILTERS);
+  const unfollowed = useForgeUnfollowedSource(f.q);
+  const potQ = useStoreValue("");
+  const pots = usePotsSource({ q: potQ.value, enabled: !!adding });
   const [pot, setPot] = useState("");
   const [busy, setBusy] = useState(false);
-  const unfollowed = forges.data?.unfollowed ?? [];
 
   async function addToPot() {
     if (!adding || !pot) return;
@@ -95,7 +100,7 @@ export function ForgesPage() {
     }
   }
 
-  async function dismiss(u: Unfollowed) {
+  async function dismiss(u: ForgeUnfollowedView) {
     try {
       await call("POST", "/forges/unfollowed/dismiss", { repo: u.repo });
       toast.success(`${u.repo} dismissed`, { description: "It is listed again if it sends more events." });
@@ -226,40 +231,47 @@ export function ForgesPage() {
         </ul>
       )}
 
-      {unfollowed.length > 0 && (
-        <section aria-label="Repositories sending events that no pot follows" className="mt-6">
-          <h2 className="label-caps mb-1.5 px-1">Repositories sending events that no pot follows</h2>
-          <ul className="divide-y divide-border overflow-hidden rounded-[14px] border border-border bg-card">
-            {unfollowed.map((u) => (
-              <li key={u.repo} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <a href={u.url} target="_blank" rel="noreferrer" className="font-mono text-[13px] font-semibold hover:underline">
-                    {u.repo}
-                  </a>
-                  <p className="text-[12px] text-muted-foreground">
-                    {u.events} {u.events === 1 ? "event" : "events"} ignored · last {fmtAgo(u.last_seen, now)}
-                  </p>
+      {(unfollowed.isLoading || unfollowed.items.length > 0 || f.q) && (
+        <section aria-label="Repositories sending events that no pot follows" className="mt-6 space-y-3">
+          <h2 className="label-caps px-1">Repositories sending events that no pot follows</h2>
+          <FilterBar q={f.q} onQ={f.setQ} facets={[]} values={{}} onChange={() => {}} onClear={f.clear} searchPlaceholder="Find a repository" />
+          <div className="overflow-hidden rounded-[14px] border border-border bg-card">
+            <SourceList<ForgeUnfollowedView>
+              source={unfollowed}
+              itemKey={unfollowedKey}
+              label="Repositories that no pot follows"
+              empty={<>No repository is named like “{f.q}”.</>}
+              renderItem={(u) => (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <a href={u.url} target="_blank" rel="noreferrer" className="font-mono text-[13px] font-semibold hover:underline">
+                      {u.repo}
+                    </a>
+                    <p className="text-[12px] text-muted-foreground">
+                      {u.events} {u.events === 1 ? "event" : "events"} ignored · last {fmtAgo(u.last_seen, now)}
+                    </p>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="max-md:h-11"
+                      onClick={() => {
+                        setPot("");
+                        setAdding(u);
+                      }}
+                    >
+                      Add to a pot
+                    </Button>
+                    <Button size="sm" variant="ghost" className="max-md:h-11" onClick={() => void dismiss(u)}>
+                      Dismiss
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="max-md:h-11"
-                    onClick={() => {
-                      setPot(pots[0]?.key ?? "");
-                      setAdding(u);
-                    }}
-                  >
-                    Add to a pot
-                  </Button>
-                  <Button size="sm" variant="ghost" className="max-md:h-11" onClick={() => void dismiss(u)}>
-                    Dismiss
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-1.5 px-1 text-[12px] text-muted-foreground">GitHub told corntchap about these, but no pot has them, so the events were dropped. Adding one to a pot starts following it and links its open pull requests.</p>
+              )}
+            />
+          </div>
+          <p className="px-1 text-[12px] text-muted-foreground">GitHub told corntchap about these, but no pot has them, so the events were dropped. Adding one to a pot starts following it and links its open pull requests.</p>
         </section>
       )}
       <FormDialog
@@ -270,21 +282,27 @@ export function ForgesPage() {
         onSubmit={() => void addToPot()}
         busy={busy}
         submitLabel="Add"
+        disabled={!pot}
       >
         <div className="space-y-1.5">
           <Label htmlFor="unf-pot">Pot</Label>
-          <Select value={pot} onValueChange={setPot}>
-            <SelectTrigger id="unf-pot" className="h-11 w-full">
-              <SelectValue placeholder="Choose a pot" />
-            </SelectTrigger>
-            <SelectContent>
-              {pots.map((p) => (
-                <SelectItem key={p.key} value={p.key}>
-                  <span className="font-mono">{p.key}</span> {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <VirtualCombobox<ProjectSummary>
+            id="unf-pot"
+            label="Pot"
+            placeholder="Choose a pot"
+            source={pots}
+            onQuery={potQ.set}
+            itemKey={potKey}
+            itemText={potText}
+            renderItem={(p) => (
+              <span className="truncate">
+                <span className="font-mono">{p.key}</span> {p.name}
+              </span>
+            )}
+            value={pot || null}
+            onChange={(v) => setPot(v ?? "")}
+            className="h-11"
+          />
         </div>
       </FormDialog>
       <FormDialog

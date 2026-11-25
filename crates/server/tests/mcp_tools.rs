@@ -287,7 +287,6 @@ async fn page_procedures_are_not_tools_and_default_shapes_hold() {
         "question_page",
         "review_page",
         "memory_page",
-        "cloud_run_page",
         "view_page",
     ] {
         let r = w.app.mcp(&w.agent, n, json!({})).await;

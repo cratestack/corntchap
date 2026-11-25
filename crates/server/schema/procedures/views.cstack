@@ -39,7 +39,14 @@ mutation procedure viewDelete(project: String, key: String): OkResult
 /// @param key A saved view's key.
 /// @param where A condition to try instead (same rules as save_view).
 /// @param orderBy An order to try.
-/// @param page limit (default 25, at most 200) and cursor; a cursor belongs to the condition and order that made it.
-procedure viewPage(project: String, key: String?, where: String?, orderBy: String?, page: CursorPageInput?): CursorPage<TaskView>
+/// @param label Only tasks carrying this label (on top of the view's own condition).
+/// @param menu Only tasks on this menu (key); - for tasks on no menu.
+/// @param repo Only tasks about this repository alias.
+/// @param owner Only tasks owned by this handle; me for yours; - for tasks nobody owns.
+/// @param holder Only tasks held by this cook (the claimed_by name).
+/// @param q Only tasks whose id, title or body contain this text.
+/// @param bucket Only tasks in this board column: ready, claimed, waiting, done or cancelled.
+/// @param page limit (default 25, at most 200) and cursor; a cursor belongs to the condition, order and filters that made it.
+procedure viewPage(project: String, key: String?, where: String?, orderBy: String?, label: String?, menu: String?, repo: String?, owner: String?, holder: String?, q: String?, bucket: String?, page: CursorPageInput?): CursorPage<TaskView>
   @allow(auth() != null)
   @mcp(tool: "run_view", description: "Run a saved view, or try a SQL condition and order over a pot's tasks before saving it with save_view, a page at a time (items, nextCursor; pass page.cursor with the same condition and order for the next page).")

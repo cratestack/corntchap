@@ -1,8 +1,10 @@
 import { useCallback, useMemo } from "react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ActivityView, PassMessageView, PassPage, StationView, WokenRef } from "@corntchap/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ActivityView, PassConversationView, PassMessageView, PassPage, StationView, WokenRef } from "@corntchap/api";
 import { client } from "@/lib/api";
-import { useAgents, useProc, type AgentRow } from "@/lib/data";
+import { useListQuery } from "@/lib/list-query";
+import type { ListSource } from "@/lib/listbox";
+import { useCooksSource } from "@/lib/sources";
 import { KIND_LABEL } from "@/lib/snippets";
 import { cookState, type CookState } from "./bits";
 
@@ -77,47 +79,83 @@ export function usePass(pot: string, withWho: string, onRead: () => void) {
   };
 }
 
+// ---------------------------------------------------------------- conversations
+
+/** The conversation list's own filters: the search text and "only the ones with something unread". */
+export interface ConversationFilters {
+  q?: string;
+  unread?: boolean;
+  enabled?: boolean;
+}
+
+/**
+ * Your direct conversations in a pot, the most recent first (passConversationPage: the chef, the last message cut,
+ * the unread count). A message moves its conversation to the top, so a live refresh restarts from the first page and
+ * re-reads everything loaded (`refreshLoaded`): a conversation that moved up from past the cursor must not be lost.
+ */
+export function useConversations(pot: string, f: ConversationFilters = {}): ListSource<PassConversationView> {
+  return useListQuery(
+    "passConversationPage",
+    { project: pot, ...(f.unread ? { unread: true } : {}) },
+    { q: f.q ?? "", refreshLoaded: true, enabled: f.enabled ?? true },
+  );
+}
+
+type Cached = { pages: { items: PassConversationView[] }[]; pageParams: unknown[] };
+
+/** A conversation read: its unread count is 0 in every loaded list of conversations (the server has marked it read). */
+export function useMarkConversationRead() {
+  const qc = useQueryClient();
+  return useCallback(
+    (chef: string) => {
+      qc.setQueriesData<Cached>({ queryKey: ["data", "inf", "passConversationPage"] }, (data) => {
+        if (!data) return data;
+        let changed = false;
+        const pages = data.pages.map((pg) => {
+          if (!pg.items.some((c) => c.chef === chef && c.unread > 0)) return pg;
+          changed = true;
+          return { ...pg, items: pg.items.map((c) => (c.chef === chef ? { ...c, unread: 0 } : c)) };
+        });
+        return changed ? { ...data, pages } : data;
+      });
+    },
+    [qc],
+  );
+}
+
 // ---------------------------------------------------------------- previews
 
 export interface Preview {
   at: string;
   from: string | null;
   body: string;
+  /** The last message of a direct conversation is the viewer's own. */
+  mine?: boolean;
 }
 
 export const previewKey = (pot: string, conv: string) => ["pass-prev", pot, conv] as const;
 
 export const toPreview = (m: PassMessageView | undefined): Preview | null => (m ? { at: m.at, from: m.from ?? null, body: m.body } : null);
 
+/** A conversation row's preview, from the list's own page (the last message cut to one line, and its time). */
+export const conversationPreview = (c: PassConversationView): Preview | null => (c.preview ? { at: c.last_at, from: null, body: c.preview, mine: c.last_mine } : null);
+
 /**
- * The last message of each conversation, for the list. A read marks what it returns as read, so a preview is only
- * fetched for a conversation with nothing unread (it changes nothing there). One that has unread messages shows
- * "N new" instead; once you open it, the thread itself keeps its preview fresh (see PassView). Kept out of
- * ["data"] so live events do not refetch every conversation.
+ * The last message of the pot's own pass, for the list (the direct conversations come with theirs). A read marks
+ * what it returns as read, so it is only fetched when nothing is unread there (it changes nothing). Once you open
+ * the pass, the thread itself keeps its preview fresh (see PassView). Kept out of ["data"] so live events do not
+ * refetch it.
  */
-export function usePreviews(pot: string, convs: { key: string; unread: number; active: boolean }[]) {
-  const results = useQueries({
-    queries: convs.map((c) => ({
-      queryKey: previewKey(pot, c.key),
-      queryFn: async (): Promise<Preview | null> => {
-        const page = await client.procedures.passRead({ project: pot, chef: c.key, limit: 1 });
-        return toPreview(page.messages[page.messages.length - 1]);
-      },
-      enabled: c.unread === 0 && !c.active,
-      staleTime: Infinity,
-    })),
-  });
-  const stamp = results.map((r) => r.dataUpdatedAt).join(",");
-  const keys = convs.map((c) => c.key).join(",");
-  return useMemo(() => {
-    const m = new Map<string, Preview | null>();
-    convs.forEach((c, i) => {
-      const d = results[i]?.data;
-      if (d !== undefined) m.set(c.key, d);
-    });
-    return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stamp, keys]);
+export function usePotPreview(pot: string, enabled: boolean): Preview | null | undefined {
+  return useQuery({
+    queryKey: previewKey(pot, POT),
+    queryFn: async (): Promise<Preview | null> => {
+      const page = await client.procedures.passRead({ project: pot, chef: POT, limit: 1 });
+      return toPreview(page.messages[page.messages.length - 1]);
+    },
+    enabled,
+    staleTime: Infinity,
+  }).data;
 }
 
 /** One line of a message for the list: markdown noise removed, whitespace collapsed. */
@@ -139,26 +177,30 @@ export interface CookInfo {
   agentKind: string;
   cloud: boolean;
   state: CookState;
-  row: AgentRow;
 }
 
-export function useCooks(now: number) {
-  const agents = useAgents();
+/**
+ * What the pass knows about cooks: the team's cooks as far as they are loaded (cookPage of the team), and the cook
+ * of the open conversation (found by name). Someone not loaded yet just shows no presence.
+ */
+export function useCooks(now: number, team: string | null, open: string | null) {
+  const inTeam = useCooksSource({ team: team ?? "", enabled: !!team });
+  const named = useCooksSource({ q: open ?? "", enabled: !!open });
   const bucket = Math.floor(now / 30_000);
   const byName = useMemo(() => {
     const m = new Map<string, CookInfo>();
-    for (const a of agents.data ?? []) {
+    for (const a of [...inTeam.items, ...named.items]) {
+      if (m.has(a.name)) continue;
       m.set(a.name, {
         name: a.name,
         agentKind: KIND_LABEL[a.agent_kind ?? "other"] ?? a.agent_kind ?? "Cook",
         cloud: a.runtime === "cloud",
-        row: a,
-        state: cookState(a, bucket * 30_000),
+        state: cookState({ disabled: a.disabled, busy: a.busy, last_seen_at: a.last_seen_at ?? null }, bucket * 30_000),
       });
     }
     return m;
-  }, [agents.data, bucket]);
-  return { byName, agents: agents.data, isLoading: agents.isLoading };
+  }, [inTeam.items, named.items, bucket]);
+  return { byName, isLoading: inTeam.isLoading };
 }
 
 // ---------------------------------------------------------------- wake status
@@ -168,11 +210,14 @@ export interface WakeSignals {
   activity: ActivityView[];
 }
 
-/** What the pot's stations and recent activity say about who is working right now. */
+/** Rows of each read the signals look at: the pot's newest stations and its newest tool calls. */
+const SIGNAL_ROWS = 100;
+
+/** What the pot's newest stations and recent activity say about who is working right now (one page of each: a cook further back reads as not working). */
 export function useWakeSignals(pot: string, enabled: boolean): WakeSignals {
-  const stations = useProc("stationList", { project: pot, cook: null }, { enabled });
-  const activity = useProc("activityList", { project: pot, station: null, task: null, limit: 100 }, { enabled });
-  return { stations: stations.data ?? [], activity: activity.data ?? [] };
+  const stations = useListQuery("stationPage", { project: pot }, { pageSize: SIGNAL_ROWS, enabled });
+  const activity = useListQuery("activityPage", { project: pot }, { pageSize: SIGNAL_ROWS, enabled });
+  return useMemo(() => ({ stations: stations.items as StationView[], activity: activity.items as ActivityView[] }), [stations.items, activity.items]);
 }
 
 export type WakeState = "woken" | "working" | "replied" | "quiet";

@@ -195,7 +195,7 @@ A task has one **owner**: the person (or cook) of the pot's team who is accounta
 
 `list_projects`, `list_tasks`, `list_menus`, `list_questions`, `my_questions`, `list_reviews` and `run_view` are paged too: pass `page: {cursor: nextCursor}` for the next page (`list_tasks` answers `{items, total, next_cursor}` and takes `bucket`: active, ready, claimed, waiting, done, cancelled or all).
 
-`my_work` (MCP tool; `corntchap-cli me work`; REST `GET /api/v1/me/work?project=PAY`; the console's My work page) lists what is yours across every pot you can see: `owned` (open, claimed and blocked tasks you own, by pot), `holding` (tasks you hold with a live lease), `waiting_on_me` (questions addressed to you, reviews asked of you or of the team, unanswered comments on your tasks; people also see the open questions nobody picked), `blocked_on_me` (tasks parked on a question you must answer or depending on a task you own, the top 10) and `counts` for a badge.
+`my_work` (MCP tool; `corntchap-cli me work`; REST `GET /api/v1/me/work?project=PAY`; the console's My work page) lists what is yours across every pot you can see: `owned` (open, claimed and blocked tasks you own, by pot), `holding` (tasks you hold with a live lease), `waiting_on_me` (questions addressed to you, reviews asked of you or of the team, unanswered comments on your tasks; people also see the open questions nobody picked), `blocked_on_me` (tasks parked on a question you must answer or depending on a task you own, the top 10) and `counts` for a badge (`waiting` is the true number; the lists in the answer are the first rows only). The console pages each list in full: `myWorkPage` (owned, holding, blocked) and `myWorkQuestionPage`, `myWorkReviewPage`, `myWorkCommentPage` for what waits on you.
 
 #### Starting new sessions, and opening them in Claude Desktop
 
@@ -481,7 +481,7 @@ Everything corntchap sends into an agent's context is counted, so you can see it
 
 Each send is added to a per-day counter by cook, pot, kind and name (the `usage_daily` table, kept 90 days). **This is an estimate**: tokens are `ceil(characters / 4)` of the text corntchap sends. It is not what the agent uses: corntchap cannot see the agent's own prompts, reasoning or model usage.
 
-See it in the console on the Cooks page (a "Tokens sent (7 days)" line, and a Usage section in each cook card with a per-day bar row and its top three tools), or ask for the `usage_report` tool (`usageReport(project?, cook?, days?)`): totals, per day, per cook, and the top tools and wake reasons. A person sees their own cooks (super-admins all; an orchestrator also the usage in the pots they own), a cook sees itself, and a cook granted `manage` sees its owner's view.
+See it in the console on the Cooks page (a "Tokens sent (7 days)" line, and a Usage section in each cook card with a per-day bar row and its top three tools), or ask for the `usage_report` tool (`usageReport(project?, cook?, days?)`): totals, per day, and the top tools and wake reasons (narrow it to one cook with `cook`), and the `usage_by_cook` tool (`usageCookPage(project?, days?, q?, page?)`, also what the console lists) for the per-cook breakdown: the biggest receivers first, a page at a time. A person sees their own cooks (super-admins all; an orchestrator also the usage in the pots they own), a cook sees itself, and a cook granted `manage` sees its owner's view.
 
 ## Mobile app
 

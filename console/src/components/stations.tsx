@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import type { ActivityView, StationView } from "@corntchap/api";
 import { Activity, AppWindow, ChevronDown, Hourglass, Loader2, Play, SquareTerminal, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { useProc, useProcCall } from "@/lib/data";
+import { useProcCall } from "@/lib/data";
+import type { ListSource } from "@/lib/listbox";
+import { useActivitySource, usePotsSource, useStationsSource } from "@/lib/sources";
+import { useStoreValue } from "@/lib/use-store-value";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useOpenTask } from "@/lib/nav";
@@ -12,7 +15,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { VirtualCombobox } from "@/components/ui/virtual-combobox";
+import { VirtualList } from "@/components/ui/virtual-list";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,6 +30,7 @@ import {
 import { cn } from "@/lib/utils";
 import { IdChip, LabelChip, RepoChip } from "./bits";
 import { StationLink } from "./station-link";
+import { listFooter, loadMore, type MoreMode } from "./list-footer";
 
 const RUNTIME: Record<string, string> = {
   opencode: "OpenCode",
@@ -62,19 +67,21 @@ const activityLine = (a: ActivityView) => {
   return `${a.tool}${what ? ` ${what}` : ""}`;
 };
 
-/** What the station's agent last did (from its hooks): a one-line summary, expandable to the recent list with checkpoints. */
+/**
+ * What the station's agent last did (from its hooks): a one-line summary, and the rest of its recent calls with
+ * checkpoints in a dialog (paged, virtualized).
+ */
 function StationActivity({ station, now }: { station: StationView; now: number }) {
   const [open, setOpen] = useState(false);
-  const { data } = useProc("activityList", { project: station.project, station: station.id, limit: 15 }, { refetchMs: 15000 });
-  const list = data ?? [];
-  const last = list[0];
+  const activity = useActivitySource(station.project, { station: station.id });
+  const last = activity.items[0];
   if (!last) return null;
   return (
     <div className="mt-1.5 text-[11.5px]">
       <button
         type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
         className="flex w-full items-center gap-1.5 rounded-md text-left text-muted-foreground hover:text-foreground focus-visible:text-foreground"
       >
         <Activity className="size-3.5 shrink-0" aria-hidden="true" />
@@ -82,32 +89,62 @@ function StationActivity({ station, now }: { station: StationView; now: number }
           {activityLine(last)}
         </span>
         <span className="shrink-0 font-mono text-[10.5px]">{fmtAgo(last.at, now)}</span>
-        <ChevronDown className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-180")} aria-hidden="true" />
+        <ChevronDown className="size-3.5 shrink-0 -rotate-90" aria-hidden="true" />
       </button>
-      {open && (
-        <ul className="mt-1 space-y-1 border-l border-border pl-2.5">
-          {list.map((a) => (
-            <li key={a.seq} className="flex items-baseline gap-2">
-              <span className="min-w-0 flex-1 truncate font-mono" title={a.files.length > 0 ? a.files.join("\n") : (a.summary ?? "")}>
-                {activityLine(a)}
-                {a.count > 1 && <span className="text-muted-foreground"> x{a.count}</span>}
-              </span>
-              {a.checkpoint && (
-                <code className="shrink-0 rounded bg-muted px-1 font-mono text-[10.5px]" title={`Checkpoint ${a.checkpoint}: restore a file with git restore --source ${a.checkpoint} -- <path>`}>
-                  {a.checkpoint.slice(0, 7)}
-                </code>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="flex max-h-[80dvh] flex-col sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Recent activity</DialogTitle>
+            <DialogDescription className="font-mono text-[11.5px]">{station.label ?? station.directory ?? station.session}</DialogDescription>
+          </DialogHeader>
+          <div className="h-[60dvh] min-h-0">
+            <VirtualList
+              items={activity.items}
+              itemKey={(a) => a.seq}
+              scroll="own"
+              onEndReached={() => {
+                if (activity.hasNextPage && !activity.isFetchingNextPage) activity.fetchNextPage();
+              }}
+              footer={listFooter(activity)}
+              itemClassName="border-b border-border/60 py-1.5 text-[12px] last:border-b-0"
+              aria-label="Recent activity"
+              renderItem={(a) => (
+                <div className="flex items-baseline gap-2">
+                  <span className="min-w-0 flex-1 truncate font-mono" title={a.files.length > 0 ? a.files.join("\n") : (a.summary ?? "")}>
+                    {activityLine(a)}
+                    {a.count > 1 && <span className="text-muted-foreground"> x{a.count}</span>}
+                  </span>
+                  {a.checkpoint && (
+                    <code className="shrink-0 rounded bg-muted px-1 font-mono text-[10.5px]" title={`Checkpoint ${a.checkpoint}: restore a file with git restore --source ${a.checkpoint} -- <path>`}>
+                      {a.checkpoint.slice(0, 7)}
+                    </code>
+                  )}
+                  <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{fmtAgo(a.at, now)}</span>
+                </div>
               )}
-              <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{fmtAgo(a.at, now)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
 /** A cook's registered agent sessions. Registration happens in the CLI; the console shows and removes them. */
-export function StationList({ stations, cook, kind }: { stations: StationView[]; cook?: string; kind?: string | null }) {
+export function StationList({
+  source,
+  cook,
+  kind,
+  more = "scroll",
+}: {
+  /** The cook's stations as a paged read (`useStationsSource`). */
+  source: ListSource<StationView>;
+  cook?: string;
+  kind?: string | null;
+  /** `"scroll"` for the page's last list, `"button"` (a "Show more" button) for one with more below it. */
+  more?: MoreMode;
+}) {
+  const list = source;
   const call = useProcCall();
   const now = useNow();
   const [removing, setRemoving] = useState<StationView | null>(null);
@@ -152,24 +189,29 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
   }
 
   const canStart = kind === "claude-code" && !!cook;
-  const startable = stations.filter((s) => !!s.directory);
+  // a session can start where one of the stations loaded has a folder (more may load as the list is read)
+  const startable = list.items.some((s) => !!s.directory) || list.hasNextPage;
 
   return (
     <div className="space-y-3">
       {canStart && (
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" className="max-sm:w-full" disabled={startable.length === 0} onClick={() => setStarting(true)}>
+          <Button variant="outline" className="max-sm:w-full" disabled={!startable} onClick={() => setStarting(true)}>
             <Play /> Start a session
           </Button>
-          {startable.length === 0 && (
+          {!startable && !list.isLoading && (
             <span className="text-[12px] text-muted-foreground">
               Register a session first: run <code className="font-mono text-[11.5px]">corntchap-cli station start</code> or <code className="font-mono text-[11.5px]">station scan</code> in the repo.
             </span>
           )}
         </div>
       )}
-      {canStart && <StartSessionDialog open={starting} onOpenChange={setStarting} cook={cook} stations={startable} />}
-      {stations.length === 0 ? (
+      {canStart && <StartSessionDialog open={starting} onOpenChange={setStarting} cook={cook} />}
+      {list.isLoading && list.items.length === 0 ? (
+        <p role="status" className="text-[12.5px] text-muted-foreground">
+          Loading stations…
+        </p>
+      ) : list.items.length === 0 ? (
         <p className="text-[12.5px] text-muted-foreground">
           No stations yet. Run <code className="font-mono text-[11.5px]">corntchap-cli station scan</code> in a repo to register this cook’s sessions.
         </p>
@@ -178,11 +220,19 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
           <p className="text-[12px] text-muted-foreground">
             The fire wakes each station’s session directly, so work resumes where it left off. The main station <Star className="inline size-3 align-[-1px]" aria-hidden="true" /> answers messages and mentions in its pot.
           </p>
-          <ul className="space-y-2">
-            {stations.map((s) => {
+          <VirtualList<StationView>
+            items={list.items}
+            itemKey={(s) => s.id}
+            scroll="window"
+            onEndReached={loadMore(list, more)}
+            footer={listFooter(list, more)}
+            itemClassName="pb-2"
+            defaultItemHeight={120}
+            aria-label="Stations"
+            renderItem={(s) => {
               const where = s.label ?? s.directory ?? s.session;
               return (
-                <li key={s.id} className={cn("rounded-xl border bg-muted/40 px-3.5 py-3 text-[12.5px]", s.main ? "border-primary/50" : "border-border")}>
+                <div className={cn("rounded-xl border bg-muted/40 px-3.5 py-3 text-[12.5px]", s.main ? "border-primary/50" : "border-border")}>
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-mono text-[12px] font-medium" title={s.directory ?? where}>
@@ -248,10 +298,10 @@ export function StationList({ stations, cook, kind }: { stations: StationView[];
                   <p className="mt-1.5 font-mono text-[10.5px] text-muted-foreground">
                     {s.last_woken_at ? `woken ${fmtAgo(s.last_woken_at, now)}` : "never woken yet"}
                   </p>
-                </li>
+                </div>
               );
-            })}
-          </ul>
+            }}
+          />
         </>
       )}
       <AlertDialog open={!!removing} onOpenChange={(o) => !o && !busy && setRemoving(null)}>
@@ -285,25 +335,35 @@ function StartSessionDialog({
   open,
   onOpenChange,
   cook,
-  stations,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   cook: string;
-  stations: StationView[];
 }) {
   const call = useProcCall();
-  const pots = [...new Set(stations.map((s) => s.project))];
-  const [pot, setPot] = useState(pots[0] ?? "");
+  const [pot, setPot] = useState("");
   const [directory, setDirectory] = useState("");
   const [task, setTask] = useState("");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const potQuery = useStoreValue("");
+  const dirQuery = useStoreValue("");
 
-  const activePot = pots.includes(pot) ? pot : (pots[0] ?? "");
-  const inPot = stations.filter((s) => s.project === activePot);
-  const dirs = [...new Set([...inPot.filter((s) => s.main), ...inPot].map((s) => s.directory!))];
-  const activeDir = dirs.includes(directory) ? directory : (dirs[0] ?? "");
+  // the pot: the one picked, else where the cook's newest station with a folder is
+  const newest = useStationsSource({ cook, kind: "session", enabled: open });
+  const firstPot = newest.items.find((s) => !!s.directory)?.project ?? "";
+  const activePot = pot || firstPot;
+  // only the pots where the cook has a session station (a folder to start in)
+  const pots = usePotsSource({ cook, q: potQuery.value, enabled: open });
+  // the folders: where the cook has a station in that pot, the main station's first (as far as they are loaded)
+  const inPot = useStationsSource({ project: activePot, cook, kind: "session", q: dirQuery.value, enabled: open && !!activePot });
+  const dirs = useMemo<ListSource<StationView>>(() => {
+    const seen = new Set<string>();
+    const withDir = inPot.items.filter((s) => !!s.directory);
+    const items = [...withDir.filter((s) => s.main), ...withDir].filter((s) => (seen.has(s.directory!) ? false : !!seen.add(s.directory!)));
+    return { ...inPot, items };
+  }, [inPot]);
+  const activeDir = directory || (dirQuery.value ? "" : (dirs.items[0]?.directory ?? ""));
 
   const t = task.trim();
   const p = prompt.trim();
@@ -346,33 +406,35 @@ function StartSessionDialog({
           </DialogHeader>
           <div className="space-y-1.5">
             <Label htmlFor="start-pot" className="label-caps">Pot</Label>
-            <Select value={activePot} onValueChange={setPot}>
-              <SelectTrigger id="start-pot" size="sm" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {pots.map((x) => (
-                  <SelectItem key={x} value={x}>
-                    {x}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <VirtualCombobox<(typeof pots.items)[number]>
+              id="start-pot"
+              label="Pot"
+              source={pots}
+              onQuery={potQuery.set}
+              itemKey={(x) => x.key}
+              itemText={(x) => x.key}
+              value={activePot || null}
+              onChange={(v) => {
+                setPot(v ?? "");
+                setDirectory("");
+              }}
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="start-dir" className="label-caps">Folder</Label>
-            <Select value={activeDir} onValueChange={setDirectory}>
-              <SelectTrigger id="start-dir" size="sm" className="w-full font-mono text-[12px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {dirs.map((d) => (
-                  <SelectItem key={d} value={d} className="font-mono text-[12px]">
-                    {d}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <VirtualCombobox<StationView>
+              id="start-dir"
+              label="Folder"
+              placeholder={dirs.isLoading ? "Loading…" : "No station with a folder in this pot"}
+              source={dirs}
+              onQuery={dirQuery.set}
+              itemKey={(x) => x.directory!}
+              itemText={(x) => x.directory!}
+              renderItem={(x) => <span className="block truncate font-mono text-[12px]">{x.directory}</span>}
+              value={activeDir || null}
+              onChange={(v) => setDirectory(v ?? "")}
+              className="font-mono text-[12px]"
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="start-task" className="label-caps">Task (optional)</Label>
@@ -402,29 +464,26 @@ function StartSessionDialog({
 }
 
 /** A cook's cloud runs, newest first: one station per Claude routine run, Devin or Coder session, webhook or GitHub-comment run. */
-export function CloudRunList({
-  stations,
-  hasMore = false,
-  loadingMore = false,
-  onMore,
-}: {
-  stations: StationView[];
-  /** More runs than the ones given exist (`cloudRunPage`); `onMore` reads the next page. */
-  hasMore?: boolean;
-  loadingMore?: boolean;
-  onMore?: () => void;
-}) {
+export function CloudRunList({ source, more = "scroll" }: { source: ListSource<StationView>; more?: MoreMode }) {
   const now = useNow();
-  const runs = stations;
-  if (runs.length === 0) {
+  const list = source;
+  if (list.items.length === 0) {
     return <p className="text-[12.5px] text-muted-foreground">No cloud runs yet. Each wake of a cloud target opens one, and what the run does is attributed to it.</p>;
   }
   return (
-    <ul className="space-y-2">
-      {runs.map((s) => {
+    <VirtualList<StationView>
+      items={list.items}
+      itemKey={(s) => s.id}
+      scroll="window"
+      onEndReached={loadMore(list, more)}
+      footer={listFooter(list, more)}
+      itemClassName="pb-2"
+      defaultItemHeight={110}
+      aria-label="Cloud runs"
+      renderItem={(s) => {
         const live = !s.ended_at;
         return (
-          <li key={s.id} className="rounded-xl border border-border bg-muted/40 px-3.5 py-3 text-[12.5px]">
+          <div className="rounded-xl border border-border bg-muted/40 px-3.5 py-3 text-[12.5px]">
             <div className="flex items-start gap-2">
               <p className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium">
                 <StationLink label={s.label ?? s.session} url={s.session_url} title={s.session_url ?? s.id} />
@@ -457,17 +516,9 @@ export function CloudRunList({
               started {fmtAgo(s.created_at, now)}
               {s.ended_at && ` · ended ${fmtAgo(s.ended_at, now)}`}
             </p>
-          </li>
+          </div>
         );
-      })}
-      {hasMore && (
-        <li className="flex justify-center pt-1">
-          <Button type="button" variant="outline" size="sm" disabled={loadingMore} onClick={onMore}>
-            {loadingMore && <Loader2 className="animate-spin" />}
-            Show older runs
-          </Button>
-        </li>
-      )}
-    </ul>
+      }}
+    />
   );
 }

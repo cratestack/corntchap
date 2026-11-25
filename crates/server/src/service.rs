@@ -165,6 +165,7 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
   'open_items', (select count(*) from items i where i.task_id = t.id and not i.done),
   'total_items', (select count(*) from items i where i.task_id = t.id),
   'menu', (select m.key from menus m where m.id = t.menu_id),
+  'menu_name', (select m.name from menus m where m.id = t.menu_id),
   'result', t.result, 'created_at', t.created_at, 'updated_at', t.updated_at,
   'pr', (select jsonb_build_object('repo', x.repo, 'number', x.number, 'url', x.url, 'state', x.state,
       'draft', x.draft, 'checks', x.checks, 'review', x.review, 'conflict', x.mergeable = 'false',
@@ -490,6 +491,7 @@ pub async fn pot_page(
     p: &Principal,
     q: Option<&str>,
     team: Option<&str>,
+    cook: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<(Vec<Value>, Option<String>)> {
     let paging = crate::paging::paging(
@@ -501,11 +503,18 @@ pub async fn pot_page(
     )?;
     let q = q.map(str::trim).filter(|q| !q.is_empty());
     let team = team.map(str::trim).filter(|t| !t.is_empty());
+    // a cook is seen as `stations::page` sees it: a cook you act for, or one in a pot of a team you own
+    let who = crate::admin::acting_or_self(db, p).await?;
     let sql = format!(
         "select {}, array[pr.key] from projects pr where {}
            and ($3::text is null or position(lower($3) in lower(pr.key || ' ' || pr.name)) > 0)
            and ($4::text is null or pr.team_id = (select id from teams where name = $4))
            and ($5::text is null or pr.key > $5)
+           and ($7::text is null or exists (select 1 from stations st join principals a on a.id = st.agent_id
+                where st.project_id = pr.id and st.kind = 'session' and a.name = $7
+                  and ($8 or a.id = $10 or a.owner_id = $10
+                       or ($9 and exists (select 1 from team_members m
+                                          where m.team_id = pr.team_id and m.principal_id = $10 and m.role = 'owner')))))
          order by pr.key limit $6",
         project_summary_sql(),
         access_sql("$1", "$2"),
@@ -517,6 +526,13 @@ pub async fn pot_page(
         .bind(team)
         .bind(paging.key(0))
         .bind(paging.fetch())
+        .bind(
+            cook.map(|c| c.trim().to_lowercase())
+                .filter(|c| !c.is_empty()),
+        )
+        .bind(who.is_super_admin())
+        .bind(who.can_orchestrate())
+        .bind(who.id)
         .fetch_all(db)
         .await?;
     let rows = rows

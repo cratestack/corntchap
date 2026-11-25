@@ -552,6 +552,75 @@ async fn views_page_saved_and_run() {
     assert_eq!(st, 400);
     let (st, _) = w.proc(&w.bob, "viewPage", json!({"project": "PAY"})).await;
     assert_eq!(st, 404);
+
+    // the chips narrow a view on top of its own condition, server side, across pages
+    sqlx::query("update tasks set labels = array['urgent'], repos = array['api'] where project_id = (select id from projects where key = 'PAY') and number in (3, 5)")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    sqlx::query("update tasks set owner_id = (select id from principals where name = 'alice') where project_id = (select id from projects where key = 'PAY') and number in (3, 4)")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    let ids =
+        |v: &Value| -> Vec<String> { v["items"].as_array().unwrap().iter().map(id).collect() };
+    let chips = |extra: Value| {
+        let mut a = json!({"project": "PAY", "key": "two", "page": {"limit": 100}});
+        for (k, v) in extra.as_object().unwrap() {
+            a[k] = v.clone();
+        }
+        a
+    };
+    // "two" is priority >= 1: tasks PAY-2..PAY-5
+    let v = w.ok(&w.alice, "viewPage", chips(json!({}))).await;
+    assert_eq!(ids(&v), ["PAY-5", "PAY-4", "PAY-3", "PAY-2"], "{v}");
+    for (extra, want) in [
+        (json!({"label": "urgent"}), vec!["PAY-5", "PAY-3"]),
+        (json!({"repo": "api"}), vec!["PAY-5", "PAY-3"]),
+        (json!({"owner": "me"}), vec!["PAY-4", "PAY-3"]),
+        (json!({"owner": "-"}), vec!["PAY-5", "PAY-2"]),
+        (json!({"owner": "alice", "label": "urgent"}), vec!["PAY-3"]),
+        (json!({"menu": "-", "q": "T4"}), vec!["PAY-5"]),
+        (json!({"q": "pay-2"}), vec!["PAY-2"]),
+        (
+            json!({"bucket": "ready", "label": "urgent"}),
+            vec!["PAY-5", "PAY-3"],
+        ),
+        (json!({"bucket": "done"}), vec![]),
+        (json!({"holder": "nobody-here"}), vec![]),
+    ] {
+        let v = w.ok(&w.alice, "viewPage", chips(extra.clone())).await;
+        assert_eq!(ids(&v), want, "{extra}: {v}");
+    }
+    let (st, _) = w
+        .proc(&w.alice, "viewPage", chips(json!({"bucket": "nope"})))
+        .await;
+    assert_eq!(st, 400);
+    // a cursor is for the chips it was minted under
+    let first = w
+        .ok(
+            &w.alice,
+            "viewPage",
+            json!({"project": "PAY", "key": "two", "label": "urgent", "page": {"limit": 1}}),
+        )
+        .await;
+    assert_eq!(ids(&first), ["PAY-5"]);
+    let next = w
+        .ok(
+            &w.alice,
+            "viewPage",
+            json!({"project": "PAY", "key": "two", "label": "urgent", "page": {"limit": 1, "cursor": first["nextCursor"]}}),
+        )
+        .await;
+    assert_eq!(ids(&next), ["PAY-3"]);
+    let (st, _) = w
+        .proc(
+            &w.alice,
+            "viewPage",
+            json!({"project": "PAY", "key": "two", "page": {"cursor": first["nextCursor"]}}),
+        )
+        .await;
+    assert_eq!(st, 400);
 }
 
 #[tokio::test]
@@ -745,6 +814,9 @@ async fn pass_conversations_newest_first_with_unread_counts() {
         ]
     );
     assert_eq!(v["items"][0]["kind"], "user");
+    // the newest with dave is alice's own, the newest with carol is carol's
+    assert_eq!(v["items"][0]["last_mine"], true, "{v}");
+    assert_eq!(v["items"][1]["last_mine"], false, "{v}");
     assert!(
         v["items"][0]["last_seq"].as_i64().unwrap() > v["items"][1]["last_seq"].as_i64().unwrap()
     );
@@ -1164,6 +1236,173 @@ async fn my_work_pages_by_section() {
     }
 }
 
+/// A task row carries its menu's name, so a card needs no other read to show the chip.
+#[tokio::test]
+async fn task_rows_carry_the_menu_name() {
+    let w = world().await;
+    let (st, v) = w
+        .app
+        .post(
+            &w.alice,
+            "/projects/PAY/menus",
+            json!({"name": "Hardening"}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let key = v["key"].as_str().unwrap().to_string();
+    w.task(&w.alice, "PAY", "on it", json!({"menu": key})).await;
+    w.task(&w.alice, "PAY", "off it", json!({})).await;
+    let page = w
+        .ok(
+            &w.alice,
+            "taskPage",
+            json!({"project": "PAY", "bucket": "all", "page": {}}),
+        )
+        .await;
+    let rows = page["items"].as_array().unwrap();
+    let on = rows.iter().find(|t| t["title"] == "on it").unwrap();
+    assert_eq!(on["menu"], json!(key), "{page}");
+    assert_eq!(on["menu_name"], "Hardening", "{page}");
+    let off = rows.iter().find(|t| t["title"] == "off it").unwrap();
+    assert!(off["menu_name"].is_null(), "{page}");
+}
+
+/// What waits on me, a page at a time: questions to me, the unaddressed pool, reviews named to me or to the team.
+#[tokio::test]
+async fn my_work_pages_what_waits_on_me() {
+    let w = world().await;
+    // three questions to alice (oldest first), one to dave, one to the pot's people
+    for (to, title) in [
+        (Some("alice"), "q1"),
+        (Some("alice"), "q2"),
+        (Some("alice"), "q3"),
+        (Some("dave"), "not hers"),
+        (None, "anyone?"),
+    ] {
+        let body = match to {
+            Some(t) => json!({"title": title, "to": t}),
+            None => json!({"title": title}),
+        };
+        let (st, v) = w.app.post(&w.carol, "/projects/PAY/questions", body).await;
+        assert_eq!(st, 200, "{v}");
+    }
+    let q = w
+        .walk_plain(&w.alice, "myWorkQuestionPage", json!({}), 2, id)
+        .await;
+    assert_eq!(q.len(), 3, "{q:?}");
+    let titles = w
+        .ok(&w.alice, "myWorkQuestionPage", json!({"page": {}}))
+        .await;
+    let titles: Vec<&str> = titles["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["q1", "q2", "q3"]);
+    // the pool is the unaddressed one, people only, not the asker's own
+    let pool = w
+        .ok(
+            &w.alice,
+            "myWorkQuestionPage",
+            json!({"pool": true, "page": {}}),
+        )
+        .await;
+    assert_eq!(pool["items"].as_array().unwrap().len(), 1, "{pool}");
+    assert_eq!(pool["items"][0]["title"], "anyone?");
+    let own = w
+        .ok(
+            &w.carol,
+            "myWorkQuestionPage",
+            json!({"pool": true, "page": {}}),
+        )
+        .await;
+    assert!(own["items"].as_array().unwrap().is_empty(), "{own}");
+    // the summary's count is the true number, not the length of its capped lists
+    let summary = w.ok(&w.alice, "myWork", json!({})).await;
+    assert_eq!(summary["counts"]["waiting"], 3, "{summary}");
+
+    // reviews: one named to carol, one asked of anyone on the team
+    let t = w.task(&w.alice, "PAY", "reviewed", json!({})).await;
+    for body in [
+        json!({"reviewer": "carol", "note": "named"}),
+        json!({"note": "anyone"}),
+    ] {
+        let (st, v) = w
+            .app
+            .post(&w.alice, &format!("/tasks/{t}/review-request"), body)
+            .await;
+        assert_eq!(st, 200, "{v}");
+    }
+    let rev = w
+        .ok(&w.carol, "myWorkReviewPage", json!({"page": {"limit": 1}}))
+        .await;
+    assert_eq!(rev["items"][0]["note"], "named", "named to me first: {rev}");
+    let all = w
+        .walk_plain(&w.carol, "myWorkReviewPage", json!({}), 1, id)
+        .await;
+    assert_eq!(all.len(), 2, "{all:?}");
+    // the requester is not asked for the team's review
+    let mine = w
+        .ok(&w.alice, "myWorkReviewPage", json!({"page": {}}))
+        .await;
+    assert!(mine["items"].as_array().unwrap().is_empty(), "{mine}");
+    // a person has no unanswered comments, a cook's page is its own
+    let c = w
+        .ok(&w.alice, "myWorkCommentPage", json!({"page": {}}))
+        .await;
+    assert!(c["items"].as_array().unwrap().is_empty(), "{c}");
+    // a pot is checked, a cursor of another list or a forged one is a 400
+    for (name, args, want) in [
+        (
+            "myWorkQuestionPage",
+            json!({"project": "NOPE", "page": {}}),
+            404,
+        ),
+        (
+            "myWorkReviewPage",
+            json!({"project": "NOPE", "page": {}}),
+            404,
+        ),
+        (
+            "myWorkQuestionPage",
+            json!({"page": {"cursor": forged("created_at,id:pool", &["2026-05-01 10:11:12+00", "x"])}}),
+            400,
+        ),
+        (
+            "myWorkQuestionPage",
+            json!({"page": {"cursor": forged("created_at,id:mine", &["yesterday", "x"])}}),
+            400,
+        ),
+        (
+            "myWorkReviewPage",
+            json!({"page": {"cursor": forged("rn,created_at,id:reviews", &["x", "2026-05-01 10:11:12+00", "y"])}}),
+            400,
+        ),
+        (
+            "myWorkCommentPage",
+            json!({"page": {"cursor": forged("created_at,id:comments", &["x", "y"])}}),
+            400,
+        ),
+    ] {
+        let (st, v) = w.proc(&w.alice, name, args.clone()).await;
+        assert_eq!(st, want, "{name} {args}: {v}");
+    }
+    // a key that is a number but not an int (the flag is compared as a bigint) is no 500
+    let (st, v) = w
+        .proc(
+            &w.carol,
+            "myWorkReviewPage",
+            json!({"page": {"cursor": forged("rn,created_at,id:reviews", &["9999999999", "2026-05-01 10:11:12+00", "00000000-0000-0000-0000-000000000000"])}}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    assert!(
+        v["items"].as_array().unwrap().is_empty(),
+        "past the end: {v}"
+    );
+}
+
 /// Someone removed from a team no longer sees the questions they asked in its pot.
 #[tokio::test]
 async fn my_questions_follow_pot_access() {
@@ -1181,6 +1420,22 @@ async fn my_questions_follow_pot_access() {
         .ok(&w.carol, "questionMinePage", json!({"page": {}}))
         .await;
     assert_eq!(seen["items"].as_array().unwrap().len(), 1);
+    let v = w
+        .ok(
+            &w.carol,
+            "questionMinePage",
+            json!({"project": "pay", "page": {}}),
+        )
+        .await;
+    assert_eq!(v["items"].as_array().unwrap().len(), 1, "{v}");
+    let v = w
+        .ok(
+            &w.carol,
+            "questionMinePage",
+            json!({"project": "OPS", "page": {}}),
+        )
+        .await;
+    assert!(v["items"].as_array().unwrap().is_empty(), "{v}");
     sqlx::query("delete from team_members where principal_id = (select id from principals where name = 'carol')")
         .execute(&w.app.state.db)
         .await

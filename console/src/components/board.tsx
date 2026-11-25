@@ -38,7 +38,7 @@ export function BoardView({
   onOpen,
   onNew,
   bare,
-  menus,
+  showMenu,
 }: {
   loading: boolean;
   columns: BoardColumns;
@@ -47,7 +47,7 @@ export function BoardView({
   onNew: () => void;
   /** Nothing on the board at all. */
   bare: boolean;
-  menus: Record<string, string>;
+  showMenu: boolean;
 }) {
   const groups = columns.groups;
   // five columns side by side only when all five fit; otherwise one column at a time under a tab strip. Measured on
@@ -65,9 +65,9 @@ export function BoardView({
       {loading || allFit === null ? (
         <BoardSkeleton across={allFit ? BOARD_COLS.length : 1} />
       ) : allFit ? (
-        <WideBoard columns={columns} selected={selected} onOpen={onOpen} menus={menus} groups={groups} />
+        <WideBoard columns={columns} selected={selected} onOpen={onOpen} showMenu={showMenu} groups={groups} />
       ) : (
-        <TabBoard columns={columns} selected={selected} onOpen={onOpen} menus={menus} />
+        <TabBoard columns={columns} selected={selected} onOpen={onOpen} showMenu={showMenu} />
       )}
     </div>
   );
@@ -85,13 +85,13 @@ function WideBoard({
   groups,
   selected,
   onOpen,
-  menus,
+  showMenu,
 }: {
   columns: BoardColumns;
   groups: BoardColumns["groups"];
   selected: string | null;
   onOpen: (id: string) => void;
-  menus: Record<string, string>;
+  showMenu: boolean;
 }) {
   return (
     <div role="region" aria-label="Board" className="grid grid-cols-5 items-start gap-3.5">
@@ -123,7 +123,7 @@ function WideBoard({
             }
             onEndReached={more?.has ? more.load : undefined}
             footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
-            renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
+            renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} showMenu={showMenu} />}
           />
         );
       })}
@@ -193,12 +193,12 @@ function TabBoard({
   columns,
   selected,
   onOpen,
-  menus,
+  showMenu,
 }: {
   columns: BoardColumns;
   selected: string | null;
   onOpen: (id: string) => void;
-  menus: Record<string, string>;
+  showMenu: boolean;
 }) {
   const groups = columns.groups;
   const [params, setParams] = useSearchParams();
@@ -306,7 +306,7 @@ function TabBoard({
           }
           onEndReached={more?.has ? more.load : undefined}
           footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[active]} />}
-          renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
+          renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} showMenu={showMenu} />}
         />
       </div>
     </div>

@@ -1017,8 +1017,18 @@ async fn usage_follows_the_cooks_and_pots_you_own() {
         .await
         .unwrap();
     }
-    let seen = |r: Value| -> Vec<String> {
-        let mut v: Vec<String> = ok(&r, "usage")["by_cook"]
+    let seen = |token: String| async move {
+        let r = app
+            .http
+            .post(format!("{}/api/v2/$procs/usageCookPage", app.base))
+            .bearer_auth(token)
+            .json(&json!({"page": {"limit": 200}}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+        let v: Value = r.json().await.unwrap();
+        let mut v: Vec<String> = v["items"]
             .as_array()
             .unwrap()
             .iter()
@@ -1028,25 +1038,13 @@ async fn usage_follows_the_cooks_and_pots_you_own() {
         v.sort();
         v
     };
-    assert_eq!(
-        seen(app.mcp(o, "usage_report", json!({})).await),
-        ["mk", "oc"]
-    );
-    assert_eq!(
-        seen(app.mcp(&w.orch2, "usage_report", json!({})).await),
-        ["pc"]
-    );
-    assert_eq!(
-        seen(app.mcp(&w.mem, "usage_report", json!({})).await),
-        ["mk"]
-    );
-    assert_eq!(
-        seen(app.mcp(&w.root, "usage_report", json!({})).await),
-        ["mk", "oc", "pc"]
-    );
+    assert_eq!(seen(o.to_string()).await, ["mk", "oc"]);
+    assert_eq!(seen(w.orch2.to_string()).await, ["pc"]);
+    assert_eq!(seen(w.mem.to_string()).await, ["mk"]);
+    assert_eq!(seen(w.root.to_string()).await, ["mk", "oc", "pc"]);
     // a demoted owner's pot visibility goes with the role
     app.set_role("orch", "member").await;
-    assert_eq!(seen(app.mcp(o, "usage_report", json!({})).await), ["oc"]);
+    assert_eq!(seen(o.to_string()).await, ["oc"]);
 }
 
 #[tokio::test]
