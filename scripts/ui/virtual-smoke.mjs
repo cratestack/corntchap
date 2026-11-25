@@ -10,6 +10,7 @@ import { chromium, serve } from "./storybook.mjs";
 const MAX_ROWS = 200;
 const { base, close } = await serve();
 
+const OPTION = "[role=option]";
 const desktop = { width: 1280, height: 800 };
 const phone = { width: 390, height: 844 };
 // [story id, viewport, text of the last row (a regex, matched against a whole element's text)]
@@ -25,6 +26,18 @@ const CASES = [
   ["console-board--phone", phone, /^PAY-9996$/],
   ["ui-virtualtable--ten-thousand-rows", desktop, /^Row 10000$/, "tbody tr[data-index]"],
   ["ui-virtualtable--phone", phone, /^Row 10000$/],
+  // the pickers: 10,000 options each, in a listbox (`role=option` rows) in a popover, sheet, dialog or under a field
+  ["ui-virtuallistbox--ten-thousand", desktop, /^cook-10000$/, OPTION],
+  ["ui-virtuallistbox--phone", phone, /^cook-10000$/, OPTION],
+  ["ui-virtualcombobox--ten-thousand", desktop, /^cook-10000$/, OPTION],
+  ["ui-virtualcombobox--phone", phone, /^cook-10000$/, OPTION],
+  ["ui-virtualmenu--ten-thousand", desktop, /^cook-10000$/, OPTION],
+  ["ui-virtualcommand--ten-thousand", desktop, /^cook-10000$/, OPTION],
+  ["console-taginput--ten-thousand-suggestions", desktop, /^label-10000$/, OPTION],
+  ["console-mentionpopup--ten-thousand-chefs", desktop, /^cook-10000$/, OPTION],
+  ["console-listpage--ten-thousand", desktop, /^cook-10000$/],
+  ["console-listpage--phone", phone, /^cook-10000$/],
+  ["console-listpage--table", desktop, /^cook-10000$/, "tbody tr[data-index]"],
 ];
 
 const browser = await chromium.launch();
@@ -54,6 +67,82 @@ for (const [id, viewport, last, rowSelector = "[role=listitem]"] of CASES) {
   await page.close();
 }
 
+// ---- the pickers' keyboard: End then ArrowUp x5 lands on option 9995 (of 10,000), which is rendered and in view; Enter picks it ----
+
+const check = (name, ok, detail) => {
+  if (!ok) failed++;
+  console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? " " + detail : ""}`);
+};
+
+const KEYBOARD = [
+  ["ui-virtuallistbox--ten-thousand", desktop],
+  ["ui-virtualcombobox--ten-thousand", desktop],
+  ["ui-virtualcombobox--phone", phone],
+  ["ui-virtualmenu--ten-thousand", desktop],
+  ["ui-virtualmenu--not-searchable", desktop, 6],
+  ["ui-virtualcommand--ten-thousand", desktop],
+  ["ui-virtualcommand--phone", phone],
+  ["console-taginput--ten-thousand-suggestions", desktop],
+  ["console-mentionpopup--ten-thousand-chefs", desktop],
+];
+for (const [id, viewport, total = 10000] of KEYBOARD) {
+  const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=${id}&viewMode=story`);
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  await page.waitForTimeout(300);
+  const combo = page.locator("[role=combobox]").first();
+  const target = (await combo.count()) ? combo : page.locator("[role=listbox]").first();
+  await target.focus();
+  await page.keyboard.press("End");
+  await page.waitForTimeout(500);
+  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowUp");
+  await page.waitForTimeout(400);
+  const at = await page.evaluate(() => {
+    const el = document.querySelector("[role=combobox], [role=listbox]");
+    const opt = document.getElementById(el.getAttribute("aria-activedescendant") ?? "");
+    const scroller = opt?.closest("[data-virtuoso-scroller]");
+    if (!opt || !scroller) return null;
+    const o = opt.getBoundingClientRect();
+    const s = scroller.getBoundingClientRect();
+    return { text: opt.textContent, selectedRole: opt.getAttribute("role"), inView: o.top >= s.top - 1 && o.bottom <= s.bottom + 1 };
+  });
+  const want = String(total - 5);
+  check(`keyboard ${id}: End then ArrowUp x5 reaches option ${want}, rendered and in view`, !!at && at.selectedRole === "option" && at.inView && at.text.includes(want), JSON.stringify(at));
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(300);
+  const picked = await page.locator("[data-testid=picked]").textContent();
+  check(`keyboard ${id}: Enter picks it`, picked.includes(want), `picked=${picked}`);
+  check(`keyboard ${id}: no page errors`, errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
+// ---- the pickers' query: typing "999" into a server-backed picker leaves only the options that match ----
+
+for (const [id, viewport] of [
+  ["ui-virtualcombobox--paged", desktop],
+  ["ui-virtualmenu--paged", desktop],
+  ["ui-virtualcommand--paged", desktop],
+  ["console-taginput--paged", desktop],
+  ["console-mentionpopup--paged", desktop],
+  ["ui-virtualcombobox--paged", phone],
+]) {
+  const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=${id}&viewMode=story`);
+  await page.waitForSelector(OPTION, { timeout: 20000 });
+  const input = page.locator("[role=combobox]").first();
+  // (the mention story's text ends in "@" with the caret after it, and focusing keeps the caret there: "999" completes it)
+  await input.fill("999");
+  await page.waitForTimeout(900);
+  const texts = await page.locator(OPTION).allTextContents();
+  check(`query ${id}@${viewport.width}: "999" leaves only matching options`, texts.length > 0 && texts.length < MAX_ROWS && texts.every((t) => t.includes("999")), `options=${texts.length} first=${texts[0]}`);
+  check(`query ${id}@${viewport.width}: no page errors`, errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
 // ---- VirtualThread ----
 
 const SCROLLER = "[data-virtuoso-scroller]";
@@ -63,11 +152,6 @@ const topOf = (page, seq) =>
     const el = document.querySelector(`[data-seq="${seq}"]`);
     return el ? el.getBoundingClientRect().top - document.querySelector(sel).getBoundingClientRect().top : null;
   }, [SCROLLER, seq]);
-const check = (name, ok, detail) => {
-  if (!ok) failed++;
-  console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? " " + detail : ""}`);
-};
-
 for (const [label, viewport] of [["desktop", desktop], ["phone", phone]]) {
   const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
   const errors = [];

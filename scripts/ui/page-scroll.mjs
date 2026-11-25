@@ -1,5 +1,5 @@
 // Page-scroll check: every page scrolls vertically with the window at every screen size. For each Storybook story that
-// stands for a page (board, activity feed, users table, the pass, the virtualized lists) at 320, 375, 768, 1280 and 1920 px:
+// stands for a page (board, activity feed, users table, the pass, the virtualized lists, ListPage, FilterBar) at 320, 375, 768, 1280 and 1920 px:
 //   - the page does not scroll horizontally (document.scrollingElement.scrollWidth <= clientWidth);
 //   - no element has a vertical scroller of its own (computed overflow-y auto/scroll holding more than it shows),
 //     except the chat thread (`[role=log]`), which is anchored to the bottom by design;
@@ -31,6 +31,13 @@ const PAGES = [
   ["ui-virtuallist--window-scroll", "[role=listitem]"],
   ["ui-virtualgroupedlist--window-scroll", "[role=listitem]"],
   ["ui-virtualcolumn--ten-thousand-mixed-heights", "[role=listitem]"],
+  ["console-listpage--ten-thousand", "[role=listitem]"],
+  ["console-listpage--table", "tr[data-index], [role=listitem]"],
+  ["console-listpage--window-scroll", "[role=listitem]"],
+  ["console-listpage--paged", "[role=listitem]"],
+  ["console-listpage--loading", "[aria-busy=true]"],
+  ["console-listpage--empty", "text=No cooks yet."],
+  ["console-filterbar--ten-thousand", "[role=search]"],
 ];
 // Inner scrollers that are the point: the chat thread (VirtualThread inside the pass's `role=log`).
 const ALLOWED = "[role=log], [role=log] *";
