@@ -5,3 +5,4 @@ dist
 .eslintcache
 src/gen/
 screenshots/
+storybook-static

@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { ChangeView } from "@corntchap/api";
 import {
   Trash2,
@@ -39,6 +39,7 @@ import { Avatar } from "./bits";
 import { useOpenMemory, useOpenTask } from "@/lib/nav";
 import { fileHref } from "@/lib/files";
 import { questionLink } from "./questions";
+import { VirtualGroupedList, type VirtualGroup } from "./ui/virtual-grouped-list";
 
 interface Described {
   icon: LucideIcon;
@@ -218,14 +219,19 @@ function FileLink({ e }: { e: ChangeView }) {
   );
 }
 
-const Item = memo(function Item({ e, compact, now, last }: { e: ChangeView; compact: boolean; now: number; last: boolean }) {
+/** The relative time of an event. It subscribes to the clock itself, so a tick re-renders only these few spans and not the rows. */
+function Ago({ at }: { at: string }) {
+  return <>{fmtAgo(at, useNow())}</>;
+}
+
+const Item = memo(function Item({ e, compact, last }: { e: ChangeView; compact: boolean; last: boolean }) {
   const open = useOpenTask();
   const openMemory = useOpenMemory();
   const d = describe(e);
   const Icon = d.icon;
   const actor = e.actor ?? (e.kind.startsWith("forge.") ? "GitHub" : "the kitchen");
   return (
-    <li className={cn("relative flex gap-3", compact ? "py-2.5" : "py-3")}>
+    <div className={cn("relative flex gap-3", compact ? "py-2.5" : "py-3")}>
       {!compact && !last && <span aria-hidden="true" className="absolute top-11 -bottom-1 left-3 w-px bg-border" />}
       <span className="relative mt-0.5 self-start">
         <Avatar name={actor} className="size-6 text-[11px]" />
@@ -291,13 +297,37 @@ const Item = memo(function Item({ e, compact, now, last }: { e: ChangeView; comp
           {d.detail && <span className="text-muted-foreground"> · {d.detail}</span>}
         </p>
         <p className="mt-1 font-mono text-[10.5px] text-muted-foreground md:mt-0.5">
-          {fmtAgo(e.at, now)}
+          <Ago at={e.at} />
           {!compact && <span> · {e.project}</span>}
         </p>
       </div>
-    </li>
+    </div>
   );
 });
+
+/** One event of the full feed, and whether it closes its day (the timeline line stops there). */
+interface Row {
+  e: ChangeView;
+  last: boolean;
+}
+
+/** Newest-first events cut into days; a group's `label` is the ISO time of its first event, shown by `DayLabel`. */
+function byDay(shown: ChangeView[]): { groups: VirtualGroup[]; rows: Row[] } {
+  const groups: VirtualGroup[] = [];
+  const rows: Row[] = [];
+  shown.forEach((e, i) => {
+    const day = dayKey(e.at);
+    const first = i === 0 || day !== dayKey(shown[i - 1]!.at);
+    if (first) groups.push({ key: day, label: e.at, count: 0 });
+    groups[groups.length - 1]!.count++;
+    rows.push({ e, last: i === shown.length - 1 || day !== dayKey(shown[i + 1]!.at) });
+  });
+  return { groups, rows };
+}
+
+function DayLabel({ at }: { at: string }) {
+  return <>{dayLabel(at, useNow())}</>;
+}
 
 export function EventFeed({
   events,
@@ -310,41 +340,43 @@ export function EventFeed({
   limit?: number;
   empty?: string;
 }) {
-  const now = useNow();
   const shown = useMemo(() => {
     const newestFirst = [...events].reverse();
     return limit ? newestFirst.slice(0, limit) : newestFirst;
   }, [events, limit]);
+  const days = useMemo(() => (compact ? null : byDay(shown)), [compact, shown]);
   if (shown.length === 0) {
     return <p className="py-6 text-center text-muted-foreground">{empty ?? "Nothing has happened yet."}</p>;
   }
-  if (compact) {
+  if (!days) {
+    // the compact feeds hold a handful of events (8 to 14): no need to virtualize
     return (
       <ul className="divide-y divide-border">
         {shown.map((e, i) => (
-          <Item key={e.seq} e={e} compact now={now} last={i === shown.length - 1} />
+          <li key={e.seq}>
+            <Item e={e} compact last={i === shown.length - 1} />
+          </li>
         ))}
       </ul>
     );
   }
-  // full feed: a timeline, with a heading per day
+  // full feed: a timeline with a sticky heading per day, virtualized against the page scroll
   return (
-    <ul>
-      {shown.map((e, i) => {
-        const day = dayKey(e.at);
-        const head = i === 0 || day !== dayKey(shown[i - 1]!.at);
-        return (
-          <Fragment key={e.seq}>
-            {head && (
-              <li className={cn("label-caps border-b border-border pb-2", i === 0 ? "pt-4" : "pt-5")} aria-label={dayLabel(e.at, now)}>
-                {dayLabel(e.at, now)}
-              </li>
-            )}
-            <Item e={e} compact={false} now={now} last={i === shown.length - 1 || day !== dayKey(shown[i + 1]!.at)} />
-          </Fragment>
-        );
-      })}
-    </ul>
+    <VirtualGroupedList
+      scroll="window"
+      aria-label="Activity"
+      groups={days.groups}
+      items={days.rows}
+      itemKey={(r) => r.e.seq}
+      defaultItemHeight={64}
+      stickyClassName="top-[calc(3.5rem+env(safe-area-inset-top)+1px)]! md:top-0!"
+      renderGroup={(g) => (
+        <div className="label-caps border-b border-border bg-card pt-4 pb-2" role="heading" aria-level={3}>
+          <DayLabel at={g.label} />
+        </div>
+      )}
+      renderItem={(r) => <Item e={r.e} compact={false} last={r.last} />}
+    />
   );
 }
 
