@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useStaticSource } from "@/lib/listbox";
 import { useStoreValue } from "@/lib/use-store-value";
@@ -42,6 +43,40 @@ export const Paged: Story = {
     return (
       <>
         <VirtualCombobox<FixturePerson> label="Cook" source={source} onQuery={onQuery} value={value.value} onChange={value.set} defaultOpen {...common} />
+        <PickedLine value={value.value ?? ""} />
+      </>
+    );
+  },
+};
+
+/** Only 200 cooks, 100 ms a page: End asks for pages until the true last row is there, and stays on it. */
+export const PagedShort: Story = {
+  render: function Render() {
+    const few = useMemo(() => people.slice(0, 200), []);
+    const { source, onQuery } = usePagedSource(few, { match: matchPerson, latencyMs: 100 });
+    const value = useStoreValue<string | null>(null);
+    return (
+      <>
+        <VirtualCombobox<FixturePerson> label="Cook" source={source} onQuery={onQuery} value={value.value} onChange={value.set} defaultOpen {...common} />
+        <PickedLine value={value.value ?? ""} />
+      </>
+    );
+  },
+};
+
+const displayed = { ...common, itemText: (p: FixturePerson) => p.display };
+
+/**
+ * The trigger names the pick by its text ("Cook number 9000"), not its key, though that row is not in the loaded page:
+ * the value was restored with `valueText`, and what is picked here is remembered after a search moves the rows on.
+ */
+export const RestoredValue: Story = {
+  render: function Render() {
+    const { source, onQuery } = usePagedSource(people, { match: matchPerson });
+    const value = useStoreValue<string | null>("cook-9000");
+    return (
+      <>
+        <VirtualCombobox<FixturePerson> label="Cook" source={source} onQuery={onQuery} value={value.value} onChange={value.set} valueText={(k) => `Cook number ${k.slice(5)}`} {...displayed} />
         <PickedLine value={value.value ?? ""} />
       </>
     );

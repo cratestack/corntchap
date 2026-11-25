@@ -37,6 +37,14 @@ export interface VirtualCommandProps {
   empty?: ReactNode;
 }
 
+interface FlatRow {
+  item: CommandItem;
+  /** `section:item`: unique across sections. */
+  key: string;
+  section: string;
+}
+const rowId = (r: FlatRow) => r.key;
+
 /**
  * A command palette over sections of rows that may be thousands long and paged: one virtualized listbox with sticky
  * section headings and a single active row across them (Arrow keys, Home/End, Enter). A dialog with its own scroller.
@@ -53,10 +61,14 @@ export function VirtualCommand({ open, onOpenChange, title, description, placeho
         .filter((s) => s.items.length > 0),
     [sections, query],
   );
-  const flat = useMemo(() => shown.flatMap((s) => s.items), [shown]);
+  // each row with an id that is its own across sections: the active row follows it when a section above it fills in
+  const flat = useMemo<FlatRow[]>(() => shown.flatMap((s) => s.items.map((item) => ({ item, key: `${s.section.id}:${item.id}`, section: s.section.id }))), [shown]);
   const groups = useMemo(() => shown.map((s) => s.items.length), [shown]);
   // Virtuoso keys by position in the list, headings included: a section's heading, then its rows
   const keys = useMemo(() => shown.flatMap((s) => [`section:${s.section.id}`, ...s.items.map((it) => `${s.section.id}:${it.id}`)]), [shown]);
+  const pendingSections = useMemo(() => new Set(sections.filter((s) => s.source.pending).map((s) => s.id)), [sections]);
+  // a row is not pickable while its own section's rows are the previous query's; with no rows, while any is
+  const pending = useCallback((row: FlatRow | undefined) => (row ? pendingSections.has(row.section) : pendingSections.size > 0), [pendingSections]);
   const loading = sections.some((s) => s.source.isLoading);
   const fetching = sections.some((s) => s.source.isFetchingNextPage);
   const failed = sections.find((s) => !!s.source.error && s.source.items.length === 0)?.source.error;
@@ -69,16 +81,16 @@ export function VirtualCommand({ open, onOpenChange, title, description, placeho
   }, [shown, sections]);
 
   const pick = useCallback(
-    (item: CommandItem) => {
+    ({ item }: FlatRow) => {
       onOpenChange(false);
       item.onSelect();
     },
     [onOpenChange],
   );
-  const lb = useListbox<CommandItem>({ items: flat, onPick: pick, idPrefix: made, resetOn: query, onEscape: () => onOpenChange(false), fetchMore: loadMore });
+  const lb = useListbox<FlatRow>({ items: flat, onPick: pick, idPrefix: made, resetOn: query, onEscape: () => onOpenChange(false), fetchMore: loadMore, pending, itemId: rowId });
 
   const binding = useMemo<ListboxBinding>(
-    () => ({ id: listId, multiple: false, activeIndex: lb.active, optionId: lb.optionId, isSelected: () => false, isDisabled: () => false, pick: lb.pick, hover: (i) => lb.setActive(i, { scroll: false }) }),
+    () => ({ id: listId, multiple: false, activeIndex: lb.highlight, optionId: lb.optionId, isSelected: () => false, isDisabled: () => false, pick: lb.pick, hover: (i) => lb.setActive(i, { scroll: false }) }),
     [listId, lb],
   );
   const footer = useMemo(
@@ -141,9 +153,10 @@ export function VirtualCommand({ open, onOpenChange, title, description, placeho
               context={context}
               components={listboxComponents}
               computeItemKey={(position) => keys[position] ?? position}
-              groupContent={(gi) => <p className="label-caps bg-popover px-3.5 pt-2 pb-1">{shown[gi]?.section.heading}</p>}
+              // the heading is not an option: inside the listbox it is presentation (a listbox owns only options)
+              groupContent={(gi) => <p role="presentation" className="label-caps bg-popover px-3.5 pt-2 pb-1">{shown[gi]?.section.heading}</p>}
               itemContent={(index) => {
-                const it = flat[index];
+                const it = flat[index]?.item;
                 return it ? (
                   <>
                     {it.icon && <span className="flex shrink-0 items-center text-muted-foreground [&_svg]:size-4">{it.icon}</span>}
@@ -155,6 +168,7 @@ export function VirtualCommand({ open, onOpenChange, title, description, placeho
               defaultItemHeight={40}
               increaseViewportBy={{ top: 200, bottom: 400 }}
               endReached={loadMore}
+              rangeChanged={lb.onRendered}
               className="scrollbar-thin overscroll-contain"
             />
           </div>

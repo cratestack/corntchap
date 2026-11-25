@@ -49,14 +49,14 @@ export function VirtualListbox<T>({ source, itemKey, renderItem, label, selected
   const loadMore = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) fetchNextPage();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
-  const own = useListbox<T>({ items, onPick: (item, i) => onPick?.(item, i), isDisabled, idPrefix: made, fetchMore: loadMore });
+  const own = useListbox<T>({ items, onPick: (item, i) => onPick?.(item, i), isDisabled, idPrefix: made, fetchMore: loadMore, pending: source.pending });
   const lb = controller ?? own;
 
   const binding = useMemo<ListboxBinding>(
     () => ({
       id: listId,
       multiple,
-      activeIndex: lb.active,
+      activeIndex: lb.highlight,
       optionId: lb.optionId,
       isSelected: (item) => !!selected?.(item as T),
       isDisabled: (item) => !!isDisabled?.(item as T),
@@ -108,17 +108,18 @@ export function VirtualListbox<T>({ source, itemKey, renderItem, label, selected
 
   const tall = listboxHeight(items.length + (footer ? 1 : 0), rows);
   return (
-    <div className={cn("min-h-0 w-full", tall, className)} aria-busy={source.isLoading || undefined}>
+    <div className={cn("min-h-0 w-full transition-opacity", tall, source.pending && "opacity-60", className)} aria-busy={source.isLoading || source.pending || undefined}>
       <Virtuoso<T, VirtualContext>
         ref={lb.listRef as never}
         data={items as T[]}
         context={context}
         components={listboxComponents}
         computeItemKey={(index, item) => itemKey(item, index)}
-        itemContent={(index, item) => renderItem(item, { index, selected: !!selected?.(item), active: index === lb.active })}
+        itemContent={(index, item) => renderItem(item, { index, selected: !!selected?.(item), active: index === lb.highlight })}
         defaultItemHeight={ROW_REM * 16}
         increaseViewportBy={{ top: 200, bottom: 400 }}
         endReached={loadMore}
+        rangeChanged={lb.onRendered}
         className="scrollbar-thin overscroll-contain"
       />
     </div>

@@ -29,7 +29,38 @@ export const TenThousandSuggestions: Story = {
 
 export const Phone: Story = { ...TenThousandSuggestions, globals: { viewport: { value: "phone", isRotated: false } } };
 
-/** The server pages and searches the options. */
+/**
+ * How it sits in a form (new task, task sheet): nothing is highlighted until an arrow key is pressed (the first
+ * ArrowDown highlights the first option), Enter on an empty field submits the form, Enter after an arrow takes the
+ * option, and Tab moves on to the next field without adding anything more.
+ */
+export const InsideForm: Story = {
+  render: function Render() {
+    const tags = useStoreValue<string[]>([]);
+    const submits = useStoreValue(0);
+    return (
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submits.set(submits.value + 1);
+        }}
+      >
+        <TagInput label="Labels" value={tags.value} onChange={tags.set} suggestions={labels} normalize={lower} placeholder="add a label" autoFocus />
+        <input aria-label="Next field" placeholder="the next field" className="h-9 w-full rounded-md border border-input bg-card px-3 text-sm" />
+        <button type="submit" className="h-9 rounded-md border border-input px-3 text-sm">
+          Save
+        </button>
+        <PickedLine value={tags.value.join(",")} />
+        <p className="text-[12.5px] text-muted-foreground">
+          Submitted: <span data-testid="submits" className="font-mono text-foreground">{submits.value}</span>
+        </p>
+      </form>
+    );
+  },
+};
+
+/** The server pages and searches the options (250 ms a request): an Enter typed before the answer waits for it. */
 export const Paged: Story = {
   render: function Render() {
     const tags = useStoreValue<string[]>([]);

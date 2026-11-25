@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { ChevronDown, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ListSource } from "@/lib/listbox";
+import { useLabelCache } from "@/lib/label-cache";
 import { VirtualMenu, type VirtualMenuProps } from "./ui/virtual-menu";
 
 export interface FacetOption {
@@ -19,6 +20,11 @@ export interface FacetDef {
   source: ListSource<FacetOption>;
   /** The search text typed in the facet's menu, for a server-backed source; without it the options are filtered here. */
   onQuery?: ((q: string) => void) | undefined;
+  /**
+   * The label of a value whose option is not in the loaded source (it came back from the URL, or the server search
+   * moved on). Without it the chip shows the label the value had when it was last seen or picked, else the value.
+   */
+  valueText?: ((value: string) => string | undefined) | undefined;
   /** Several values (`values[id]` is a list); default one. */
   multiple?: boolean | undefined;
   /** Whether the menu has a search box (default true). */
@@ -100,42 +106,55 @@ export function FilterBar({ q, onQ, facets, values, onChange, onClear, searchPla
           className="h-8 w-full rounded-full border border-input bg-card pr-3 pl-8 text-base outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 md:text-[13px]"
         />
       </label>
-      {facets.map((f) => {
-        const chosen = toList(values[f.id]);
-        const text = (v: string) => f.source.items.find((o) => o.value === v)?.label ?? v;
-        const shown = chosen.length === 0 ? undefined : chosen.length === 1 ? text(chosen[0]!) : `${text(chosen[0]!)} +${chosen.length - 1}`;
-        return (
-          <FilterChip<FacetOption>
-            key={f.id}
-            label={f.label}
-            icon={f.icon}
-            value={shown}
-            disabled={f.disabled}
-            onClear={() => onChange({ [f.id]: f.multiple ? [] : "" })}
-            source={f.source}
-            onQuery={f.onQuery}
-            itemText={(o) => `${o.label} ${o.hint ?? ""}`}
-            itemKey={(o) => o.value}
-            searchable={f.searchable}
-            mode={f.multiple ? "multi" : "single"}
-            selected={(o) => chosen.includes(o.value)}
-            onSelect={(o) =>
-              onChange({ [f.id]: f.multiple ? (chosen.includes(o.value) ? chosen.filter((v) => v !== o.value) : [...chosen, o.value]) : chosen.includes(o.value) ? "" : o.value })
-            }
-            renderItem={(o) => (
-              <span className="flex min-w-0 items-baseline gap-2">
-                <span className="truncate">{o.label}</span>
-                {o.hint && <span className="shrink-0 text-[12px] text-muted-foreground">{o.hint}</span>}
-              </span>
-            )}
-          />
-        );
-      })}
+      {facets.map((f) => (
+        <Facet key={f.id} f={f} chosen={toList(values[f.id])} onChange={onChange} />
+      ))}
       {anyActive && (
         <button type="button" onClick={onClear} className="h-8 rounded-full px-2.5 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
           Clear filters
         </button>
       )}
     </div>
+  );
+}
+
+/** One facet's chip: it keeps the labels of what was picked, so the chip still names them when their rows are gone. */
+function Facet({ f, chosen, onChange }: { f: FacetDef; chosen: string[]; onChange: FilterBarProps["onChange"] }) {
+  const { labels, remember } = useLabelCache();
+  const { items } = f.source;
+  useEffect(() => {
+    const want = new Set(chosen);
+    const seen: [string, string][] = [];
+    for (let i = 0; i < items.length && seen.length < want.size; i++) if (want.has(items[i]!.value)) seen.push([items[i]!.value, items[i]!.label]);
+    if (seen.length) remember(seen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosen.join("\u0000"), items, remember]);
+  const text = (v: string) => items.find((o) => o.value === v)?.label ?? f.valueText?.(v) ?? labels[v] ?? v;
+  const shown = chosen.length === 0 ? undefined : chosen.length === 1 ? text(chosen[0]!) : `${text(chosen[0]!)} +${chosen.length - 1}`;
+  return (
+    <FilterChip<FacetOption>
+      label={f.label}
+      icon={f.icon}
+      value={shown}
+      disabled={f.disabled}
+      onClear={() => onChange({ [f.id]: f.multiple ? [] : "" })}
+      source={f.source}
+      onQuery={f.onQuery}
+      itemText={(o) => `${o.label} ${o.hint ?? ""}`}
+      itemKey={(o) => o.value}
+      searchable={f.searchable}
+      mode={f.multiple ? "multi" : "single"}
+      selected={(o) => chosen.includes(o.value)}
+      onSelect={(o) => {
+        remember([[o.value, o.label]]);
+        onChange({ [f.id]: f.multiple ? (chosen.includes(o.value) ? chosen.filter((v) => v !== o.value) : [...chosen, o.value]) : chosen.includes(o.value) ? "" : o.value });
+      }}
+      renderItem={(o) => (
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate">{o.label}</span>
+          {o.hint && <span className="shrink-0 text-[12px] text-muted-foreground">{o.hint}</span>}
+        </span>
+      )}
+    />
   );
 }

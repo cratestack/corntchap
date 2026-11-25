@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router";
 
 /** One filter in the URL: `string` (`?owner=ada`), `list` (`?label=a,b`, comma-joined) or `bool` (`?mine=1`). */
@@ -21,7 +21,7 @@ const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.
 /**
  * A page's filters held in the URL, so a filtered list can be linked, reloaded and navigated back to. Reads the
  * search params through `schema`; `set(patch)` changes some of them (a value equal to its default drops the
- * param), `clear()` drops them all (and the search text), `q` / `setQ` are the search text. Every change replaces
+ * param; an empty one, when the default is not empty, is written as `?name=` so the default does not come back), `clear()` drops them all (and the search text), `q` / `setQ` are the search text. Every change replaces
  * the history entry (typing a search is not a page to go back through).
  */
 export function useUrlFilters<S extends UrlFilterSchema>(schema: S) {
@@ -40,60 +40,63 @@ export function useUrlFilters<S extends UrlFilterSchema>(schema: S) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
+  // The router's functional `setSearchParams` hands over the params of the last render, so two changes in one handler
+  // (`set({ kind })` then `setQ("")`) would each start from the same old URL and the first would be lost. The latest
+  // URL this hook wrote is kept here until the router renders it; each change starts from that.
+  const latest = useRef(params);
+  useEffect(() => {
+    latest.current = params;
+  }, [params]);
+  const write = useCallback(
+    (edit: (next: URLSearchParams) => void) => {
+      const next = new URLSearchParams(latest.current);
+      edit(next);
+      latest.current = next;
+      setParams(next, { replace: true });
+    },
+    [setParams],
+  );
+
   const set = useCallback(
     (patch: Partial<UrlFilterValues<S>>) =>
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          for (const [key, value] of Object.entries(patch)) {
-            const def = schema[key];
-            if (!def || value === undefined) continue;
-            const name = def.param ?? key;
-            if (def.type === "list") {
-              const list = value as string[];
-              if (list.length === 0 || sameList(list, def.default ?? [])) next.delete(name);
-              else next.set(name, list.join(","));
-            } else if (def.type === "bool") {
-              if (value === (def.default ?? false)) next.delete(name);
-              else next.set(name, value ? "1" : "0");
-            } else if (value === "" || value === (def.default ?? "")) next.delete(name);
-            else next.set(name, value as string);
-          }
-          return next;
-        },
-        { replace: true },
-      ),
+      write((next) => {
+        for (const [key, value] of Object.entries(patch)) {
+          const def = schema[key];
+          if (!def || value === undefined) continue;
+          const name = def.param ?? key;
+          if (def.type === "list") {
+            const list = value as string[];
+            if (sameList(list, def.default ?? [])) next.delete(name);
+            // empty, but not the default: say so (`?label=`), or the default would come back
+            else next.set(name, list.join(","));
+          } else if (def.type === "bool") {
+            if (value === (def.default ?? false)) next.delete(name);
+            else next.set(name, value ? "1" : "0");
+          } else if (value === (def.default ?? "")) next.delete(name);
+          else next.set(name, value as string);
+        }
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [setParams],
+    [write],
   );
 
   const clear = useCallback(
     () =>
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete(Q_PARAM);
-          for (const [key, def] of Object.entries(schema)) next.delete(def.param ?? key);
-          return next;
-        },
-        { replace: true },
-      ),
+      write((next) => {
+        next.delete(Q_PARAM);
+        for (const [key, def] of Object.entries(schema)) next.delete(def.param ?? key);
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [setParams],
+    [write],
   );
 
   const setQ = useCallback(
     (q: string) =>
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (q) next.set(Q_PARAM, q);
-          else next.delete(Q_PARAM);
-          return next;
-        },
-        { replace: true },
-      ),
-    [setParams],
+      write((next) => {
+        if (q) next.set(Q_PARAM, q);
+        else next.delete(Q_PARAM);
+      }),
+    [write],
   );
 
   const q = params.get(Q_PARAM) ?? "";

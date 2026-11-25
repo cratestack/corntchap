@@ -27,8 +27,10 @@ export interface TagInputProps {
 }
 
 /**
- * Chips input. Enter, comma or Tab commits: the highlighted option once you have moved to it with the arrow keys,
- * else the typed text (with `allowNew: false`, the first option). Backspace on an empty field removes the last chip.
+ * Chips input. Enter or comma commits: the highlighted option once you have moved to it with the arrow keys (the first
+ * ArrowDown highlights the first option; until then nothing is highlighted and Enter on an empty field is the form's),
+ * else the typed text (with `allowNew: false`, the first option). Tab moves focus on, and leaving the field adds the
+ * text typed. Backspace on an empty field removes the last chip.
  * Options (`suggestions` or a paged `source`) show in a virtualized listbox under the field while it has focus.
  */
 export function TagInput({ value, onChange, placeholder, suggestions, source, onQuery, allowNew = true, autoFocus = false, normalize = (s) => s, label, className }: TagInputProps) {
@@ -58,6 +60,8 @@ export function TagInput({ value, onChange, placeholder, suggestions, source, on
     for (const p of parts) if (!next.includes(p)) next.push(p);
     if (next.length !== value.length) onChange(next);
     setText("");
+    // what is listed changes with every tag: the next pick starts from the first row again, nothing highlighted
+    lb.reset();
   };
   const setText = (t: string) => {
     text.set(t);
@@ -66,34 +70,29 @@ export function TagInput({ value, onChange, placeholder, suggestions, source, on
   };
 
   const open = configured && focused.value && !dismissed.value && (options.items.length > 0 || options.isLoading || !!options.error);
-  const lb = useListbox<string>({ items: options.items, onPick: (s) => commit(s), idPrefix: made, resetOn: q, onEscape: () => dismissed.set(true) });
+  const lb = useListbox<string>({ items: options.items, onPick: (s) => commit(s), idPrefix: made, resetOn: q, onEscape: () => dismissed.set(true), requireEngage: true, pending: options.pending });
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.nativeEvent.isComposing) return;
     const typed = text.value.trim();
-    const option = open && lb.engaged ? options.items[lb.active] : undefined;
-    if (e.key === "Enter" || e.key === "Tab") {
-      if (option !== undefined) {
+    if (e.key === "Enter") {
+      // an option the arrow keys moved to; else the typed text (or, when only options can be added, the first one)
+      if (open && lb.engaged) {
         e.preventDefault();
-        commit(option);
+        lb.commit();
         return;
       }
       if (typed) {
-        const first = open ? options.items[lb.active] : undefined;
-        if (allowNew) {
-          e.preventDefault();
-          commit(typed);
-          return;
+        e.preventDefault();
+        if (allowNew) commit(typed);
+        else if (open) {
+          lb.commit(0);
         }
-        if (first !== undefined) {
-          e.preventDefault();
-          commit(first);
-          return;
-        }
-        if (e.key === "Enter") e.preventDefault();
       }
+      // nothing typed and no option chosen: Enter is the form's
       return;
     }
+    // Tab is never taken: focus moves on, and the blur adds the text typed
     if (e.key === ",") {
       if (typed && (allowNew || options.items.includes(typed))) {
         e.preventDefault();

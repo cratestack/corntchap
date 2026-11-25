@@ -4,7 +4,7 @@ import { Flame, Plus, Soup } from "lucide-react";
 import { matchText, staticSource } from "@/lib/listbox";
 import { useStoreValue } from "@/lib/use-store-value";
 import { VirtualCommand, type CommandItem, type CommandSection } from "./virtual-command";
-import { PickedLine, errorSource, loadingSource, makePeople, makeLabels, usePagedSource } from "./virtual.fixtures";
+import { PickedLine, errorSource, loadingSource, makePeople, makeLabels, useLateItems, usePagedSource } from "./virtual.fixtures";
 
 const people = makePeople(10_000);
 const labels = makeLabels(10_000);
@@ -79,6 +79,34 @@ export const Paged: Story = {
           sections={[
             { id: "do", heading: "Do", source: staticSource(i.actions), filter: "client" },
             { id: "cooks", heading: "Cooks", source, filter: "server" },
+          ]}
+        />
+      </div>
+    );
+  },
+};
+
+/** A "Recent" section that answers 1.5 s late, above the others: the active row stays on the same item when it arrives. */
+export const LateSection: Story = {
+  render: function Render() {
+    const picked = useStoreValue("");
+    const query = useStoreValue("");
+    const i = useStory(picked.set);
+    const recent = useLateItems(useMemo(() => i.cooks.slice(0, 3).map((c) => ({ ...c, id: `recent-${c.id}`, label: `Recent ${c.label}` })), [i]), 1500);
+    const recents = useMemo(() => staticSource(recent), [recent]);
+    return (
+      <div className="min-h-dvh bg-background p-8">
+        <PickedLine value={picked.value} />
+        <VirtualCommand
+          open
+          onOpenChange={() => {}}
+          title="Search or jump"
+          query={query.value}
+          onQuery={query.set}
+          sections={[
+            { id: "recent", heading: "Recent", source: recents, filter: "client" },
+            { id: "do", heading: "Do", source: staticSource(i.actions), filter: "client" },
+            { id: "cooks", heading: "Cooks", source: staticSource(i.cooks), filter: "client" },
           ]}
         />
       </div>

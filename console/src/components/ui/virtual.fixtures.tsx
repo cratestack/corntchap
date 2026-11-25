@@ -310,6 +310,8 @@ export function usePagedSource<T>(all: readonly T[], opts: { pageSize?: number; 
         isFetchingNextPage: loading && applied === query,
         error: null,
         total: rows.length,
+        // until the server answers the text typed, the rows are the previous search's
+        pending: applied !== query,
       };
       return { source, query, loads };
     };
@@ -352,6 +354,31 @@ export function usePagedSource<T>(all: readonly T[], opts: { pageSize?: number; 
   }, [all, pageSize, latencyMs]);
   const { source, query, loads } = useSyncExternalStore(store.subscribe, store.get);
   return { source, onQuery: store.onQuery, query, loads };
+}
+
+/**
+ * `items` after `ms` (empty before): a section of a palette that answers late, so the rows of the sections after it
+ * move down when it arrives.
+ */
+export function useLateItems<T>(items: readonly T[], ms: number): readonly T[] {
+  const store = useMemo(() => {
+    let current: readonly T[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const listeners = new Set<() => void>();
+    return {
+      get: () => current,
+      subscribe: (l: () => void) => {
+        listeners.add(l);
+        timer ??= setTimeout(() => {
+          current = items;
+          listeners.forEach((f) => f());
+        }, ms);
+        return () => void listeners.delete(l);
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return useSyncExternalStore(store.subscribe, store.get, store.get);
 }
 
 /** What the story's picker last chose, for a test (or a person) to read. */

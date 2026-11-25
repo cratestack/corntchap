@@ -1,9 +1,10 @@
-import { useCallback, useId, useMemo, type Key, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, type Key, type ReactNode } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsPhone } from "@/lib/media";
 import { useListbox, type ListSource } from "@/lib/listbox";
 import { useStoreValue } from "@/lib/use-store-value";
+import { useLabelCache } from "@/lib/label-cache";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "./sheet";
 import { VirtualListbox } from "./virtual-listbox";
@@ -110,7 +111,7 @@ export function Picker<T>({
   const loadMore = useCallback(() => {
     if (visible.hasNextPage && !visible.isFetchingNextPage) visible.fetchNextPage();
   }, [visible]);
-  const lb = useListbox<T>({ items: visible.items, onPick: pickItem, isDisabled, idPrefix: made, resetOn: q, onEscape: () => setOpen(false), fetchMore: loadMore });
+  const lb = useListbox<T>({ items: visible.items, onPick: pickItem, isDisabled, idPrefix: made, pending: visible.pending, resetOn: q, onEscape: () => setOpen(false), fetchMore: loadMore });
 
   const row = (item: T, s: PickerRowState) => (
     <>
@@ -195,6 +196,11 @@ interface ComboboxBase<T> {
   itemKey: (item: T, index: number) => Key;
   /** The text of an option: what the trigger shows when it is picked, and what client-side search matches. */
   itemText: (item: T) => string;
+  /**
+   * The text of a value whose row is not in the loaded source (restored from the URL, or the server search moved on):
+   * what the trigger shows for it. Without it, the text it had when it was last seen or picked, else the key.
+   */
+  valueText?: ((key: string) => string | undefined) | undefined;
   /** How a row looks; default `itemText`. */
   renderItem?: ((item: T, state: PickerRowState) => ReactNode) | undefined;
   /** The accessible name, and the sheet's title on phones. */
@@ -226,14 +232,30 @@ export type VirtualComboboxProps<T> = VirtualComboboxSingle<T> | VirtualCombobox
  * may be thousands. A Radix popover on desktop, a bottom sheet on phones. `ui/select.tsx` stays for fixed enums.
  */
 export function VirtualCombobox<T>(props: VirtualComboboxProps<T>) {
-  const { source, onQuery, itemKey, itemText, renderItem, label, placeholder, nullOption, trigger = "field", disabled, id, defaultOpen, className } = props;
+  const { source, onQuery, itemKey, itemText, valueText, renderItem, label, placeholder, nullOption, trigger = "field", disabled, id, defaultOpen, className } = props;
   const keyOf = useCallback((item: T, index: number) => String(itemKey(item, index)), [itemKey]);
   const chosen: string[] = props.multiple ? props.value : props.value === null ? [] : [props.value];
 
   const rowsSource = useMemo<ListSource<Row<T>>>(() => (nullOption ? { ...source, items: [NULL_OPTION, ...source.items] } : source), [source, nullOption]);
   const isNull = (r: Row<T>): r is typeof NULL_OPTION => r === NULL_OPTION;
 
+  const cache = useLabelCache();
+  // the text of the chosen values is kept as their rows pass by, so the trigger has it once the rows are gone
+  const { remember } = cache;
+  useEffect(() => {
+    const want = new Set(chosen);
+    const seen: [string, string][] = [];
+    for (let i = 0; i < source.items.length && seen.length < want.size; i++) {
+      const it = source.items[i]!;
+      const k = String(itemKey(it, i));
+      if (want.has(k)) seen.push([k, itemText(it)]);
+    }
+    if (seen.length) remember(seen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosen.join("\u0000"), source.items, itemKey, itemText, remember]);
+
   const onPick = (r: Row<T>) => {
+    if (!isNull(r)) remember([[keyOf(r, 0), itemText(r)]]);
     if (props.multiple) {
       if (isNull(r)) return props.onChange([]);
       const key = keyOf(r, 0);
@@ -248,11 +270,11 @@ export function VirtualCombobox<T>(props: VirtualComboboxProps<T>) {
     if (chosen.length === 0) return null;
     const text = (k: string) => {
       const at = source.items.findIndex((it, i) => String(itemKey(it, i)) === k);
-      return at >= 0 ? itemText(source.items[at]!) : k;
+      return at >= 0 ? itemText(source.items[at]!) : (valueText?.(k) ?? cache.labels[k] ?? k);
     };
     return chosen.length === 1 ? text(chosen[0]!) : `${text(chosen[0]!)} +${chosen.length - 1}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chosen.join("\u0000"), source.items, itemKey, itemText]);
+  }, [chosen.join("\u0000"), source.items, itemKey, itemText, valueText, cache.labels]);
 
   const button = (
     <button

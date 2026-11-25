@@ -60,13 +60,13 @@ export function MentionPopup<T>({ anchor, open, query, source, itemKey, renderIt
   const loadMore = useCallback(() => {
     if (source.hasNextPage && !source.isFetchingNextPage) source.fetchNextPage();
   }, [source]);
-  const lb = useListbox<T>({ items: source.items, onPick, idPrefix: made, onEscape: onClose, fetchMore: loadMore, resetOn: query });
+  const lb = useListbox<T>({ items: source.items, onPick, idPrefix: made, onEscape: onClose, fetchMore: loadMore, resetOn: query, pending: source.pending });
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (!shown) return;
     if (e.key === "Tab" && !e.shiftKey && source.items.length > 0) {
       e.preventDefault();
-      lb.pick(lb.active);
+      lb.commit();
       return;
     }
     lb.onKeyDown(e);
