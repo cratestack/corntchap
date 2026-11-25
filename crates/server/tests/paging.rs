@@ -101,7 +101,7 @@ impl W {
             }
             cursor = v["nextCursor"]
                 .as_str()
-                .or(v["next_cursor"].as_str())
+                .or(v["nextCursor"].as_str())
                 .map(String::from);
             if cursor.is_none() {
                 return seen;
@@ -199,7 +199,7 @@ async fn task_page_walks_every_bucket_once() {
         .collect();
     assert_eq!(prios, vec![3, 3, 2], "highest priority first: {first}");
     assert_eq!(first["total"], 9);
-    assert!(first["next_cursor"].is_string());
+    assert!(first["nextCursor"].is_string());
 
     // done: newest change first, exactly once, total counts all
     let done = w
@@ -238,7 +238,7 @@ async fn task_page_walks_every_bucket_once() {
         vec!["PAY-6", "PAY-5"]
     );
     assert_eq!(tossed["total"], 2);
-    assert!(tossed["next_cursor"].is_null());
+    assert!(tossed["nextCursor"].is_null());
 
     // filters count too
     let v = w
@@ -282,7 +282,7 @@ async fn task_page_walks_every_bucket_once() {
         )
         .await;
     assert_eq!(v["items"].as_array().unwrap().len(), 9);
-    assert!(v["next_cursor"].is_null());
+    assert!(v["nextCursor"].is_null());
     let v = w
         .ok(
             &w.alice,
@@ -300,7 +300,7 @@ async fn task_page_walks_every_bucket_once() {
             page("active", json!({}), json!({"limit": 2})),
         )
         .await;
-    let cursor = active["next_cursor"].as_str().unwrap();
+    let cursor = active["nextCursor"].as_str().unwrap();
     for (bucket, c) in [("done", cursor), ("active", "not-a-cursor")] {
         let (st, v) = w
             .proc(

@@ -39,11 +39,11 @@ procedure projectTasks(project: String, status: String?, label: String?, readyOn
 /// @param repo Only tasks about this repository alias.
 /// @param q Only tasks whose id, title or body contain this text.
 /// @param holder Only tasks held by this cook (the claimed_by name).
-/// @param status Only this board column: ready, claimed, waiting, done or cancelled.
+/// @param status The raw task status: open, claimed, blocked, done or cancelled. With no bucket, the bucket is all.
 /// @param page limit (default 25, at most 200) and the cursor of the previous page.
 procedure taskPage(project: String, bucket: String?, label: String?, menu: String?, owner: String?, repo: String?, q: String?, holder: String?, status: String?, page: CursorPageInput?): TaskPage
   @allow(auth() != null)
-  @mcp(tool: "list_tasks", description: "Tasks in a project, a page at a time: items (with open item counts, bodies and results cut to 280 characters; get_task has them whole), total (all matches) and next_cursor (pass it as page.cursor for the next page). bucket picks the tasks: active (default: ready, claimed and waiting together; priority, then number), ready (claimable now), claimed (live lease), waiting (blocked or waiting on other tasks), done, cancelled (newest change first) or all (every status, newest change first). Filters: label, menu (a key, or - for none), owner (a handle, me, or - for nobody), repo, holder (the claiming cook), q (id, title or body text).")
+  @mcp(tool: "list_tasks", description: "Tasks in a project, a page at a time: items (with open item counts, bodies and results cut to 280 characters; get_task has them whole), total (all matches) and nextCursor (pass it as page.cursor for the next page). bucket is the board column: ready (claimable now), claimed (live lease), waiting (blocked or waiting on other tasks), done, cancelled, active (the default: ready, claimed and waiting together) or all (every status, newest first). status is the raw task status (open, claimed, blocked, done or cancelled); with status and no bucket, bucket is all. readyOnly is gone: use bucket: ready. Filters: label, menu (a key, or - for none), owner (a handle, me, or - for nobody), repo, holder (the claiming cook), q (id, title or body text).")
 
 /// A page of a task's comments, newest first.
 /// @param task Task id, e.g. PAY-42.

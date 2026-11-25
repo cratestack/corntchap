@@ -209,16 +209,18 @@ pub async fn cook_page(
     q: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<(Vec<Value>, Option<String>)> {
+    let days = days.unwrap_or(7).clamp(1, RETAIN_DAYS as i64);
+    let first = Utc::now().date_naive() - Duration::days(days - 1);
+    // the aggregate depends on the window start, which moves at UTC midnight: a cursor minted for
+    // another window is refused (400) rather than repeating or skipping cooks
     let paging = crate::paging::paging(
         page,
-        "-chars,cook",
+        &format!("-chars,cook:{first}"),
         2,
         crate::paging::DEFAULT_LIMIT,
         crate::paging::MAX_LIMIT,
     )?;
     let who = admin::acting_or_self(db, p).await?;
-    let days = days.unwrap_or(7).clamp(1, RETAIN_DAYS as i64);
-    let first = Utc::now().date_naive() - Duration::days(days - 1);
     let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(
         "select jsonb_build_object('cook', x.cook, 'calls', x.calls, 'chars', x.chars, 'tokens', (x.chars + 3) / 4),
                 array[x.chars::text, x.cook]

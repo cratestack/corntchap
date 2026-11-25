@@ -617,8 +617,9 @@ fn bucket_sql(bucket: &str) -> Result<(String, bool)> {
 /// One page of a project's tasks (`taskPage`, the console's board and the `list_tasks` tool).
 /// `bucket` is a board column: `ready`, `claimed`, `waiting` (priority desc, number), `done` or
 /// `cancelled` (newest change first: updated_at desc, number desc), `active` (the first three in
-/// one list, the default) or `all` (every status, newest change first). `status` (a bucket too) and
-/// `holder` (the claiming cook's name) narrow it further. `total` counts every match, all pages together.
+/// one list, the default) or `all` (every status, by number, newest first: immutable, so a walk is
+/// whole whatever happens to the tasks). `status` is the raw task status (open, claimed, blocked, done
+/// or cancelled) and, with no `bucket`, the bucket is `all`. `holder` (the claiming cook's name) narrows it further. `total` counts every match, all pages together.
 #[allow(clippy::too_many_arguments)]
 pub async fn task_page(
     db: &PgPool,
@@ -634,19 +635,29 @@ pub async fn task_page(
     status: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<Value> {
+    let status = status
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    if let Some(s) = &status
+        && !["open", "claimed", "blocked", "done", "cancelled"].contains(&s.as_str())
+    {
+        return invalid("status is open, claimed, blocked, done or cancelled");
+    }
     let bucket = bucket
         .map(|b| b.trim().to_lowercase())
         .filter(|b| !b.is_empty())
-        .unwrap_or_else(|| "active".into());
+        .unwrap_or_else(|| if status.is_some() { "all" } else { "active" }.into());
     let bucket = bucket.as_str();
     let (bucket_pred, active) = bucket_sql(bucket)?;
-    let status = status.map(str::trim).filter(|s| !s.is_empty());
-    let status_pred = match status {
-        Some(s) => bucket_sql(s)?.0,
-        None => "true".to_string(),
+    let status_pred = if status.is_some() {
+        "t.status = $8"
+    } else {
+        "$8::text is null"
     };
     let order = if active {
         "-priority,number"
+    } else if bucket == "all" {
+        "-number"
     } else {
         "-updated_at,-number"
     };
@@ -655,7 +666,7 @@ pub async fn task_page(
     let paging = crate::paging::paging(
         page,
         &order,
-        2,
+        if bucket == "all" { 1 } else { 2 },
         crate::paging::DEFAULT_LIMIT,
         crate::paging::MAX_LIMIT,
     )?;
@@ -699,26 +710,33 @@ pub async fn task_page(
     .bind(repo)
     .bind(q)
     .bind(holder)
+    .bind(status.as_deref())
     .fetch_one(&mut *c)
     .await?;
     let (keys, after, sort) = if active {
         (
             "array[t.priority::text, t.number::text]",
-            "(t.priority < $8::text::bigint or (t.priority = $8::text::bigint and t.number > $9::text::bigint))",
+            "(t.priority < $9::text::bigint or (t.priority = $9::text::bigint and t.number > $10::text::bigint))",
             "t.priority desc, t.number",
+        )
+    } else if bucket == "all" {
+        (
+            "array[t.number::text]",
+            "(t.number < $9::text::bigint and $10::text is null)",
+            "t.number desc",
         )
     } else {
         (
             "array[t.updated_at::text, t.number::text]",
-            "(t.updated_at, t.number) < ($8::text::timestamptz, $9::text::bigint)",
+            "(t.updated_at, t.number) < ($9::text::timestamptz, $10::text::bigint)",
             "t.updated_at desc, t.number desc",
         )
     };
     let sql = format!(
         "select {TASK_JSON} || jsonb_build_object('body', {body}, 'result', {result}), {keys}
          from tasks t join projects pr on pr.id = t.project_id
-         where {filters} and ($8::text is null or {after})
-         order by {sort} limit $10",
+         where {filters} and ($9::text is null or {after})
+         order by {sort} limit $11",
         body = cut_sql("t.body"),
         result = cut_sql("t.result"),
     );
@@ -730,6 +748,7 @@ pub async fn task_page(
         .bind(repo)
         .bind(q)
         .bind(holder)
+        .bind(status.as_deref())
         .bind(paging.key(0))
         .bind(paging.key(1))
         .bind(paging.fetch())
@@ -742,7 +761,7 @@ pub async fn task_page(
     let (items, next) = crate::paging::finish(rows, &paging);
     let mut out = json!({"items": items, "total": total});
     if let Some(n) = next {
-        out["next_cursor"] = json!(n);
+        out["nextCursor"] = json!(n);
     }
     Ok(out)
 }

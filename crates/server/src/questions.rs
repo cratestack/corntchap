@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{Error, Result, invalid},
-    service::{emit, parse_task_ref, project_by_key, task_by_ref},
+    service::{access_sql, emit, parse_task_ref, project_by_key, task_by_ref},
     state::Principal,
     stations,
 };
@@ -774,12 +774,14 @@ pub async fn mine(db: &PgPool, p: &Principal, status: Option<&str>) -> Result<Va
         .unwrap_or_else(|| "all".into());
     let sql = format!(
         "select {QUESTION_JSON} from questions q join projects pr on pr.id = q.project_id
-         where q.asked_by = $1 and ($2 = 'all' or q.status = $2)
-         order by q.status <> 'open', q.created_at desc limit 100"
+         where q.asked_by = $1 and ($2 = 'all' or q.status = $2) and {access}
+         order by q.status <> 'open', q.created_at desc limit 100",
+        access = access_sql("$3", "$1"),
     );
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(p.id)
         .bind(&status)
+        .bind(p.is_super_admin())
         .fetch_all(db)
         .await?;
     Ok(Value::Array(rows))
@@ -812,10 +814,11 @@ pub async fn mine_page(
     let sql = format!(
         "select {QUESTION_JSON}, array[q.created_at::text, q.id::text]
          from questions q join projects pr on pr.id = q.project_id
-         where q.asked_by = $1 and ($2 = 'all' or q.status = $2)
+         where q.asked_by = $1 and ($2 = 'all' or q.status = $2) and {access}
            and ($3::text is null or q.created_at < $3::text::timestamptz
                 or (q.created_at = $3::text::timestamptz and q.id::text collate \"C\" < $4::text collate \"C\"))
-         order by q.created_at desc, q.id desc limit $5"
+         order by q.created_at desc, q.id desc limit $5",
+        access = access_sql("$6", "$1"),
     );
     let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
         .bind(p.id)
@@ -823,6 +826,7 @@ pub async fn mine_page(
         .bind(paging.key(0))
         .bind(paging.key(1))
         .bind(paging.fetch())
+        .bind(p.is_super_admin())
         .fetch_all(db)
         .await?;
     let rows = rows

@@ -955,8 +955,9 @@ async fn files_and_usage() {
         .await;
     assert_eq!(st, 400);
     // a forged key that does not fit its column is a 400, never a 500
-    let forged =
-        cratestack::encode_cursor("-chars,cook", &[Some("seven".into()), Some("x".into())]);
+    let first = chrono::Utc::now().date_naive() - chrono::Duration::days(6);
+    let window = format!("-chars,cook:{first}");
+    let forged = cratestack::encode_cursor(&window, &[Some("seven".into()), Some("x".into())]);
     let (st, _) = w
         .proc(
             &w.alice,
@@ -965,6 +966,86 @@ async fn files_and_usage() {
         )
         .await;
     assert_eq!(st, 400);
+    // a cursor minted for another window (the day rolled over, or another `days`) is refused; this window's is read
+    let other = format!("-chars,cook:{}", first - chrono::Duration::days(1));
+    let stale = cratestack::encode_cursor(&other, &[Some("100".into()), Some("x".into())]);
+    let (st, _) = w
+        .proc(
+            &w.alice,
+            "usageCookPage",
+            json!({"page": {"cursor": stale}}),
+        )
+        .await;
+    assert_eq!(st, 400);
+    let fresh = cratestack::encode_cursor(&window, &[Some("100".into()), Some("x".into())]);
+    let (st, v) = w
+        .proc(
+            &w.alice,
+            "usageCookPage",
+            json!({"page": {"cursor": fresh}}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let (st, _) = w
+        .proc(
+            &w.alice,
+            "usageCookPage",
+            json!({"days": 3, "page": {"cursor": cratestack::encode_cursor(&window, &[Some("100".into()), Some("x".into())])}}),
+        )
+        .await;
+    assert_eq!(
+        st, 400,
+        "a cursor of the 7-day window is not the 3-day window's"
+    );
+}
+
+/// Keys Postgres would refuse (out-of-range timestamps, NUL in text) are a 400, never a 500.
+#[tokio::test]
+async fn forged_cursor_keys_are_a_400() {
+    let w = world().await;
+    let bad_ts = [
+        "2026-01-01 00:00:00+16",
+        "-0001-01-01 00:00:00+00",
+        "+10000-01-01 00:00:00+00",
+        "0001-01-01 00:00:00+05",
+    ];
+    let mut cases: Vec<(&str, Value, String, Vec<Option<String>>)> = vec![];
+    for ts in bad_ts {
+        let k = |a: &str, b: &str| vec![Some(a.to_string()), Some(b.to_string())];
+        cases.push((
+            "filePage",
+            json!({"project": "PAY"}),
+            "-created_at,-number".into(),
+            k(ts, "3"),
+        ));
+        cases.push((
+            "stationPage",
+            json!({"project": "PAY"}),
+            "-created_at,ref:live".into(),
+            k(ts, "x"),
+        ));
+    }
+    cases.push((
+        "filePage",
+        json!({"project": "PAY"}),
+        "-created_at,-number".into(),
+        vec![
+            Some("2026-01-01 00:00:00+00".into()),
+            Some("9223372036854775808".into()),
+        ],
+    ));
+    cases.push((
+        "stationPage",
+        json!({"project": "PAY"}),
+        "-created_at,ref:live".into(),
+        vec![Some("2026-01-01 00:00:00+00".into()), Some("a\0b".into())],
+    ));
+    for (proc, args, order, keys) in cases {
+        let mut args = args;
+        args["page"] = json!({"cursor": cratestack::encode_cursor(&order, &keys)});
+        let (st, v) = w.proc(&w.alice, proc, args).await;
+        assert_eq!(st, 400, "{proc} {keys:?}: {v}");
+    }
 }
 
 #[tokio::test]

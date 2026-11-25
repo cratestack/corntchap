@@ -119,11 +119,7 @@ impl W {
         let mut mid = Some(mid);
         let mut seen = vec![];
         let mut cursor: Option<String> = None;
-        let key = if name == "taskPage" {
-            "next_cursor"
-        } else {
-            "nextCursor"
-        };
+        let key = "nextCursor";
         for _ in 0..100 {
             args["page"] = json!({"limit": limit, "cursor": cursor});
             let v = self.ok(token, name, args.clone()).await;
@@ -163,7 +159,7 @@ impl W {
             out.extend(v["items"].as_array().unwrap().iter().cloned());
             cursor = v["nextCursor"]
                 .as_str()
-                .or(v["next_cursor"].as_str())
+                .or(v["nextCursor"].as_str())
                 .map(String::from);
             if cursor.is_none() {
                 return out;
@@ -361,7 +357,7 @@ async fn tasks_page_by_bucket_all_label_and_the_list_tasks_tool() {
         .proc(
             &w.alice,
             "taskPage",
-            json!({"project": "PAY", "bucket": "all", "page": {"cursor": first["next_cursor"]}}),
+            json!({"project": "PAY", "bucket": "all", "page": {"cursor": first["nextCursor"]}}),
         )
         .await;
     assert_eq!(st, 400);
@@ -893,6 +889,10 @@ async fn comments_page_newest_first() {
     for cursor in [
         forged("-created_at,id", &["yesterday", "x"]),
         forged("number", &["1"]),
+        forged("-created_at,id", &["2026-01-01 00:00:00+16", "x"]),
+        forged("-created_at,id", &["-0001-01-01 00:00:00+00", "x"]),
+        forged("-created_at,id", &["+10000-01-01 00:00:00+00", "x"]),
+        forged("-created_at,id", &["2026-01-01 00:00:00+00", "a\0b"]),
     ] {
         let (st, _) = w
             .proc(
@@ -1162,4 +1162,34 @@ async fn my_work_pages_by_section() {
         let (st, v) = w.proc(&w.alice, "myWorkPage", args.clone()).await;
         assert_eq!(st, want, "{args}: {v}");
     }
+}
+
+/// Someone removed from a team no longer sees the questions they asked in its pot.
+#[tokio::test]
+async fn my_questions_follow_pot_access() {
+    let w = world().await;
+    let (st, v) = w
+        .app
+        .post(
+            &w.carol,
+            "/projects/PAY/questions",
+            json!({"title": "still here?"}),
+        )
+        .await;
+    assert_eq!(st, 200, "{v}");
+    let seen = w
+        .ok(&w.carol, "questionMinePage", json!({"page": {}}))
+        .await;
+    assert_eq!(seen["items"].as_array().unwrap().len(), 1);
+    sqlx::query("delete from team_members where principal_id = (select id from principals where name = 'carol')")
+        .execute(&w.app.state.db)
+        .await
+        .unwrap();
+    let gone = w
+        .ok(&w.carol, "questionMinePage", json!({"page": {}}))
+        .await;
+    assert!(gone["items"].as_array().unwrap().is_empty(), "{gone}");
+    let (st, list) = w.app.get(&w.carol, "/questions/mine").await;
+    assert_eq!(st, 200, "{list}");
+    assert!(list.as_array().unwrap().is_empty(), "{list}");
 }

@@ -213,7 +213,7 @@ async fn relay_token_on_mcp_explains_itself() {
 
 /// The `*Page` procedures are not MCP tools under their own names (the list tools carry `list_*`
 /// names), and the agents' other tools keep their default shapes: `list_tasks` is a page
-/// (`items`, `total`, `next_cursor`), `read_pass` and `get_task` carry only the additive `older` and
+/// (`items`, `total`, `nextCursor`), `read_pass` and `get_task` carry only the additive `older` and
 /// `comments_total`.
 #[tokio::test]
 async fn page_procedures_are_not_tools_and_default_shapes_hold() {
@@ -310,7 +310,7 @@ async fn page_procedures_are_not_tools_and_default_shapes_hold() {
 
     // list_tasks: a page of tasks with the total and no cursor on the last page
     let page = w.ok("list_tasks", json!({"project": "PAY"})).await;
-    assert!(page["next_cursor"].is_null(), "{page}");
+    assert!(page["nextCursor"].is_null(), "{page}");
     assert_eq!(page["total"], 1);
     let tasks = page["items"].clone();
     assert!(tasks.is_array(), "{tasks}");

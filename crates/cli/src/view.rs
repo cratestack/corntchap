@@ -132,6 +132,9 @@ async fn all_pages(api: &Api, name: &str, args: Value) -> Result<Value> {
             break;
         }
     }
+    if items.len() > MAX_ROWS || (items.len() == MAX_ROWS && cursor.is_some()) {
+        eprintln!("showing the first {MAX_ROWS}; refine the view");
+    }
     items.truncate(MAX_ROWS);
     Ok(Value::Array(items))
 }
