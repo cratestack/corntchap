@@ -1,5 +1,5 @@
 import { useMemo, type Key, type ReactNode, type Ref } from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import { Virtuoso, type StateSnapshot, type VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
 import { OVERSCAN_PX, scrollProps, virtualComponents, type VirtualContext, type VirtualScroll } from "./virtual-shared";
 
@@ -22,6 +22,8 @@ export interface VirtualListProps<T> {
   itemClassName?: string | undefined;
   /** An estimate of a row's height before it is measured; closer is steadier scrollbars. */
   defaultItemHeight?: number | undefined;
+  /** A snapshot from the handle's `getState` (measured heights and scroll position) to pick up where a list was left. */
+  restoreStateFrom?: StateSnapshot | undefined;
   "aria-label"?: string;
   ref?: Ref<VirtuosoHandle>;
 }
@@ -38,6 +40,7 @@ export function VirtualList<T>({
   className,
   itemClassName,
   defaultItemHeight,
+  restoreStateFrom,
   "aria-label": label,
   ref,
 }: VirtualListProps<T>) {
@@ -55,6 +58,7 @@ export function VirtualList<T>({
       increaseViewportBy={{ top: OVERSCAN_PX, bottom: OVERSCAN_PX }}
       {...(defaultItemHeight ? { defaultItemHeight } : {})}
       {...(onEndReached ? { endReached: onEndReached } : {})}
+      {...(restoreStateFrom ? { restoreStateFrom } : {})}
       {...scrollProps(scroll)}
       {...(scroll === "own" ? { className: "scrollbar-thin overscroll-contain" } : className ? { className } : {})}
     />

@@ -42,8 +42,8 @@ export function PageShell({
 /** A restrained table surface for the admin pages. */
 export function DataTable({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cn("overflow-x-auto rounded-[14px] border border-border bg-card", className)}>
-      <table className="w-full min-w-[560px] border-collapse text-left text-[13.5px]">{children}</table>
+    <div className={cn("overflow-clip rounded-[14px] border border-border bg-card", className)}>
+      <table className="w-full border-collapse text-left text-[13.5px]">{children}</table>
     </div>
   );
 }

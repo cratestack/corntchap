@@ -164,7 +164,7 @@ export function PantryView({ potKey, onNew }: { potKey: string; onNew: () => voi
             className="h-11 rounded-full pr-3 pl-10 text-[14px] md:h-9 md:text-[13px]"
           />
         </div>
-        <div className="scrollbar-none -mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-0.5" role="group" aria-label="Kinds">
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Kinds">
           <KindChip active={!kind} onClick={() => setParam("kind", undefined)} count={all.items.length}>
             All
           </KindChip>

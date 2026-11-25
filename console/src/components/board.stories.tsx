@@ -21,10 +21,10 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Desktop: five columns, each with its own scroller; 2,000 cards each. */
+/** Desktop: columns side by side as many as fit, the page scrolls through them; 2,000 cards each. */
 export const TenThousandTasks: Story = {};
 
-/** Phone: snap columns with a tab strip; the page scrolls. */
+/** Phone: a tab strip and one column below it; the page scrolls. */
 export const Phone: Story = { globals: { viewport: { value: "phone", isRotated: false } } };
 
 export const Loading: Story = { args: { loading: true } };
@@ -79,5 +79,5 @@ function PagedColumns(args: Parameters<typeof BoardView>[0]) {
 /** Desktop: 10,000 tasks in every column, each paged on its own as its end is scrolled to. */
 export const PagedTenThousandPerColumn: Story = { render: (args) => <PagedColumns {...args} /> };
 
-/** Phone: the same paged columns; only the column in view loads more as the page scrolls. */
+/** Phone: the same paged columns; only the column in the open tab loads more as the page scrolls. */
 export const PagedPhone: Story = { render: (args) => <PagedColumns {...args} />, globals: { viewport: { value: "phone", isRotated: false } } };

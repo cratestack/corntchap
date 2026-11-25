@@ -1,4 +1,6 @@
-import { useEffect, useEffectEvent, useMemo, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router";
+import type { StateSnapshot, VirtuosoHandle } from "react-virtuoso";
 import type { TaskView } from "@corntchap/api";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -59,44 +61,40 @@ export function BoardView({
   }
   if (phone) return <PhoneBoard columns={columns} selected={selected} onOpen={onOpen} menus={menus} />;
   return (
-    <div
-      role="region"
-      aria-label="Board"
-      tabIndex={0}
-      className="scrollbar-thin -mx-5 h-[calc(100dvh-16rem)] min-h-96 overflow-x-auto overflow-y-hidden overscroll-x-contain px-5 pb-3 focus-visible:outline-none lg:-mx-8 lg:px-8"
-    >
-      <div className="flex h-full w-max min-w-full items-stretch gap-3.5">
-        {BOARD_COLS.map((id) => {
-          const meta = BUCKETS.find((b) => b.id === id)!;
-          const col = groups[id];
-          const more = columns.more?.[id];
-          return (
-            <VirtualColumn
-              key={id}
-              aria-label={meta.label}
-              className={cn("w-[17.5rem] shrink-0 sm:w-[19rem]", id === "cancelled" && "opacity-80")}
-              header={
-                <h2 className="flex items-center gap-2 px-4 pt-3.5 pb-2.5 text-[15px]">
-                  <span className={cn("size-2.5 rounded-full", BUCKET_DOT[id], id === "claimed" && "live-dot")} aria-hidden="true" />
-                  {meta.label}
-                  <span className="font-mono text-[11.5px] font-normal text-muted-foreground">{columns.totals?.[id] ?? col.length}</span>
-                </h2>
-              }
-              items={col}
-              itemKey={(t) => t.id}
-              empty={
-                <>
-                  <p className="px-2 py-5 text-center text-[12.5px] text-muted-foreground">{more?.has ? "Nothing here yet." : "Nothing here."}</p>
-                  <MoreFooter more={more} loaded={0} total={columns.totals?.[id]} />
-                </>
-              }
-              onEndReached={more?.has ? more.load : undefined}
-              footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
-              renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
-            />
-          );
-        })}
-      </div>
+    // as many columns across as fit (five on a wide screen); the page scrolls through all of them
+    <div role="region" aria-label="Board" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,17rem),1fr))] items-start gap-3.5">
+      {BOARD_COLS.map((id) => {
+        const meta = BUCKETS.find((b) => b.id === id)!;
+        const col = groups[id];
+        const more = columns.more?.[id];
+        return (
+          <VirtualColumn
+            key={id}
+            aria-label={meta.label}
+            className={cn(id === "cancelled" && "opacity-80")}
+            headerClassName="sticky top-0 z-10 rounded-t-[14px] bg-column"
+            bodyClassName="px-2.5 pb-2.5"
+            header={
+              <h2 className="flex items-center gap-2 px-4 pt-3.5 pb-2.5 text-[15px]">
+                <span className={cn("size-2.5 rounded-full", BUCKET_DOT[id], id === "claimed" && "live-dot")} aria-hidden="true" />
+                {meta.label}
+                <span className="font-mono text-[11.5px] font-normal text-muted-foreground">{columns.totals?.[id] ?? col.length}</span>
+              </h2>
+            }
+            items={col}
+            itemKey={(t) => t.id}
+            empty={
+              <>
+                <p className="px-2 py-5 text-center text-[12.5px] text-muted-foreground">{more?.has ? "Nothing here yet." : "Nothing here."}</p>
+                <MoreFooter more={more} loaded={0} total={columns.totals?.[id]} />
+              </>
+            }
+            onEndReached={more?.has ? more.load : undefined}
+            footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
+            renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -132,9 +130,9 @@ const SKELETON_WIDTH = ["w-[88%]", "w-[74%]", "w-[60%]"];
 
 function BoardSkeleton({ phone }: { phone: boolean }) {
   return (
-    <div className="flex gap-3 overflow-hidden" aria-busy="true" aria-label="Loading the board">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,17rem),1fr))] items-start gap-3" aria-busy="true" aria-label="Loading the board">
       {Array.from({ length: phone ? 1 : 3 }).map((_, c) => (
-        <div key={c} className={cn("shrink-0 space-y-2 rounded-[14px] bg-column p-2.5", phone ? "w-full" : "w-[19rem]")}>
+        <div key={c} className="space-y-2 rounded-[14px] bg-column p-2.5">
           {Array.from({ length: 3 }).map((__, i) => (
             <div key={i} className="space-y-2.5 rounded-[10px] border border-border bg-card p-3">
               <div className="h-2.5 w-12 animate-pulse rounded bg-muted" />
@@ -148,7 +146,16 @@ function BoardSkeleton({ phone }: { phone: boolean }) {
   );
 }
 
-/** Phone board: one column per screen (snap scrolling) and a sticky segmented control that jumps between them. */
+/** The column named by `?col=`, the first one when there is none. */
+function activeColumn(params: URLSearchParams): Bucket {
+  const col = params.get("col");
+  return BOARD_COLS.find((id) => id === col) ?? BOARD_COLS[0]!;
+}
+
+/**
+ * Phone board: a tab strip, sticky under the top bar, and one column at a time below it. The page scrolls through the
+ * column; each column's scroll position is kept for when its tab is picked again. The tab is in the URL (`?col=`).
+ */
 function PhoneBoard({
   columns,
   selected,
@@ -161,62 +168,76 @@ function PhoneBoard({
   menus: Record<string, string>;
 }) {
   const groups = columns.groups;
-  const scroller = useRef<HTMLDivElement>(null);
-  // the column in view: only it loads more, however the page is scrolled
-  const { value: active, set: setActive } = useStoreValue(0);
-  // Columns whose end came into view while another one was in view. The list says so once per length, so a column
-  // that was passed by (the page is as tall as its longest column) would never load more by scrolling: it loads its
-  // next page when it comes into view instead.
-  const passed = useRef(new Set<Bucket>());
-  const loadPassed = useEffectEvent((id: Bucket) => {
-    if (!passed.current.delete(id)) return;
-    const more = columns.more?.[id];
-    if (more?.has) more.load();
-  });
-  useEffect(() => {
-    const id = BOARD_COLS[active];
-    if (!id) return;
-    // after a moment in view: the columns a tab jump only slides past do not load
-    const t = setTimeout(() => loadPassed(id), 400);
-    return () => clearTimeout(t);
+  const [params, setParams] = useSearchParams();
+  const active = activeColumn(params);
+  const tabs = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const list = useRef<VirtuosoHandle>(null);
+  // each column as it was left (the page's scroll position and the list's measured heights), and where the next tab change should land
+  const { value: left, set: setLeft } = useStoreValue<ReadonlyMap<Bucket, { y: number; snap: StateSnapshot | undefined }>>(new Map());
+  const landing = useRef<number | null>(null);
+
+  const pick = (id: Bucket) => {
+    if (id === active) return;
+    const y = window.scrollY;
+    list.current?.getState((snap) => setLeft(new Map(left).set(active, { y, snap })));
+    // a column not seen before starts at its top, just under the tab strip (or where the page is, above it)
+    const top = panel.current && tabs.current ? y + panel.current.getBoundingClientRect().top - tabs.current.getBoundingClientRect().bottom : y;
+    landing.current = left.get(id)?.y ?? Math.min(y, top);
+    setParams(
+      (p) => {
+        const n = new URLSearchParams(p);
+        if (id === BOARD_COLS[0]) n.delete("col");
+        else n.set("col", id);
+        return n;
+      },
+      { replace: true },
+    );
+  };
+
+  // the new column's list measures itself over a few frames: keep asking for the position until the page is tall enough
+  useLayoutEffect(() => {
+    const y = landing.current;
+    if (y == null) return;
+    let tries = 0;
+    let frame = 0;
+    const go = () => {
+      window.scrollTo(0, y);
+      if (Math.abs(window.scrollY - y) <= 1 || ++tries > 20) {
+        landing.current = null;
+        return;
+      }
+      frame = requestAnimationFrame(go);
+    };
+    go();
+    return () => cancelAnimationFrame(frame);
   }, [active]);
-  const start = () => {
-    const el = scroller.current;
-    return el ? parseFloat(getComputedStyle(el).paddingLeft) || 0 : 0;
-  };
-  const onScroll = () => {
-    const el = scroller.current;
-    const first = el?.children[0] as HTMLElement | undefined;
-    const second = el?.children[1] as HTMLElement | undefined;
-    if (!el || !first || !second) return;
-    const step = second.offsetLeft - first.offsetLeft;
-    setActive(Math.max(0, Math.min(BOARD_COLS.length - 1, Math.round(el.scrollLeft / step))));
-  };
-  const jump = (i: number) => {
-    const el = scroller.current;
-    const col = el?.children[i] as HTMLElement | undefined;
-    if (!el || !col) return;
-    setActive(i);
-    el.scrollTo({ left: col.offsetLeft - start(), behavior: "smooth" });
-  };
+
+  const meta = BUCKETS.find((b) => b.id === active)!;
+  const col = groups[active];
+  const more = columns.more?.[active];
+  const count = columns.totals?.[active] ?? col.length;
   return (
     <div>
       <div
+        ref={tabs}
         role="tablist"
         aria-label="Board columns"
         className="sticky top-[calc(3.5rem+env(safe-area-inset-top))] z-20 -mx-4 bg-background/95 px-4 pb-2 backdrop-blur-md supports-[backdrop-filter]:bg-background/80"
       >
         <div className="grid grid-cols-5 gap-0.5 rounded-xl bg-muted p-1">
-          {BOARD_COLS.map((id, i) => (
+          {BOARD_COLS.map((id) => (
             <button
               key={id}
               type="button"
               role="tab"
-              aria-selected={active === i}
-              onClick={() => jump(i)}
+              id={`board-tab-${id}`}
+              aria-selected={active === id}
+              aria-controls="board-panel"
+              onClick={() => pick(id)}
               className={cn(
                 "flex min-h-10 flex-col items-center justify-center rounded-lg px-0.5 text-[11.5px] leading-tight font-medium transition-colors",
-                active === i ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
+                active === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
               )}
             >
               <span className="flex items-center gap-1">
@@ -228,46 +249,31 @@ function PhoneBoard({
           ))}
         </div>
       </div>
-      <div
-        ref={scroller}
-        role="region"
-        aria-label="Board"
-        onScroll={onScroll}
-        className="scrollbar-none relative -mx-4 flex snap-x snap-mandatory items-start gap-3 overflow-x-auto overscroll-x-contain scroll-px-4 px-4 pb-2"
-      >
-        {BOARD_COLS.map((id, i) => {
-          const meta = BUCKETS.find((b) => b.id === id)!;
-          const col = groups[id];
-          const more = columns.more?.[id];
-          const count = columns.totals?.[id] ?? col.length;
-          return (
-            <VirtualColumn
-              key={id}
-              scroll="window"
-              aria-label={`${meta.label}, ${count}`}
-              className={cn("w-[85vw] shrink-0 snap-start p-2", id === "cancelled" && "opacity-80")}
-              header={
-                <h2 className="sr-only">
-                  {meta.label}, {count}
-                </h2>
-              }
-              items={col}
-              itemKey={(t) => t.id}
-              empty={
-                <>
-                  <p className="px-2 py-8 text-center text-[13px] text-muted-foreground">{more?.has ? "Nothing here yet." : BOARD_EMPTY[id]}</p>
-                  <MoreFooter more={more} loaded={0} total={columns.totals?.[id]} />
-                </>
-              }
-              onEndReached={() => {
-                if (i !== active) passed.current.add(id);
-                else if (more?.has) more.load();
-              }}
-              footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
-              renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
-            />
-          );
-        })}
+      <div ref={panel} id="board-panel" role="tabpanel" aria-labelledby={`board-tab-${active}`}>
+        {/* keyed: each column's list starts fresh, so only the column in view asks for more */}
+        <VirtualColumn
+          key={active}
+          listRef={list}
+          restoreStateFrom={left.get(active)?.snap}
+          aria-label={`${meta.label}, ${count}`}
+          className={cn("p-2", active === "cancelled" && "opacity-80")}
+          header={
+            <h2 className="sr-only">
+              {meta.label}, {count}
+            </h2>
+          }
+          items={col}
+          itemKey={(t) => t.id}
+          empty={
+            <>
+              <p className="px-2 py-8 text-center text-[13px] text-muted-foreground">{more?.has ? "Nothing here yet." : BOARD_EMPTY[active]}</p>
+              <MoreFooter more={more} loaded={0} total={columns.totals?.[active]} />
+            </>
+          }
+          onEndReached={more?.has ? more.load : undefined}
+          footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[active]} />}
+          renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
+        />
       </div>
     </div>
   );

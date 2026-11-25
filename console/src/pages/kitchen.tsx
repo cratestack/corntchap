@@ -320,7 +320,7 @@ function StatusChips({
     { id: "cancelled", n: project.tossed, short: "tossed" },
   ];
   return (
-    <div className={cn("flex items-center", withLabels ? "flex-wrap gap-1.5" : "gap-1")} role="group" aria-label="Filter by status">
+    <div className={cn("flex flex-wrap items-center", withLabels ? "gap-1.5" : "gap-1")} role="group" aria-label="Filter by status">
       {items
         .filter((i) => i.id !== "cancelled" || i.n > 0)
         .map((i) => {
@@ -391,7 +391,7 @@ function PhoneHeader({ project, base, viewKey, saved, taskView, onNewView, filte
   }
 
   return (
-    <header className="flex items-center gap-2">
+    <header className="flex flex-wrap items-center gap-2">
       <DropdownMenu>
         <DropdownMenuTrigger className="inline-flex h-10 max-w-32 shrink-0 items-center gap-1 rounded-full border border-border bg-card pr-2.5 pl-3.5 text-[13px] font-medium active:bg-muted">
           <span className="truncate">{current}</span>
@@ -419,7 +419,7 @@ function PhoneHeader({ project, base, viewKey, saved, taskView, onNewView, filte
         </DropdownMenuContent>
       </DropdownMenu>
       {/* the board has its own status switcher under this line; lists filter by status here */}
-      <div className="scrollbar-none min-w-0 flex-1 overflow-x-auto">
+      <div className="order-last min-w-0 basis-full">
         {viewKey && <StatusChips project={project} status={filters.status} onPick={(b) => setFilter("status", b)} withLabels={false} />}
       </div>
       <button
@@ -427,7 +427,7 @@ function PhoneHeader({ project, base, viewKey, saved, taskView, onNewView, filte
         onClick={() => setSheet(true)}
         aria-label={activeCount ? `Display and filter, ${activeCount} active` : "Display and filter"}
         className={cn(
-          "relative inline-flex size-10 shrink-0 items-center justify-center rounded-full border active:bg-muted",
+          "relative ml-auto inline-flex size-10 shrink-0 items-center justify-center rounded-full border active:bg-muted",
           activeCount ? "border-primary/60 bg-primary/10" : "border-border bg-card",
         )}
       >
@@ -612,7 +612,7 @@ function WideHeader({ project, base, viewKey, saved, taskView, onNewView, filter
         </div>
       </div>
 
-      <nav aria-label="Views" className="scrollbar-none mt-5 flex max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-muted p-1">
+      <nav aria-label="Views" className="mt-5 flex w-fit max-w-full flex-wrap items-center gap-1 rounded-xl bg-muted p-1">
         {HEAD_VIEWS.map(tab)}
         {saved.map((v) => (
           <Link
@@ -638,7 +638,7 @@ function WideHeader({ project, base, viewKey, saved, taskView, onNewView, filter
       </nav>
 
       {taskView && (
-        <div className="scrollbar-none mt-3 flex items-center gap-2 overflow-x-auto pb-0.5" role="group" aria-label="Filters">
+        <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Filters">
           <FilterChip
             label="Menu"
             value={filters.menu === "-" ? "No menu" : filters.menu ? (menus.find((m) => m.key === filters.menu)?.name ?? filters.menu) : undefined}
@@ -984,14 +984,14 @@ function ListView({
         )}
       </div>
       <aside aria-label="From the kitchen" className="hidden xl:block">
-        <div className="sticky top-6 rounded-[14px] border border-border bg-card">
+        <div className="rounded-[14px] border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <h2 className="text-[15px]">From the kitchen</h2>
             <Link to={`/pots/${potKey}/activity`} className="text-[12px] text-primary hover:underline">
               all activity
             </Link>
           </div>
-          <div className="max-h-[calc(100dvh-9rem)] overflow-y-auto px-4 scrollbar-thin">
+          <div className="px-4">
             <EventFeed events={events} compact limit={14} empty="Quiet kitchen. Events show up here as cooks work." />
           </div>
         </div>
@@ -1030,7 +1030,7 @@ function ActivityView({ potKey, events: liveEvents }: { potKey: string; events: 
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="scrollbar-none -mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-wrap md:overflow-visible md:px-0 md:pb-0" role="group" aria-label="Activity filters">
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Activity filters">
         {KIND_GROUPS.map((g) => (
           <button
             key={g.id}
