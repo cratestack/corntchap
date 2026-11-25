@@ -316,6 +316,29 @@ async fn task_page_walks_every_bucket_once() {
         .await;
     assert_eq!(st, 400);
 
+    // a forged cursor with the right sort but values that do not parse (number, timestamp) is a 400, not a 500
+    for (bucket, order, keys) in [
+        ("active", "-priority,number:active", vec!["high", "3"]),
+        ("active", "-priority,number:active", vec!["2", "3.5"]),
+        ("done", "-updated_at,-number:done", vec!["yesterday", "3"]),
+        (
+            "done",
+            "-updated_at,-number:done",
+            vec!["2026-01-01 00:00:00+00", "x"],
+        ),
+    ] {
+        let keys: Vec<Option<String>> = keys.into_iter().map(|k| Some(k.to_string())).collect();
+        let forged = cratestack::encode_cursor(order, &keys);
+        let (st, v) = w
+            .proc(
+                &w.alice,
+                "taskPage",
+                page(bucket, json!({}), json!({"cursor": forged})),
+            )
+            .await;
+        assert_eq!(st, 400, "{bucket} {keys:?}: {v}");
+    }
+
     // another team's pot answers as the unpaged list does
     let (listed, _) = w
         .proc(&w.bob, "projectTasks", json!({"project": "PAY"}))
@@ -325,6 +348,26 @@ async fn task_page_walks_every_bucket_once() {
         .await;
     assert_eq!(listed, 404);
     assert_eq!(paged, listed);
+}
+
+/// Priorities are 64-bit: a cursor after a task with a priority past 2^31 still reads the next page.
+#[tokio::test]
+async fn task_page_cursor_takes_big_priorities() {
+    let w = world().await;
+    w.task("huge", 3_000_000_000, "").await;
+    w.task("tiny", -3_000_000_000, "").await;
+    w.task("plain", 0, "").await;
+    let seen = w
+        .walk(
+            &w.alice,
+            "taskPage",
+            json!({"project": "PAY", "bucket": "active"}),
+            1,
+            id,
+            || async {},
+        )
+        .await;
+    assert_eq!(seen, ["PAY-1", "PAY-3", "PAY-2"]);
 }
 
 #[tokio::test]

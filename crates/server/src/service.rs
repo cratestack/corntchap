@@ -600,7 +600,7 @@ pub async fn task_page(
     let (keys, after, sort) = if bucket == "active" {
         (
             "array[t.priority::text, t.number::text]",
-            "(t.priority < $8::text::int or (t.priority = $8::text::int and t.number > $9::text::bigint))",
+            "(t.priority < $8::text::bigint or (t.priority = $8::text::bigint and t.number > $9::text::bigint))",
             "t.priority desc, t.number",
         )
     } else {

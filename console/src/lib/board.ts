@@ -24,6 +24,8 @@ export interface BucketMore {
   has: boolean;
   loading: boolean;
   load: () => void;
+  /** The most pages one list keeps are loaded: the rest is not offered (narrow with a filter). */
+  capped?: boolean;
 }
 
 export interface BoardData {
@@ -76,7 +78,7 @@ export function useBoardData(pot: string, f: BoardFilters, enabled: boolean): Bo
   const loading = active.isLoading || done.isLoading || cancelled.isLoading;
   const error = active.error ?? done.error ?? cancelled.error;
   const counted = !holder && !status;
-  const more = (q: typeof done): BucketMore => ({ has: !!q.hasNextPage, loading: q.isFetchingNextPage, load: () => void (q.hasNextPage && !q.isFetchingNextPage && q.fetchNextPage()) });
+  const more = (q: typeof done): BucketMore => ({ has: !!q.hasNextPage, loading: q.isFetchingNextPage, load: () => void (q.hasNextPage && !q.isFetchingNextPage && q.fetchNextPage()), capped: q.capped });
   const optionTasks = useMemo(() => [...options.items, ...done.items, ...cancelled.items], [options.items, done.items, cancelled.items]);
   return {
     loading,

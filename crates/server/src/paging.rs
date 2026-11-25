@@ -44,6 +44,28 @@ fn bad_cursor(e: CratestackError) -> Error {
     }
 }
 
+/// A cursor is client-held text: its key values reach SQL as `::text::bigint` / `::text::timestamptz`
+/// casts, and a value that does not fit would fail there as a 500. Each key is checked against the type
+/// of the sort column it belongs to (`order` is `col,-col[:suffix]`; a leading `-` is descending) so a
+/// forged value is a 400 up front. Columns that are not numbers or timestamps are text and always fit.
+fn check_keys(order: &str, keys: &Keys) -> Result<()> {
+    let cols = order.split(':').next().unwrap_or("").split(',');
+    for (col, key) in cols.zip(keys) {
+        let Some(key) = key else { continue };
+        let ok = match col.trim_start_matches('-') {
+            "number" | "priority" | "requested" | "rn" => key.parse::<i64>().is_ok(),
+            "created_at" | "updated_at" => {
+                chrono::DateTime::parse_from_str(key, "%Y-%m-%d %H:%M:%S%.f%#z").is_ok()
+            }
+            _ => true,
+        };
+        if !ok {
+            return Err(Error::Invalid("bad cursor".to_string()));
+        }
+    }
+    Ok(())
+}
+
 /// The page request of a `*Page` procedure for the sort `order` (`nkeys` key columns). The limit
 /// defaults to `default` and is clamped into `1..=max`.
 pub fn paging(
@@ -72,7 +94,11 @@ pub fn paging_raw(
     max: i64,
 ) -> Result<Paging> {
     let after = match cursor.filter(|c| !c.is_empty()) {
-        Some(c) => Some(decode_cursor(c, order, nkeys).map_err(bad_cursor)?),
+        Some(c) => {
+            let keys = decode_cursor(c, order, nkeys).map_err(bad_cursor)?;
+            check_keys(order, &keys)?;
+            Some(keys)
+        }
         None => None,
     };
     Ok(Paging {

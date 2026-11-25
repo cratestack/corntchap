@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useProc, useProcCall, useReviews } from "@/lib/data";
+import { useProc, useProcCall, useProjects, useReviews } from "@/lib/data";
 import { useProcInfinite } from "@/lib/paging";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
@@ -478,6 +478,8 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
   const allReviews = useReviews(potKey, "all", filter === "reviews");
 
   const openList = open.items;
+  // the open tab counts every open question, not only the loaded pages (the pot summary has the count)
+  const openTotal = useProjects().data?.find((p) => p.key === potKey)?.open_questions ?? 0;
   const focusFilter: Filter | null = !focus
     ? null
     : answered.items.some((q) => q.id === focus)
@@ -499,7 +501,7 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
   }
 
   const tabs: { id: Filter; label: string; n: number }[] = [
-    { id: "open", label: "Open", n: openList.length },
+    { id: "open", label: "Open", n: open.hasNextPage ? Math.max(openTotal, openList.length) : openList.length },
     { id: "answered", label: "Answered", n: answered.items.length },
     { id: "dismissed", label: "Dismissed", n: dismissed.items.length },
     { id: "reviews", label: "Reviews", n: allReviews.data.length },

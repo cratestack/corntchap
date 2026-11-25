@@ -94,6 +94,9 @@ export function BoardView({
 
 /** After a column's last card: a spinner while the next page loads, or a button when the end was not reached by scrolling. */
 function MoreFooter({ more, loaded, total }: { more: BucketMore | undefined; loaded: number; total: number | undefined }) {
+  if (more?.capped && !more.has && total != null && loaded < total) {
+    return <p className="px-2 pb-3 text-center text-[12px] text-muted-foreground">Showing the newest {loaded} of {total}. Filter the board to find older ones.</p>;
+  }
   if (!more?.has) return null;
   return (
     <div className="flex justify-center px-2 pb-3">

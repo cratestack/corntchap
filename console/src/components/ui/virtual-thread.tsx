@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode, type UIEvent } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -31,31 +31,62 @@ export interface VirtualThreadProps<T> {
   "aria-label"?: string;
 }
 
-/** `followed`: the last message seen while at the bottom. A tiny external store, not component state. */
+/** How close to the bottom still counts as "at the bottom", in px. */
+const AT_BOTTOM_PX = 64;
+/** After the user's own scroll input, new messages are not followed (and Virtuoso's bottom report is not trusted) for this long. */
+const INPUT_QUIET_MS = 350;
+
+/**
+ * Where the reader is, kept in a tiny external store, not component state: `atBottom` is ours (Virtuoso's
+ * `atBottomStateChange`, flipped to false at once by a user scroll up), `seen` is the last message seen while at
+ * the bottom, and `inputAt` is when the user last scrolled, which `follow` must not fight.
+ */
 function useBottom(lastSeq: number) {
   const store = useMemo(() => {
     let snap = { atBottom: true, seen: lastSeq };
+    let inputAt = -Infinity;
+    let lastTop = 0;
     const listeners = new Set<() => void>();
     const set = (next: typeof snap) => {
       if (next.atBottom === snap.atBottom && next.seen === snap.seen) return;
       snap = next;
       listeners.forEach((l) => l());
     };
+    const quiet = () => performance.now() - inputAt > INPUT_QUIET_MS;
     return {
       get: () => snap,
       subscribe: (l: () => void) => {
         listeners.add(l);
         return () => void listeners.delete(l);
       },
-      /** The list reports whether the bottom is in view. */
-      bottom: (atBottom: boolean, last: number) => set({ atBottom, seen: atBottom ? last : snap.seen }),
+      /** Virtuoso reports whether the bottom is in view. Right after the user scrolled up, a "yes" is stale. */
+      bottom: (atBottom: boolean, last: number) => {
+        if (atBottom && !snap.atBottom && !quiet()) return;
+        set({ atBottom, seen: atBottom ? last : snap.seen });
+      },
       /** A newer message arrived: while at the bottom it is followed (seen), otherwise it is news. */
       arrived: (last: number) => set({ atBottom: snap.atBottom, seen: snap.atBottom ? last : snap.seen }),
+      /** Wheel, touch or key input: the user is driving the scroll. */
+      input: () => {
+        inputAt = performance.now();
+      },
+      /** A scroll event of the list's scroller: moving up and away from the bottom is the user leaving it. */
+      scrolled: (el: HTMLElement) => {
+        const top = el.scrollTop;
+        const up = top < lastTop - 1;
+        lastTop = top;
+        if (up && el.scrollHeight - top - el.clientHeight > AT_BOTTOM_PX) {
+          inputAt = performance.now();
+          set({ atBottom: false, seen: snap.seen });
+        }
+      },
+      /** Virtuoso's `followOutput`: only when we are at the bottom and the user is not scrolling. */
+      follow: () => (snap.atBottom && quiet() ? ("auto" as const) : false),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const snap = useSyncExternalStore(store.subscribe, store.get, store.get);
-  return { atBottom: snap.atBottom, seen: snap.seen, report: store.bottom, arrived: store.arrived };
+  return { atBottom: snap.atBottom, seen: snap.seen, store };
 }
 
 /**
@@ -85,8 +116,8 @@ export function VirtualThread<T>({ items, itemKey, renderItem, lastSeq, hasOlder
     committed.current = { key: firstKey, index: firstIndex };
   }, [firstKey, firstIndex]);
 
-  const { arrived, report } = bottom;
-  useLayoutEffect(() => arrived(lastSeq), [lastSeq, arrived]);
+  const { store } = bottom;
+  useLayoutEffect(() => store.arrived(lastSeq), [lastSeq, store]);
 
   const context = useMemo<VirtualContext>(
     () => ({
@@ -106,12 +137,25 @@ export function VirtualThread<T>({ items, itemKey, renderItem, lastSeq, hasOlder
   const startReached = useCallback(() => {
     if (hasOlder && !loadingOlder) onLoadOlder?.();
   }, [hasOlder, loadingOlder, onLoadOlder]);
-  const atBottomChange = useCallback((at: boolean) => report(at, lastSeqRef.current), [report]);
+  const atBottomChange = useCallback((at: boolean) => store.bottom(at, lastSeqRef.current), [store]);
+  const onScroll = useCallback(
+    (e: UIEvent<HTMLDivElement>) => {
+      if (e.target instanceof HTMLElement && e.target.hasAttribute("data-virtuoso-scroller")) store.scrolled(e.target);
+    },
+    [store],
+  );
 
   if (items.length === 0) return <>{empty}</>;
   const news = !bottom.atBottom && lastSeq > bottom.seen;
   return (
-    <div className={cn("relative h-full min-h-0", className)}>
+    <div
+      className={cn("relative h-full min-h-0", className)}
+      onScrollCapture={onScroll}
+      onWheelCapture={store.input}
+      onTouchStartCapture={store.input}
+      onTouchMoveCapture={store.input}
+      onKeyDownCapture={store.input}
+    >
       <Virtuoso<T, VirtualContext>
         ref={ref}
         data={items}
@@ -124,9 +168,9 @@ export function VirtualThread<T>({ items, itemKey, renderItem, lastSeq, hasOlder
         itemContent={(index, item) => renderItem(item, index - firstIndex)}
         increaseViewportBy={{ top: OVERSCAN_PX, bottom: OVERSCAN_PX }}
         defaultItemHeight={72}
-        atBottomThreshold={64}
+        atBottomThreshold={AT_BOTTOM_PX}
         atBottomStateChange={atBottomChange}
-        followOutput={(atBottom) => (atBottom ? "smooth" : false)}
+        followOutput={store.follow}
         startReached={startReached}
         className="scrollbar-thin overscroll-contain"
       />

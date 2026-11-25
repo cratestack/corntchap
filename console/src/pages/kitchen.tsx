@@ -999,7 +999,7 @@ function ActivityView({ potKey, events: liveEvents }: { potKey: string; events: 
   const [actor, setActor] = useState<string>("");
   const { ready, events: everyEvent } = useLive();
   // the live feed keeps the latest 400 events of every pot: when it is full, history lies behind it
-  const history = useOlderEvents(potKey, liveEvents, everyEvent.length >= KEEP);
+  const history = useOlderEvents(potKey, liveEvents, everyEvent.length >= KEEP, everyEvent[0]?.seq ?? null);
   const events = history.events;
   const actors = useMemo(() => [...new Set(events.map((e) => e.actor).filter((a): a is string => !!a))].sort(), [events]);
   const filtered = useMemo(() => {
@@ -1046,6 +1046,13 @@ function ActivityView({ potKey, events: liveEvents }: { potKey: string; events: 
         ) : filtered.length === 0 ? (
           <EmptyState band={false} title="Nothing to report" className="border-0">
             {events.length === 0 ? "Events show up here as cooks scoop, tick and serve." : plural(events.length, "event") + " hidden by the filters."}
+            {history.hasOlder && (
+              <span className="mt-3 block">
+                <Button type="button" variant="outline" size="sm" disabled={history.loadingOlder} onClick={history.loadOlder}>
+                  {history.loadingOlder ? "Loading older activity" : "Load older activity"}
+                </Button>
+              </span>
+            )}
           </EmptyState>
         ) : (
           <EventFeed events={filtered} hasOlder={history.hasOlder} loadingOlder={history.loadingOlder} onLoadOlder={history.loadOlder} />
