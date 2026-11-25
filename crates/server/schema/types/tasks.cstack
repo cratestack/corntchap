@@ -131,6 +131,15 @@ type TaskView {
   review ReviewSummary?
 }
 
+/// One page of tasks (taskPage), with how many match in all.
+type TaskPage {
+  items TaskView[]
+  /// The cursor of the next page; absent on the last one.
+  next_cursor String?
+  /// Tasks matching the filters, all pages together.
+  total Int
+}
+
 /// A task with its checklist, comments, dependencies and subtasks.
 type TaskDetail {
   /// Task id, e.g. PAY-42.
@@ -192,6 +201,8 @@ type TaskDetail {
   warning String?
   items TaskItemView[]
   comments TaskCommentView[]
+  /// How many comments the task has (`comments` holds the newest ones when taskDetail was given commentsLimit).
+  comments_total Int
   dependencies TaskLinkView[]
   subtasks TaskLinkView[]
   /// Files attached to the task (get_file for a download URL; links: /files/<id>/<name>).

@@ -453,6 +453,19 @@ pub async fn run(
     where_sql: Option<&str>,
     order_sql: Option<&str>,
 ) -> Result<Vec<Value>> {
+    let (project, w, o) = resolve(db, p, project, key, where_sql, order_sql).await?;
+    run_checked(db, project, &w, o.as_deref()).await
+}
+
+/// The pot and the checked condition and order a `run` or `page` call stands for.
+async fn resolve(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    key: Option<&str>,
+    where_sql: Option<&str>,
+    order_sql: Option<&str>,
+) -> Result<(Uuid, String, Option<String>)> {
     let p = p.clone().worker()?;
     let mut c = db.acquire().await?;
     let pr = project_by_key(&mut c, &p, &project.trim().to_uppercase()).await?;
@@ -475,8 +488,69 @@ pub async fn run(
             check_order(order_sql.unwrap_or(""))?,
         ),
     };
-    drop(c);
-    run_checked(db, pr.id, &w, o.as_deref()).await
+    Ok((pr.id, w, o))
+}
+
+/// A page of a view's tasks for the console (`viewPage`): the same rows in the same order as
+/// [`run`], without its 500-row cap. The cursor holds the last row number; it is tied to the
+/// condition and order it was minted for.
+pub async fn page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    key: Option<&str>,
+    where_sql: Option<&str>,
+    order_sql: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    use sha2::{Digest, Sha256};
+    let (project, w, o) = resolve(db, p, project, key, where_sql, order_sql).await?;
+    let order = o.as_deref().unwrap_or("priority desc, created_at");
+    let sig = hex::encode(&Sha256::digest(format!("{w}\n{order}").as_bytes())[..6]);
+    let sort = format!("rn:{sig}");
+    let paging = crate::paging::paging(
+        page,
+        &sort,
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let after: i64 = match paging.key(0) {
+        Some(k) => k.parse().map_err(|_| bad("invalid cursor".to_string()))?,
+        None => 0,
+    };
+    let mut tx = db.begin().await?;
+    sqlx::query("set transaction read only")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("set local statement_timeout = '3s'")
+        .execute(&mut *tx)
+        .await?;
+    let sql = format!(
+        "with v as ({VIEW_ROWS}),
+              sel as (select _tid, row_number() over (order by {order}, number) as rn
+                      from v where ({w}))
+         select {TASK_JSON}, array[sel.rn::text]
+         from sel join tasks t on t.id = sel._tid join projects pr on pr.id = t.project_id
+         where sel.rn > $2 order by sel.rn limit $3"
+    );
+    let rows: std::result::Result<Vec<(Value, Vec<String>)>, sqlx::Error> =
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(project)
+            .bind(after)
+            .bind(paging.fetch())
+            .fetch_all(&mut *tx)
+            .await;
+    tx.rollback().await.ok();
+    let rows = rows.map_err(|e| match e {
+        sqlx::Error::Database(d) => bad(format!("the view does not run: {}", d.message())),
+        other => other.into(),
+    })?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
 }
 
 /// The columns a view sees, for the tool descriptions and the console.

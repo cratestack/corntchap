@@ -510,6 +510,67 @@ pub async fn cancel(db: &PgPool, p: &Principal, id: &str) -> Result<Value> {
     Ok(out)
 }
 
+/// A page of the pot's reviews for the console (`reviewPage`): waiting ones first, then newest
+/// first (requested, created_at, number), same filters as [`list`] without the task.
+pub async fn page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    mine: bool,
+    state: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let state = state
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if mine {
+                "requested".into()
+            } else {
+                "all".into()
+            }
+        });
+    if state != "all" && !STATES.contains(&state.as_str()) {
+        return invalid(
+            "state: requested, approved, changes_requested, commented, cancelled or all",
+        );
+    }
+    let paging = crate::paging::paging(
+        page,
+        "-requested,-created_at,-number",
+        3,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let sql = format!(
+        "select {REVIEW_JSON}, array[(rv.state = 'requested')::int::text, rv.created_at::text, rv.number::text]
+         from reviews rv join projects pr on pr.id = rv.project_id
+         where rv.project_id = $1 and ($2 = 'all' or rv.state = $2)
+           and (not $3 or rv.reviewer = $4 or (rv.reviewer is null and rv.requested_by is distinct from $4))
+           and ($5::text is null or ((rv.state = 'requested')::int, rv.created_at, rv.number)
+                < ($5::text::int, $6::text::timestamptz, $7::text::bigint))
+         order by (rv.state = 'requested') desc, rv.created_at desc, rv.number desc limit $8"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(&state)
+        .bind(mine)
+        .bind(p.id)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.key(2))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 /// The pot's reviews, newest first. `mine`: those waiting on the caller (named to it, or to anyone
 /// when it is not the requester). `state`: requested (default for `mine`), or any state, or `all`.
 pub async fn list(

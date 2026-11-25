@@ -71,6 +71,26 @@ fn cache() -> &'static Cache {
     C.get_or_init(Default::default)
 }
 
+/// What an installation listed, kept 60 seconds: the picker asks again on every keystroke, and each
+/// listing is a walk over every page of the installation's repositories.
+const LISTING_TTL: Duration = Duration::seconds(60);
+
+type Listings = Mutex<HashMap<(Uuid, i64), (Vec<Visible>, DateTime<Utc>)>>;
+
+fn listings() -> &'static Listings {
+    static C: OnceLock<Listings> = OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+/// Drop the kept listings of one connection: the next one asks GitHub again (an installation of it
+/// changed, or a test wants to see the requests).
+pub fn forget_listings(connection: Uuid) {
+    listings()
+        .lock()
+        .unwrap()
+        .retain(|(c, _), _| *c != connection);
+}
+
 /// The app's JWT, valid for 9 minutes.
 pub fn app_jwt(app_id: i64, pem: &str, now: DateTime<Utc>) -> Result<String> {
     let key = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes())
@@ -154,6 +174,11 @@ async fn installation_repos(
     installation: i64,
     account: &str,
 ) -> Result<Vec<Visible>> {
+    if let Some((v, at)) = listings().lock().unwrap().get(&(c.id, installation))
+        && Utc::now() - *at < LISTING_TTL
+    {
+        return Ok(v.clone());
+    }
     let token = installation_token(st, c, installation).await?;
     let mut url = Some(format!(
         "{}/installation/repositories?per_page=100",
@@ -179,6 +204,7 @@ async fn installation_repos(
         let status = resp.status();
         if status == http::StatusCode::UNAUTHORIZED {
             cache().lock().unwrap().remove(&(c.id, installation));
+            listings().lock().unwrap().remove(&(c.id, installation));
         }
         let next = next_link(resp.headers());
         let v: Value = resp.json().await.unwrap_or(Value::Null);
@@ -212,6 +238,10 @@ async fn installation_repos(
         }
         url = next;
     }
+    listings()
+        .lock()
+        .unwrap()
+        .insert((c.id, installation), (out.clone(), Utc::now()));
     Ok(out)
 }
 

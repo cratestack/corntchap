@@ -87,6 +87,7 @@ pub async fn list(
     project: Option<&str>,
     query: Option<&str>,
     installation: Option<i64>,
+    limit: Option<i64>,
 ) -> Result<Value> {
     let pot = check(st, p, project).await?;
     let have = match &pot {
@@ -97,10 +98,14 @@ pub async fn list(
     let cat = catalog::visible(st, installation).await?;
     let unf = super::unfollowed::counts(&st.db).await?;
     let q = query.unwrap_or("").trim().to_lowercase();
-    let repos: Vec<Value> = cat
+    let matching = cat
         .repos
         .iter()
-        .filter(|r| q.is_empty() || r.full_name.to_lowercase().contains(&q))
+        .filter(|r| q.is_empty() || r.full_name.to_lowercase().contains(&q));
+    // `total` counts every match; `limit` (at most 500) only cuts what is shown
+    let total = matching.clone().count();
+    let repos: Vec<Value> = matching
+        .take(limit.map_or(usize::MAX, |l| l.clamp(1, 500) as usize))
         .map(|r| {
             let norm = r.norm_url();
             let name = have
@@ -113,7 +118,7 @@ pub async fn list(
     Ok(json!({
         "project": pot.map(|(_, k)| k),
         "connected": cat.connected,
-        "total": repos.len(),
+        "total": total,
         "repos": repos,
         "errors": cat.errors,
     }))

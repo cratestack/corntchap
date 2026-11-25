@@ -615,21 +615,58 @@ pub async fn set_grants(
 /// Super-admins see every person with their sign-in state; an orchestrator sees the people directory (handle,
 /// display name and role: no sign-in or contact details) to put people in their teams.
 pub async fn list_users(db: &PgPool, p: &Principal) -> Result<Value> {
+    Ok(Value::Array(
+        list_users_q(db, p, &DirQuery::default()).await?,
+    ))
+}
+
+/// Narrowing and paging of a directory list (`/v1/users`, `/v1/agents`): `q` matches name and display
+/// name (any case); keyset on name after `after`; at most `limit` rows (none: all).
+#[derive(Default, Clone)]
+pub struct DirQuery {
+    pub q: Option<String>,
+    pub after: Option<String>,
+    pub limit: Option<i64>,
+}
+
+fn dir_filter(col_name: &str, col_display: Option<&str>, first: usize) -> String {
+    let (q, after, _) = (first, first + 1, first + 2);
+    let display = col_display
+        .map(|d| format!(" or position(lower(${q}) in lower(coalesce({d}, ''))) > 0"))
+        .unwrap_or_default();
+    format!(
+        "(${q}::text is null or position(lower(${q}) in lower({col_name})) > 0{display})
+         and (${after}::text is null or {col_name} > ${after})"
+    )
+}
+
+pub async fn list_users_q(db: &PgPool, p: &Principal, q: &DirQuery) -> Result<Vec<Value>> {
     let p = &acting_or_self(db, p).await?;
     if !p.is_user() || !p.can_orchestrate() {
         return Err(Error::Forbidden(
             "only an orchestrator or a super-admin can list people".into(),
         ));
     }
+    let f = dir_filter("name", Some("display_name"), 1);
     let sql = if p.is_super_admin() {
-        "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role,
-            'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals where kind = 'user' order by name"
+        format!(
+            "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role,
+            'linked', oidc_sub is not null, 'disabled', disabled_at is not null) from principals
+            where kind = 'user' and {f} order by name limit $3"
+        )
     } else {
-        "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role)
-         from principals where kind = 'user' and disabled_at is null order by name"
+        format!(
+            "select jsonb_build_object('name', name, 'display_name', display_name, 'role', role)
+         from principals where kind = 'user' and disabled_at is null and {f} order by name limit $3"
+        )
     };
-    let rows: Vec<Value> = sqlx::query_scalar(sql).fetch_all(db).await?;
-    Ok(Value::Array(rows))
+    let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(q.q.as_deref())
+        .bind(q.after.as_deref())
+        .bind(q.limit)
+        .fetch_all(db)
+        .await?;
+    Ok(rows)
 }
 
 pub async fn create_team(db: &PgPool, p: &Principal, name: &str) -> Result<Value> {
@@ -970,6 +1007,17 @@ pub async fn create_principal(
 }
 
 pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<Value> {
+    Ok(Value::Array(
+        list_principals_q(db, p, kind, &DirQuery::default()).await?,
+    ))
+}
+
+pub async fn list_principals_q(
+    db: &PgPool,
+    p: &Principal,
+    kind: &str,
+    q: &DirQuery,
+) -> Result<Vec<Value>> {
     let p = &acting_or_self(db, p).await?;
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select jsonb_build_object('id', a.id, 'name', a.name, 'kind', a.kind, 'agent_kind', a.agent_kind, 'runtime', a.runtime,
@@ -982,15 +1030,19 @@ pub async fn list_principals(db: &PgPool, p: &Principal, kind: &str) -> Result<V
             'busy', (select count(*) from tasks t where t.claimed_by = a.id and t.status = 'claimed' and t.lease_expires_at > now()),
             'teams', coalesce((select jsonb_agg(t.name order by t.name) from team_members m join teams t on t.id = m.team_id
                                where m.principal_id = a.id), '[]'::jsonb))
-         from principals a where a.kind = $1 and ($2 or a.owner_id = $3) order by a.name",
-        crate::cloud::fire_and_forget_sql("a.id")
+         from principals a where a.kind = $1 and ($2 or a.owner_id = $3) and {} order by a.name limit $6",
+        crate::cloud::fire_and_forget_sql("a.id"),
+        dir_filter("a.name", None, 4),
     )))
     .bind(kind)
     .bind(p.is_super_admin())
     .bind(p.id)
+    .bind(q.q.as_deref())
+    .bind(q.after.as_deref())
+    .bind(q.limit)
     .fetch_all(db)
     .await?;
-    Ok(Value::Array(rows))
+    Ok(rows)
 }
 
 async fn managed(c: &mut PgConnection, p: &Principal, name: &str) -> Result<(Uuid, String)> {

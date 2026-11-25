@@ -135,3 +135,86 @@ export function usePaged<T>(make: (count: number) => T[], first: number, page: n
   const { items, loading } = useSyncExternalStore(store.subscribe, store.get);
   return { items, loading, done: items.length >= total, loadMore: store.loadMore };
 }
+
+// ---- a chat thread: oldest first, older pages load on request, new messages can arrive ----
+
+export interface ThreadMsg {
+  id: string;
+  seq: number;
+  /** Between 1 and 5 lines, so heights are mixed. */
+  lines: number;
+  mine: boolean;
+}
+
+/** Messages `from + 1 .. from + count`, oldest first. */
+export function makeThread(count: number, from = 0): ThreadMsg[] {
+  return Array.from({ length: count }, (_, i) => {
+    const seq = from + i + 1;
+    return { id: `m${seq}`, seq, lines: 1 + ((seq * 7) % 5), mine: seq % 3 === 0 };
+  });
+}
+
+export function MsgBubble({ msg }: { msg: ThreadMsg }) {
+  return (
+    <div data-testid="msg" data-seq={msg.seq} className={msg.mine ? "flex justify-end pt-1" : "flex justify-start pt-1"}>
+      <div className={`max-w-[75%] rounded-2xl px-3.5 py-2 ${msg.mine ? "bg-primary/15" : "bg-muted"}`}>
+        <p className="font-mono text-[11px] leading-4 font-bold">Message {msg.seq}</p>
+        {Array.from({ length: msg.lines }, (_, i) => (
+          <p key={i} className="text-[13px] leading-5">
+            Line {i + 1} of {msg.lines}: what somebody said in the thread.
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A server-paged thread of `total` messages: the newest `loaded` first, `loadOlder()` prepends `olderPage` more
+ * after `olderMs`, and with `appendMs` a new message arrives at that interval (until `maxAppended`).
+ */
+export function useThread({ total, loaded, olderPage = 50, olderMs = 300, appendMs = 0, maxAppended = 50 }: { total: number; loaded: number; olderPage?: number; olderMs?: number; appendMs?: number; maxAppended?: number }) {
+  const store = useMemo(() => {
+    let state = { items: makeThread(loaded, total - loaded), loadingOlder: false };
+    const listeners = new Set<() => void>();
+    const set = (next: typeof state) => {
+      state = next;
+      listeners.forEach((f) => f());
+    };
+    let appended = 0;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    return {
+      get: () => state,
+      subscribe: (l: () => void) => {
+        listeners.add(l);
+        if (appendMs > 0 && timer === undefined) {
+          timer = setInterval(() => {
+            if (appended >= maxAppended) return;
+            appended += 1;
+            set({ ...state, items: [...state.items, ...makeThread(1, total + appended - 1)] });
+          }, appendMs);
+        }
+        return () => {
+          listeners.delete(l);
+          if (listeners.size === 0) {
+            clearInterval(timer);
+            timer = undefined;
+          }
+        };
+      },
+      loadOlder: () => {
+        const first = state.items[0]?.seq ?? 1;
+        if (state.loadingOlder || first <= 1) return;
+        set({ ...state, loadingOlder: true });
+        setTimeout(() => {
+          const take = Math.min(olderPage, first - 1);
+          set({ items: [...makeThread(take, first - 1 - take), ...state.items], loadingOlder: false });
+        }, olderMs);
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const state = useSyncExternalStore(store.subscribe, store.get);
+  const first = state.items[0]?.seq ?? 1;
+  return { items: state.items, loadingOlder: state.loadingOlder, hasOlder: first > 1, loadOlder: store.loadOlder, lastSeq: state.items[state.items.length - 1]?.seq ?? 0 };
+}

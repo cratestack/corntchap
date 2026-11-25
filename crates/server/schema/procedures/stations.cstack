@@ -50,3 +50,11 @@ mutation procedure stationSetMain(id: String, main: Boolean?): StationView
 mutation procedure stationStart(project: String, cook: String?, task: String?, prompt: String?, directory: String?, label: String?): StationView
   @allow(auth() != null)
   @mcp(tool: "start_station", description: "Start a new Claude Code session for a cook in a pot, in a folder where the cook already has a station (its relay runs it with `claude -p` on that machine). The session becomes a new station; give it a task to take and/or a prompt.")
+
+/// A page of cloud runs (one station per run, ended ones too), newest first, for the console (not an MCP tool).
+/// @param cook Only this cook.
+/// @param project Only this pot.
+/// @param live true: only runs that have not ended; false: only ended runs.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure cloudRunPage(cook: String?, project: String?, live: Boolean?, page: CursorPageInput): CursorPage<StationView>
+  @allow(auth() != null)

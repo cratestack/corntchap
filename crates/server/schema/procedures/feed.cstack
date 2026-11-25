@@ -6,7 +6,8 @@ part of "../corntchap.cstack"
 /// @param cursor next_cursor from the previous call; 0 to start from the beginning.
 /// @param project Only events of this project (key, e.g. PAY).
 /// @param limit At most this many events (default 200).
-procedure changesSince(cursor: Int, project: String?, limit: Int?): ChangeFeed
+/// @param before Instead of events after the cursor: the newest `limit` events before this seq, oldest first.
+procedure changesSince(cursor: Int, project: String?, limit: Int?, before: Int?): ChangeFeed
   @allow(auth() != null)
   @mcp(tool: "changes_since", description: "Events after a cursor (0 to start) plus the next cursor; empty when nothing moved.")
 

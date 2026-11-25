@@ -33,3 +33,11 @@ procedure reviewList(project: String, mine: Boolean?, state: String?, task: Stri
 mutation procedure reviewCancel(id: String): ReviewView
   @allow(auth() != null)
   @mcp(tool: "cancel_review", description: "Withdraw a review you asked for that has no verdict yet.")
+
+/// A page of a pot's reviews, for the console (not an MCP tool).
+/// @param project Pot key, e.g. PAY.
+/// @param mine Only the reviews waiting on you.
+/// @param state requested, approved, changes_requested, commented, cancelled or all. Default: requested with mine, else all.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure reviewPage(project: String, mine: Boolean?, state: String?, page: CursorPageInput): CursorPage<ReviewView>
+  @allow(auth() != null)

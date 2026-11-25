@@ -56,6 +56,8 @@ type PassPage {
   cursor Int
   /// What is still unread after this read.
   unread PassUnread
+  /// There are older messages than the first one returned (read them with `before`).
+  older Boolean
 }
 
 /// A cook (and the session) a pass message woke.

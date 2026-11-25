@@ -440,6 +440,8 @@ pub fn not_woken_note(names: &[String]) -> Option<String> {
 /// Read a pot's pass. `chef`: none for everything you can read (the pass and your direct
 /// messages), `pot` for the pass only, or a chef's name for your conversation with them. Newest
 /// `limit` messages, or those after `after` (a seq), oldest first. What you read counts as read.
+/// With `before`: the newest `limit` messages below that seq, oldest first, and nothing is marked
+/// read (the console scrolling back through history).
 pub async fn read(
     db: &PgPool,
     p: &Principal,
@@ -447,6 +449,7 @@ pub async fn read(
     with: Option<&str>,
     after: Option<i64>,
     limit: Option<i64>,
+    before: Option<i64>,
 ) -> Result<Value> {
     let p = p.clone().worker()?;
     let mut tx = db.begin().await?;
@@ -465,7 +468,7 @@ pub async fn read(
     };
     let sql = format!(
         "select m.seq, {MSG_JSON} from pass_messages m join projects pr on pr.id = m.project_id
-         where {VISIBLE} and {} and ($3::bigint is null or m.seq > $3)
+         where {VISIBLE} and {} and ($3::bigint is null or m.seq > $3) and ($7::bigint is null or m.seq < $7)
          order by case when $3::bigint is null then -m.seq else m.seq end limit $4",
         scope("$5", "$6")
     );
@@ -476,13 +479,35 @@ pub async fn read(
         .bind(limit)
         .bind(peer)
         .bind(mode)
+        .bind(before)
         .fetch_all(&mut *tx)
         .await?;
     if after.is_none() {
         rows.reverse();
     }
-    // Everything up to the newest message returned is read, per conversation.
-    if let Some(max) = rows.iter().map(|r| r.0).max() {
+    // Is there more before the first message returned?
+    let older: bool = match rows.iter().map(|r| r.0).min() {
+        Some(first) => {
+            let sql = format!(
+                "select exists (select 1 from pass_messages m join projects pr on pr.id = m.project_id
+                 where {VISIBLE} and {} and m.seq < $3)",
+                scope("$4", "$5")
+            );
+            sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                .bind(pr.id)
+                .bind(p.id)
+                .bind(first)
+                .bind(peer)
+                .bind(mode)
+                .fetch_one(&mut *tx)
+                .await?
+        }
+        None => false,
+    };
+    // Everything up to the newest message returned is read, per conversation (not when reading back).
+    if before.is_none()
+        && let Some(max) = rows.iter().map(|r| r.0).max()
+    {
         let sql = format!(
             "insert into pass_reads (principal_id, project_id, conversation, last_seq)
              select $2, $1, {CONVERSATION}, max(m.seq)
@@ -508,6 +533,7 @@ pub async fn read(
         "messages": rows.into_iter().map(|r| r.1).collect::<Vec<_>>(),
         "cursor": cursor,
         "unread": unread,
+        "older": older,
     }))
 }
 

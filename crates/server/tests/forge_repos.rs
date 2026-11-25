@@ -232,6 +232,7 @@ struct World {
     alice: String,
     bob: String,
     carol: String,
+    conn: uuid::Uuid,
 }
 
 /// octo (admin), alice (owner of team acme and its pot SHOP, which has acme/shop), bob (member),
@@ -306,6 +307,7 @@ async fn world() -> World {
         alice,
         bob,
         carol,
+        conn,
     }
 }
 
@@ -423,6 +425,8 @@ async fn the_app_jwt_is_rs256_with_the_app_id() {
 async fn the_installation_token_is_requested_once_and_reused_until_it_expires() {
     let w = world().await;
     for _ in 0..3 {
+        // each listing asks GitHub again: the 60 second listing cache has its own test
+        corntchap::forge::catalog::forget_listings(w.conn);
         tool(
             &w.app,
             &w.alice,
@@ -450,6 +454,82 @@ async fn the_installation_token_is_requested_once_and_reused_until_it_expires() 
                     .unwrap()
                     .0)
     );
+}
+
+#[tokio::test]
+async fn limit_cuts_the_list_and_listings_are_kept_for_a_minute() {
+    let w = world().await;
+    let requests = |w: &World| w.fake.lock().unwrap().listings.len();
+    let v = tool(
+        &w.app,
+        &w.alice,
+        "list_forge_repos",
+        json!({"project": "SHOP", "limit": 2}),
+    )
+    .await;
+    // most recently pushed first, as without a limit; `total` still counts every repository
+    assert_eq!(names(&v), ["acme/api", "other/api"]);
+    assert_eq!(v["total"], 5, "{v}");
+    let after_first = requests(&w);
+    assert!(after_first > 0);
+
+    // the same listing again, or filtered, or with another limit: no new request to GitHub
+    let v = tool(
+        &w.app,
+        &w.alice,
+        "list_forge_repos",
+        json!({"project": "SHOP", "query": "api", "limit": 1}),
+    )
+    .await;
+    assert_eq!(names(&v), ["acme/api"]);
+    assert_eq!(v["total"], 2, "total is counted after the filter: {v}");
+    tool(
+        &w.app,
+        &w.alice,
+        "list_forge_repos",
+        json!({"project": "SHOP"}),
+    )
+    .await;
+    assert_eq!(requests(&w), after_first, "served from the kept listing");
+    // without a limit the answer is what it was
+    let v = tool(
+        &w.app,
+        &w.alice,
+        "list_forge_repos",
+        json!({"project": "SHOP"}),
+    )
+    .await;
+    assert_eq!(names(&v).len(), 5);
+    // the limit is a lower bound of one
+    let v = tool(
+        &w.app,
+        &w.alice,
+        "list_forge_repos",
+        json!({"project": "SHOP", "limit": 0}),
+    )
+    .await;
+    assert_eq!(names(&v).len(), 1);
+
+    // an installation change forgets what was kept; so does the minute running out
+    corntchap::forge::store::remove_installation(&w.app.state.db, w.conn, 1)
+        .await
+        .unwrap();
+    tool(
+        &w.app,
+        &w.alice,
+        "list_forge_repos",
+        json!({"project": "SHOP"}),
+    )
+    .await;
+    assert!(requests(&w) > after_first);
+    // REST takes limit too
+    let (code, v) = w
+        .app
+        .get(&w.alice, "/forges/repos?project=SHOP&limit=3")
+        .await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(names(&v).len(), 3);
+    assert_eq!(v["total"], 5);
 }
 
 #[tokio::test]

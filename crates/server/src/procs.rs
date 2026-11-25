@@ -219,6 +219,31 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn task_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: task_page::Args,
+        _z: task_page::Authorized,
+    ) -> Result<task_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            service::task_page(
+                &self.state.db,
+                &p,
+                &a.project.to_uppercase(),
+                &a.bucket,
+                a.label.as_deref(),
+                a.menu.as_deref(),
+                a.owner.as_deref(),
+                a.repo.as_deref(),
+                a.q.as_deref(),
+                &a.page,
+            )
+            .await,
+        )
+    }
+
     async fn task_detail(
         &self,
         _db: &Db,
@@ -227,7 +252,7 @@ impl ProcedureRegistry for Procedures {
         _z: task_detail::Authorized,
     ) -> Result<task_detail::Output, CratestackError> {
         let p = principal(ctx)?;
-        typed(service::get_task(&self.state.db, &p, &a.id).await)
+        typed(service::get_task_n(&self.state.db, &p, &a.id, a.commentsLimit).await)
     }
 
     async fn get_board(
@@ -497,6 +522,7 @@ impl ProcedureRegistry for Procedures {
                 a.cursor,
                 project.as_deref(),
                 a.limit.unwrap_or(200),
+                a.before,
             )
             .await,
         )
@@ -574,6 +600,28 @@ impl ProcedureRegistry for Procedures {
             limit: a.limit,
         };
         typed(pantry::recall(&self.state.db, &p, r).await)
+    }
+
+    async fn memory_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: memory_page::Args,
+        _z: memory_page::Authorized,
+    ) -> Result<memory_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            pantry::page(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.kind.as_deref(),
+                &csv(&a.tags),
+                &a.page,
+            )
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
     }
 
     async fn memory_get(
@@ -1219,6 +1267,7 @@ impl ProcedureRegistry for Procedures {
                 a.project.as_deref(),
                 a.query.as_deref(),
                 a.installation,
+                a.limit,
             )
             .await,
         )
@@ -1371,6 +1420,28 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn cloud_run_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: cloud_run_page::Args,
+        _z: cloud_run_page::Authorized,
+    ) -> Result<cloud_run_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            stations::run_page(
+                &self.state.db,
+                &p,
+                a.project.as_deref(),
+                a.cook.as_deref(),
+                a.live,
+                &a.page,
+            )
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
+    }
+
     async fn station_remove(
         &self,
         _db: &Db,
@@ -1491,6 +1562,28 @@ impl ProcedureRegistry for Procedures {
         )
     }
 
+    async fn review_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: review_page::Args,
+        _z: review_page::Authorized,
+    ) -> Result<review_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            reviews::page(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.mine.unwrap_or(false),
+                a.state.as_deref(),
+                &a.page,
+            )
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
+    }
+
     async fn review_cancel(
         &self,
         _db: &Db,
@@ -1546,6 +1639,21 @@ impl ProcedureRegistry for Procedures {
         let p = principal(ctx)?;
         let db = &self.state.db;
         typed(questions::list(db, &p, &a.project, a.status.as_deref()).await)
+    }
+
+    async fn question_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_page::Args,
+        _z: question_page::Authorized,
+    ) -> Result<question_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            questions::page(&self.state.db, &p, &a.project, a.status.as_deref(), &a.page)
+                .await
+                .map(|(items, next)| crate::paging::page_json(items, next)),
+        )
     }
 
     async fn question_mine(
@@ -1797,6 +1905,7 @@ impl ProcedureRegistry for Procedures {
                 a.chef.as_deref(),
                 a.after,
                 a.limit,
+                a.before,
             )
             .await,
         )
@@ -1889,6 +1998,29 @@ impl ProcedureRegistry for Procedures {
             )
             .await
             .map(serde_json::Value::Array),
+        )
+    }
+
+    async fn view_page(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: view_page::Args,
+        _z: view_page::Authorized,
+    ) -> Result<view_page::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            views::page(
+                &self.state.db,
+                &p,
+                &a.project,
+                a.key.as_deref(),
+                a.r#where.as_deref(),
+                a.orderBy.as_deref(),
+                &a.page,
+            )
+            .await
+            .map(|(items, next)| crate::paging::page_json(items, next)),
         )
     }
 

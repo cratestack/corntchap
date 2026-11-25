@@ -714,6 +714,59 @@ pub async fn list(
     Ok(Value::Array(rows))
 }
 
+/// A page of the pool for the console (`questionPage`): open questions oldest first (created_at,
+/// number), the others newest first. Same visibility and statuses as [`list`].
+pub async fn page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    status: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let status = status
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_else(|| "open".into());
+    if !["open", "answered", "dismissed", "all"].contains(&status.as_str()) {
+        return invalid("status: open, answered, dismissed or all");
+    }
+    let asc = status == "open";
+    let order = format!(
+        "{}created_at,{}number:{status}",
+        if asc { "" } else { "-" },
+        if asc { "" } else { "-" }
+    );
+    let paging = crate::paging::paging(
+        page,
+        &order,
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.to_uppercase()).await?;
+    let (cmp, dir) = if asc { (">", "asc") } else { ("<", "desc") };
+    let sql = format!(
+        "select {QUESTION_JSON}, array[q.created_at::text, q.number::text]
+         from questions q join projects pr on pr.id = q.project_id
+         where q.project_id = $1 and ($2 = 'all' or q.status = $2)
+           and ($3::text is null or (q.created_at, q.number) {cmp} ($3::text::timestamptz, $4::text::bigint))
+         order by q.created_at {dir}, q.number {dir} limit $5"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(&status)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 /// Questions the caller asked (a cook: its own), open ones first.
 pub async fn mine(db: &PgPool, p: &Principal, status: Option<&str>) -> Result<Value> {
     let status = status

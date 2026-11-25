@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { PassMessageView, WokenRef } from "@corntchap/api";
-import { ArrowDown, Check, CircleDashed, Cloud, Copy, Hash, Megaphone, MessageCircle, Reply, SquareArrowOutUpRight } from "lucide-react";
+import { Check, CircleDashed, Cloud, Copy, Hash, Megaphone, MessageCircle, Reply, SquareArrowOutUpRight } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { errorMessage } from "@/lib/api";
 import { fmtClock, useNow } from "@/lib/format";
 import { useOpenTask } from "@/lib/nav";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import { VirtualThread } from "@/components/ui/virtual-thread";
 import { Avatar, IdChip, RowSkeleton } from "./bits";
 import { Markdown } from "./markdown";
 import { KindChip } from "./pass-bits";
@@ -23,7 +24,14 @@ function dayLabel(iso: string, now: number): string {
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 
-type Item = { kind: "day"; key: string; label: string } | { kind: "msg"; key: string; m: PassMessageView; first: boolean; last: boolean };
+/** A message with what the thread draws around it: the day heading above the first message of a day. */
+interface Item {
+  key: string;
+  m: PassMessageView;
+  first: boolean;
+  last: boolean;
+  day: string | null;
+}
 
 function buildItems(messages: PassMessageView[], now: number): Item[] {
   const out: Item[] = [];
@@ -36,9 +44,8 @@ function buildItems(messages: PassMessageView[], now: number): Item[] {
   messages.forEach((m, i) => {
     const day = new Date(m.at).toDateString();
     const newDay = !prev || new Date(prev.at).toDateString() !== day;
-    if (newDay) out.push({ kind: "day", key: `d-${day}`, label: dayLabel(m.at, now) });
     const next = messages[i + 1];
-    out.push({ kind: "msg", key: m.id, m, first: !prev || newDay || !near(prev, m), last: !next || !near(m, next) });
+    out.push({ key: m.id, m, first: !prev || newDay || !near(prev, m), last: !next || !near(m, next), day: newDay ? dayLabel(m.at, now) : null });
     prev = m;
   });
   return out;
@@ -65,6 +72,9 @@ export function Thread({
   taskKeys,
   signals,
   actions,
+  hasOlder,
+  loadingOlder,
+  onLoadOlder,
 }: {
   potKey: string;
   messages: PassMessageView[] | undefined;
@@ -78,86 +88,61 @@ export function Thread({
   taskKeys: string[];
   signals: WakeSignals;
   actions: ThreadActions;
+  /** Older messages than the first one loaded exist on the server. */
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  onLoadOlder: () => void;
 }) {
   const now = useNow();
   const minute = Math.floor(now / 60_000);
-  const box = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
-  const [away, setAway] = useState(false);
   const last = messages?.[messages.length - 1]?.seq ?? 0;
   const items = useMemo(() => buildItems(messages ?? [], now), [messages, minute]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Follow the newest message while you are at the bottom; when you have scrolled up to read, stay put.
-  useLayoutEffect(() => {
-    const el = box.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [last, loading]);
-  useEffect(() => {
-    if (!stick.current) setAway(true);
-  }, [last]);
-
   const cook = who ? cooks.get(who) : undefined;
+  const all = messages ?? [];
+
+  const empty =
+    loading && !messages ? (
+      <div className="h-full overflow-y-auto px-3 py-3 md:px-6 md:py-4">
+        <RowSkeleton rows={3} />
+      </div>
+    ) : error && !messages ? (
+      <p className="py-6 text-center text-destructive">{errorMessage(error)}</p>
+    ) : (
+      <div className="h-full overflow-y-auto px-3 py-3 md:px-6 md:py-4">
+        <QuietThread who={who} cook={cook} potKey={potKey} />
+      </div>
+    );
 
   return (
-    <div className="relative min-h-0 flex-1">
-      <div
-        ref={box}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
-          if (stick.current) setAway(false);
-        }}
-        role="log"
-        aria-live="polite"
-        className="scrollbar-thin h-full overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-3 md:px-6 md:py-4"
-      >
-        {loading && !messages ? (
-          <RowSkeleton rows={3} />
-        ) : error && !messages ? (
-          <p className="py-6 text-center text-destructive">{errorMessage(error)}</p>
-        ) : !messages || messages.length === 0 ? (
-          <QuietThread who={who} cook={cook} potKey={potKey} />
-        ) : (
-          <ul className="mx-auto flex min-h-full max-w-3xl flex-col justify-end">
-            {items.map((it) =>
-              it.kind === "day" ? (
-                <li key={it.key} className="my-3 flex justify-center first:mt-0" aria-label={it.label}>
-                  <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">{it.label}</span>
-                </li>
-              ) : (
-                <Message
-                  key={it.key}
-                  m={it.m}
-                  first={it.first}
-                  last={it.last}
-                  mine={it.m.from === me}
-                  me={me}
-                  inDirect={who !== null}
-                  cooks={cooks}
-                  canDirect={!!it.m.from && it.m.from !== me && it.m.from !== who && chefNames.has(it.m.from)}
-                  taskKeys={taskKeys}
-                  messages={messages}
-                  signals={signals}
-                  now={now}
-                  actions={actions}
-                />
-              ),
-            )}
-          </ul>
+    <div role="log" aria-live="polite" aria-label="Messages" className="relative min-h-0 flex-1">
+      <VirtualThread
+        items={items}
+        itemKey={(it) => it.key}
+        lastSeq={last}
+        hasOlder={hasOlder}
+        loadingOlder={loadingOlder}
+        onLoadOlder={onLoadOlder}
+        empty={empty}
+        itemClassName="mx-auto w-full max-w-3xl px-3 md:px-6"
+        renderItem={(it) => (
+          <Message
+            m={it.m}
+            day={it.day}
+            first={it.first}
+            last={it.last}
+            mine={it.m.from === me}
+            me={me}
+            inDirect={who !== null}
+            cooks={cooks}
+            canDirect={!!it.m.from && it.m.from !== me && it.m.from !== who && chefNames.has(it.m.from)}
+            taskKeys={taskKeys}
+            messages={all}
+            signals={signals}
+            now={now}
+            actions={actions}
+          />
         )}
-      </div>
-      {away && (
-        <button
-          type="button"
-          onClick={() => {
-            const el = box.current;
-            if (el) el.scrollTo({ top: el.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-          }}
-          className="absolute right-4 bottom-3 inline-flex h-9 items-center gap-1.5 rounded-full border border-border bg-card px-3 text-[12.5px] font-medium shadow-md"
-        >
-          <ArrowDown className="size-3.5" aria-hidden="true" /> New messages
-        </button>
-      )}
+      />
     </div>
   );
 }
@@ -239,6 +224,7 @@ function quoteOf(m: PassMessageView, name: string): string {
 
 function Message({
   m,
+  day,
   first,
   last,
   mine,
@@ -253,6 +239,7 @@ function Message({
   actions,
 }: {
   m: PassMessageView;
+  day: string | null;
   first: boolean;
   last: boolean;
   mine: boolean;
@@ -300,7 +287,13 @@ function Message({
   const woken = dedupeWoken(m.woken);
 
   return (
-    <li className={cn("group/msg relative flex min-w-0 gap-2", mine && "flex-row-reverse", first ? "mt-3.5 first:mt-0" : "mt-0.5")}>
+    <>
+      {day && (
+        <div className="flex justify-center pt-3 pb-1" role="separator" aria-label={day}>
+          <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">{day}</span>
+        </div>
+      )}
+      <div className={cn("group/msg relative flex min-w-0 gap-2", mine && "flex-row-reverse", first ? "pt-3.5" : "pt-0.5", day && "pt-1")}>
       {!mine && <span className="w-8 shrink-0">{first && <Avatar name={m.from ?? "the kitchen"} className="size-8 rounded-xl text-[13px]" />}</span>}
       <div className={cn("flex min-w-0 max-w-[88%] flex-col md:max-w-[75%]", mine ? "items-end" : "items-start")}>
         {first && !mine && (
@@ -426,7 +419,8 @@ function Message({
           </ul>
         </SheetContent>
       </Sheet>
-    </li>
+    </div>
+    </>
   );
 }
 

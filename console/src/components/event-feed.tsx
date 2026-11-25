@@ -30,11 +30,13 @@ import {
   GitMerge,
   GitPullRequest,
   AlertTriangle,
+  Loader2,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router";
 import { cn } from "@/lib/utils";
 import { fmtAgo, useNow } from "@/lib/format";
+import { Button } from "@/components/ui/button";
 import { Avatar } from "./bits";
 import { useOpenMemory, useOpenTask } from "@/lib/nav";
 import { fileHref } from "@/lib/files";
@@ -334,11 +336,18 @@ export function EventFeed({
   compact = false,
   limit,
   empty,
+  hasOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
 }: {
   events: ChangeView[];
   compact?: boolean;
   limit?: number;
   empty?: string;
+  /** The full feed: older events than the oldest shown exist, and `onLoadOlder` reads them (also when the end scrolls into view). */
+  hasOlder?: boolean;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
 }) {
   const shown = useMemo(() => {
     const newestFirst = [...events].reverse();
@@ -369,6 +378,17 @@ export function EventFeed({
       items={days.rows}
       itemKey={(r) => r.e.seq}
       defaultItemHeight={64}
+      onEndReached={hasOlder && !loadingOlder ? onLoadOlder : undefined}
+      footer={
+        hasOlder ? (
+          <div className="flex justify-center py-4">
+            <Button type="button" variant="outline" size="sm" disabled={loadingOlder} onClick={onLoadOlder}>
+              {loadingOlder && <Loader2 className="animate-spin" />}
+              {loadingOlder ? "Loading older activity" : "Load older activity"}
+            </Button>
+          </div>
+        ) : null
+      }
       stickyClassName="top-[calc(3.5rem+env(safe-area-inset-top)+1px)]! md:top-0!"
       renderGroup={(g) => (
         <div className="label-caps border-b border-border bg-card pt-4 pb-2" role="heading" aria-level={3}>

@@ -54,6 +54,7 @@ pub async fn list(db: &PgPool) -> Result<Value> {
 /// Remove a connection (its installations and deliveries go with it). The pull requests it told us
 /// about stay: they are history.
 pub async fn remove(db: &PgPool, id: Uuid) -> Result<bool> {
+    super::catalog::forget_listings(id);
     Ok(sqlx::query("delete from forge_connections where id = $1")
         .bind(id)
         .execute(db)
@@ -116,6 +117,7 @@ pub async fn upsert_installation(
     account_type: Option<&str>,
     repo_selection: Option<&str>,
 ) -> Result<()> {
+    super::catalog::forget_listings(connection);
     sqlx::query(
         "insert into forge_installations (connection_id, installation_id, account, account_type, repo_selection)
          values ($1,$2,$3,$4,$5)
@@ -135,6 +137,7 @@ pub async fn upsert_installation(
 }
 
 pub async fn remove_installation(db: &PgPool, connection: Uuid, installation: i64) -> Result<()> {
+    super::catalog::forget_listings(connection);
     sqlx::query(
         "delete from forge_installations where connection_id = $1 and installation_id = $2",
     )

@@ -1,8 +1,9 @@
 import { useCallback } from "react";
 import { useCustom, useCustomMutation, useDataProvider } from "@refinedev/core";
-import { useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
-import type { CorntchapApiClient, FileView, ProjectSummary, QuestionView, ReviewView, TaskView, ViewOut } from "@corntchap/api";
+import { keepPreviousData, useQuery, useQueryClient, useQueries } from "@tanstack/react-query";
+import type { CorntchapApiClient, FileView, ProjectSummary, TaskView, ViewOut } from "@corntchap/api";
 import { client, v1 } from "./api";
+import { invalidateData, usePagedQuery, useProcInfinite } from "./paging";
 import type { Role } from "./session";
 
 type Procs = CorntchapApiClient["procedures"];
@@ -14,13 +15,13 @@ export type ProcOut<N extends ProcName> = Awaited<ReturnType<Procs[N]>>;
  * Query a cratestack procedure through Refine's `custom` (the data provider's escape hatch for procedures).
  * Everything lives under the `["data"]` query-key prefix, so the live poller can invalidate it in one call.
  */
-export function useProc<N extends ProcName>(name: N, args: ProcArgs<N>, opts: { enabled?: boolean; refetchMs?: number } = {}) {
+export function useProc<N extends ProcName>(name: N, args: ProcArgs<N>, opts: { enabled?: boolean; refetchMs?: number; keepPrevious?: boolean } = {}) {
   const { query } = useCustom({
     url: "",
     method: "get",
     meta: { procedure: name },
     config: { payload: args },
-    queryOptions: { enabled: opts.enabled ?? true, staleTime: 1500, refetchInterval: opts.refetchMs ?? false },
+    queryOptions: { enabled: opts.enabled ?? true, staleTime: 1500, refetchInterval: opts.refetchMs ?? false, ...(opts.keepPrevious ? { placeholderData: keepPreviousData } : {}) },
     errorNotification: false,
   });
   const data = (query.data as { data?: unknown } | undefined)?.data as ProcOut<N> | undefined;
@@ -33,10 +34,10 @@ export function useProc<N extends ProcName>(name: N, args: ProcArgs<N>, opts: { 
   };
 }
 
-/** Invalidate every Refine / console query (the live poller and every mutation call this). */
+/** Refresh every Refine / console query (the live poller and every mutation call this); see `invalidateData`. */
 export function useInvalidateAll() {
   const qc = useQueryClient();
-  return useCallback(() => qc.invalidateQueries({ queryKey: ["data"] }), [qc]);
+  return useCallback(() => invalidateData(qc), [qc]);
 }
 
 /** Call a mutating procedure (claim, complete, create, ...), then refresh everything. */
@@ -97,33 +98,47 @@ export function useTeamChefs(team: string | null | undefined, opts: { enabled?: 
   );
 }
 
-/** A pot's files (newest first), from the File model. */
+/** Files per page of a pot's file list. */
+const FILES_PAGE = 50;
+
+/** A pot's files (newest first, a page at a time), from the File model's keyset-paged list. */
 export function usePotFiles(pot: string) {
-  return useModel(["files", pot], async (): Promise<FileView[]> => {
-    const rows = await client.files.list({
-      query: { filters: { "project.key": pot }, include: ["project", "task", "question", "creator"], sort: ["-createdAt"] },
-    });
-    return rows.map((f) => {
-      const key = f.project?.key ?? pot;
-      const id = `${key}-F${num(f.number)}`;
-      return {
-        id,
-        project: key,
-        name: f.name ?? "",
-        content_type: f.contentType ?? "application/octet-stream",
-        size: num(f.size),
-        size_expected: num(f.sizeExpected),
-        status: f.status ?? "uploading",
-        url: `/files/${id}/${encodeURIComponent(f.name ?? "")}`,
-        task: f.task ? `${key}-${num(f.task.number)}` : null,
-        question: f.question ? `${key}-Q${num(f.question.number)}` : null,
-        created_by: f.creator?.name ?? null,
-        created_at: f.createdAt ?? "",
-        ready_at: f.readyAt ?? null,
-        error: f.error ?? null,
-      };
-    });
-  });
+  return usePagedQuery(
+    ["files", pot],
+    async (limit, cursor): Promise<{ items: FileView[]; total: number | null; nextCursor: string | null }> => {
+      const page = await client.files.list({
+        query: {
+          filters: { "project.key": pot },
+          include: ["project", "task", "question", "creator"],
+          sort: ["-createdAt", "-id"],
+          limit,
+          cursor: cursor ?? "",
+        },
+      });
+      const items = page.items.map((f): FileView => {
+        const key = f.project?.key ?? pot;
+        const id = `${key}-F${num(f.number)}`;
+        return {
+          id,
+          project: key,
+          name: f.name ?? "",
+          content_type: f.contentType ?? "application/octet-stream",
+          size: num(f.size),
+          size_expected: num(f.sizeExpected),
+          status: f.status ?? "uploading",
+          url: `/files/${id}/${encodeURIComponent(f.name ?? "")}`,
+          task: f.task ? `${key}-${num(f.task.number)}` : null,
+          question: f.question ? `${key}-Q${num(f.question.number)}` : null,
+          created_by: f.creator?.name ?? null,
+          created_at: f.createdAt ?? "",
+          ready_at: f.readyAt ?? null,
+          error: f.error ?? null,
+        };
+      });
+      return { items, total: page.totalCount, nextCursor: page.pageInfo.nextCursor ?? null };
+    },
+    { getCursor: (p) => p.nextCursor, pageSize: FILES_PAGE, maxLimit: 1000 },
+  );
 }
 
 /** A pot's saved views in tab order, from the PotView model. */
@@ -245,28 +260,29 @@ export interface WakeTargetRow {
   config: Record<string, unknown>;
 }
 
-export function useAgents() {
-  return useV1<AgentRow[]>("/agents");
-}
-
-// ---- the question pool ----
+/** Rows per page of the people list. */
+const USERS_PAGE = 50;
 
 /**
- * A pot's questions by status. The query key is shared with the sidebar's counts, so the open list is fetched once.
- * Everything sits under `["data"]`, so the live poller refreshes it on question.* events.
+ * People (`/api/v1/users`), a page at a time and narrowed by `q` (handle or display name): super-admins see every
+ * sign-in, orchestrators the directory.
  */
-export function useQuestions(pot: string, status: "open" | "all", enabled = true) {
-  const dp = useDataProvider();
-  const q = useQuery({
-    queryKey: ["data", "questions", pot, status],
-    queryFn: async () => {
-      const res = await dp().custom!({ url: "", method: "get", meta: { procedure: "questionList" }, payload: { project: pot, status } });
-      return (res as { data: QuestionView[] }).data;
+export function useUsers(q: string) {
+  return usePagedQuery(
+    ["users", q],
+    async (limit, cursor) => {
+      const qs = new URLSearchParams({ limit: String(limit) });
+      if (q) qs.set("q", q);
+      if (cursor) qs.set("cursor", cursor);
+      const page = await v1<{ items: UserRow[]; nextCursor?: string | null }>("GET", `/users?${qs}`);
+      return { items: page.items, total: null, nextCursor: page.nextCursor ?? null };
     },
-    enabled: enabled && !!pot,
-    staleTime: 1500,
-  });
-  return { data: q.data, isLoading: q.isLoading, error: q.error as unknown };
+    { getCursor: (p) => p.nextCursor, pageSize: USERS_PAGE, itemKey: (u) => u.name },
+  );
+}
+
+export function useAgents() {
+  return useV1<AgentRow[]>("/agents");
 }
 
 /** Open-question counts per pot, for the sidebar badges (from the pot summaries, no extra requests). */
@@ -279,22 +295,16 @@ export function useOpenQuestionCounts(projects: ProjectSummary[] | undefined): R
 // ---- reviews ----
 
 /**
- * A pot's reviews: the ones waiting on you (`mine`), or all of them (open ones first).
- * Under `["data"]` like the rest, so the live poller refreshes it on review.* events.
+ * A pot's reviews, a page at a time: the ones waiting on you (`mine`), or all of them (open ones first).
+ * Live events refresh the first page (see `invalidateData`).
  */
 export function useReviews(pot: string, which: "mine" | "all", enabled = true) {
-  const dp = useDataProvider();
-  const q = useQuery({
-    queryKey: ["data", "reviews", pot, which],
-    queryFn: async () => {
-      const payload = which === "mine" ? { project: pot, mine: true, state: "requested" } : { project: pot, state: "all" };
-      const res = await dp().custom!({ url: "", method: "get", meta: { procedure: "reviewList" }, payload });
-      return (res as { data: ReviewView[] }).data;
-    },
-    enabled: enabled && !!pot,
-    staleTime: 1500,
-  });
-  return { data: q.data, isLoading: q.isLoading, error: q.error as unknown };
+  const args =
+    which === "mine"
+      ? { project: pot, mine: true, state: "requested" as string | null }
+      : { project: pot, mine: null, state: "all" as string | null };
+  const q = useProcInfinite("reviewPage", args, { getCursor: (p) => p.nextCursor, enabled: enabled && !!pot });
+  return { data: q.items, isLoading: q.isLoading, error: q.error, hasNextPage: q.hasNextPage, fetchNextPage: q.fetchNextPage, isFetchingNextPage: q.isFetchingNextPage };
 }
 
 // ---- my work ----

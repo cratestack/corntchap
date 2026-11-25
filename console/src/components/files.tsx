@@ -331,7 +331,7 @@ export function FilesView({ potKey }: { potKey: string }) {
   const res = usePotFiles(potKey);
   const del = useDeleteFile();
   const now = useNow();
-  const all = useMemo(() => (res.data ?? []).filter((f) => f.status !== "deleted"), [res.data]);
+  const all = useMemo(() => res.items.filter((f) => f.status !== "deleted"), [res.items]);
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return needle ? all.filter((f) => f.name.toLowerCase().includes(needle) || f.id.toLowerCase().includes(needle)) : all;
@@ -398,7 +398,7 @@ export function FilesView({ potKey }: { potKey: string }) {
       <div className="mt-5">
         {res.isLoading ? (
           <RowSkeleton rows={4} />
-        ) : res.error && !res.data ? (
+        ) : res.error && res.items.length === 0 ? (
           <EmptyState band={false} title="The files would not load">
             {errorMessage(res.error)}
           </EmptyState>
@@ -406,7 +406,8 @@ export function FilesView({ potKey }: { potKey: string }) {
           <EmptyState title="No files in this pot yet">Upload screenshots, logs or build output. Cooks can attach files too.</EmptyState>
         ) : rows.length === 0 ? (
           <EmptyState band={false} title="No file by that name">
-            {plural(all.length, "file")} in the pot, none matching “{q}”.
+            {plural(all.length, "file")} loaded, none matching “{q}”.
+            {res.hasNextPage && " Older files are not loaded yet."}
           </EmptyState>
         ) : (
           <ul className="space-y-1.5">
@@ -427,6 +428,14 @@ export function FilesView({ potKey }: { potKey: string }) {
               />
             ))}
           </ul>
+        )}
+        {res.hasNextPage && (
+          <div className="mt-3 flex justify-center">
+            <Button type="button" variant="outline" disabled={res.isFetchingNextPage} onClick={() => void res.fetchNextPage()}>
+              {res.isFetchingNextPage && <Loader2 className="animate-spin" />}
+              Load older files{res.total ? ` (${all.length} of ${res.total})` : ""}
+            </Button>
+          </div>
         )}
       </div>
       {del.dialog}

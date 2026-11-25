@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { EventFeed } from "./event-feed";
-import { makeEvents, useGrowing } from "./ui/virtual.fixtures";
+import { makeEvents, useGrowing, usePaged } from "./ui/virtual.fixtures";
 
 const meta = {
   title: "Console/EventFeed",
@@ -26,3 +26,11 @@ export const LiveAppend: Story = {
 };
 
 export const Compact: Story = { args: { events: makeEvents(40), compact: true, limit: 14 } };
+
+/** The latest 40 events with older history behind them: the footer loads 40 more each time the end comes into view. */
+export const LoadOlder: Story = {
+  render: function Older(args) {
+    const t = usePaged((n) => makeEvents(n, 0).slice(-n), 40, 40, 400);
+    return <EventFeed {...args} events={t.items} hasOlder={!t.done} loadingOlder={t.loading} onLoadOlder={t.loadMore} />;
+  },
+};

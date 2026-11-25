@@ -11,7 +11,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { useUi } from "@/lib/ui";
-import { useProc, useProjects, useQuestions } from "@/lib/data";
+import { useProc, useProjects } from "@/lib/data";
 import { useTheme } from "@/lib/theme";
 import { canOrchestrate, isSuperAdmin, logout, useSession } from "@/lib/session";
 import { lastView } from "@/lib/views";
@@ -28,17 +28,22 @@ export function CommandPalette() {
   const openTask = useOpenTask();
   const projects = useProjects();
   const pot = /^\/pots\/([^/]+)/.exec(loc.pathname)?.[1]?.toUpperCase();
-  const tasks = useProc("projectTasks", { project: pot ?? "" }, { enabled: !!pot && paletteOpen });
+  // the palette lists the first 80 tasks still in play, best first
+  const tasks = useProc(
+    "taskPage",
+    { project: pot ?? "", bucket: "active", label: null, menu: null, owner: null, repo: null, q: null, page: { limit: 80, cursor: null } },
+    { enabled: !!pot && paletteOpen },
+  );
 
   const menus = useMenus(pot ?? "", !!pot && paletteOpen);
-  const asks = useQuestions(pot ?? "", "open", !!pot && paletteOpen).data?.length ?? 0;
+  const asks = projects.data?.find((p) => p.key === pot)?.open_questions ?? 0;
 
   const run = (fn: () => void) => () => {
     setPaletteOpen(false);
     fn();
   };
 
-  const taskItems = useMemo(() => (tasks.data ?? []).slice(0, 80), [tasks.data]);
+  const taskItems = useMemo(() => (tasks.data?.items ?? []).slice(0, 80), [tasks.data]);
 
   return (
     <CommandDialog

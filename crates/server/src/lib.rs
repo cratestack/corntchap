@@ -17,6 +17,7 @@ pub mod menus;
 pub mod my_work;
 pub mod oauth;
 pub mod pages;
+pub mod paging;
 pub mod pantry;
 pub mod pass;
 pub mod procs;

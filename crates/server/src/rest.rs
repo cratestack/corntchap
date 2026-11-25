@@ -172,8 +172,63 @@ async fn logout(State(st): State<AppState>, Authn(p): Auth) -> J {
     ok(json!({"ok": true}))
 }
 
-async fn users_list(State(st): State<AppState>, Authn(p): Auth) -> J {
-    ok(admin::list_users(&st.db, &p).await?)
+/// `?q=` narrows by handle or display name; `?limit=` (default and most 200) pages by handle with
+/// `?cursor=` and answers `{items, nextCursor}`; without `limit` the answer is the whole array.
+async fn users_list(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    dir_list(&q, |d| {
+        let (db, p) = (st.db.clone(), p.clone());
+        async move { admin::list_users_q(&db, &p, &d).await }
+    })
+    .await
+}
+
+/// A directory list (users, agents) as the bare array, or a page when `limit` is given.
+async fn dir_list<F, Fut>(q: &HashMap<String, String>, run: F) -> J
+where
+    F: FnOnce(admin::DirQuery) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<Value>>>,
+{
+    let text = q
+        .get("q")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let Some(limit) = q.get("limit").and_then(|v| v.parse::<i64>().ok()) else {
+        return ok(Value::Array(
+            run(admin::DirQuery {
+                q: text,
+                after: None,
+                limit: None,
+            })
+            .await?,
+        ));
+    };
+    let paging = crate::paging::paging_raw(
+        Some(limit),
+        q.get("cursor").map(String::as_str),
+        "name",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let rows = run(admin::DirQuery {
+        q: text,
+        after: paging.key(0),
+        limit: Some(paging.fetch()),
+    })
+    .await?;
+    let rows = rows
+        .into_iter()
+        .map(|v| {
+            let k = vec![v["name"].as_str().map(str::to_string)];
+            (v, k)
+        })
+        .collect();
+    let (items, next) = crate::paging::finish(rows, &paging);
+    ok(crate::paging::page_json(items, next))
 }
 /// Change a person (super-admins only): `{"role": "super_admin" | "orchestrator" | "member"}` and/or
 /// `{"disabled": bool}`. A role set here is manual: the IdP roles no longer change it. A disabled person's
@@ -460,6 +515,7 @@ async fn forges_repos(
         q.get("project").map(String::as_str),
         q.get("q").map(String::as_str),
         q.get("installation").and_then(|v| v.parse().ok()),
+        q.get("limit").and_then(|v| v.parse().ok()),
     )
     .await?)
 }
@@ -1018,7 +1074,16 @@ async fn changes(
         .unwrap_or(0);
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(200);
     let project = q.get("project").map(|k| k.to_uppercase());
-    ok(service::changes_since(&st.db, &p.worker()?, cursor, project.as_deref(), limit).await?)
+    let before = q.get("before").and_then(|v| v.parse().ok());
+    ok(service::changes_since(
+        &st.db,
+        &p.worker()?,
+        cursor,
+        project.as_deref(),
+        limit,
+        before,
+    )
+    .await?)
 }
 /// `?project=PAY` optional: what the caller owns, holds and is waited on for (see `my_work`).
 async fn me_work(
@@ -1073,8 +1138,16 @@ async fn wait(
     ok(stream::wait_for_work(&st, &p.worker()?, project.as_deref(), t).await?)
 }
 
-async fn agents_list(State(st): State<AppState>, Authn(p): Auth) -> J {
-    ok(admin::list_principals(&st.db, &p, "agent").await?)
+async fn agents_list(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Query(q): Query<HashMap<String, String>>,
+) -> J {
+    dir_list(&q, |d| {
+        let (db, p) = (st.db.clone(), p.clone());
+        async move { admin::list_principals_q(&db, &p, "agent", &d).await }
+    })
+    .await
 }
 async fn agents_add(State(st): State<AppState>, Authn(p): Auth, Json(b): Json<Value>) -> J {
     ok(admin::create_principal(

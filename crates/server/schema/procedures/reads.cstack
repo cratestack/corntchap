@@ -24,9 +24,22 @@ procedure projectTasks(project: String, status: String?, label: String?, readyOn
   @allow(auth() != null)
   @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts, bodies and results cut to 280 characters (get_task has them whole). Optional status/label/owner filters (owner: a handle, me, or - for nobody); readyOnly limits to claimable tasks.")
 
+/// A page of a project's tasks, for the console's board (not an MCP tool: `list_tasks` is the agents' list).
+/// @param project Project key, e.g. PAY.
+/// @param bucket active (open, claimed and blocked: priority, then number), done (served) or cancelled (tossed): newest change first.
+/// @param label Only tasks carrying this label.
+/// @param menu Only tasks on this menu (key); - for tasks on no menu.
+/// @param owner Only tasks owned by this handle; me for yours; - for tasks nobody owns.
+/// @param repo Only tasks about this repository alias.
+/// @param q Only tasks whose id, title or body contain this text.
+/// @param page limit (active: default and most 500; done and cancelled: default 25, at most 200) and the cursor of the previous page.
+procedure taskPage(project: String, bucket: String, label: String?, menu: String?, owner: String?, repo: String?, q: String?, page: CursorPageInput): TaskPage
+  @allow(auth() != null)
+
 /// One task in full.
 /// @param id Task id, e.g. PAY-42.
-procedure taskDetail(id: String): TaskDetail
+/// @param commentsLimit Only the newest this many comments (oldest first); `comments_total` says how many there are. Default: all.
+procedure taskDetail(id: String, commentsLimit: Int?): TaskDetail
   @allow(auth() != null)
   @mcp(tool: "get_task", description: "One task with its checklist items, comments, dependencies and subtasks. Task ids look like PAY-42.")
 

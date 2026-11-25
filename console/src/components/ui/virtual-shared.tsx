@@ -20,6 +20,8 @@ export interface VirtualContext {
   listClassName?: string | undefined;
   stickyClassName?: string | undefined;
   footer?: ReactNode;
+  /** Before the first row (a thread's "loading earlier messages"). */
+  header?: ReactNode;
 }
 
 export type VirtualKey = (index: number) => Key;
@@ -69,5 +71,9 @@ function Footer({ context }: { context: VirtualContext }) {
   return <>{context.footer}</>;
 }
 
+function Header({ context }: { context: VirtualContext }) {
+  return <>{context.header}</>;
+}
+
 /** The Tailwind-classed pieces every virtualized list shares; classes come in through Virtuoso's `context`. */
-export const virtualComponents: Components<any, VirtualContext> = { List, Item, Group, TopItemList, Footer };
+export const virtualComponents: Components<any, VirtualContext> = { List, Item, Group, TopItemList, Footer, Header };

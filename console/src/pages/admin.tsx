@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, type FormEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, useEffect, type FormEvent, type ReactNode } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
 import { Check, ChevronRight, Flame, Loader2, Pencil, Plus, Power, RotateCw, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
@@ -25,7 +25,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { useAgents, useProcCall, useProjects, useTeamChefs, useV1, useV1Call, type AgentRow, type TeamRow, type UserRow } from "@/lib/data";
+import { useAgents, useProcCall, useProjects, useTeamChefs, useUsers, useV1, useV1Call, type AgentRow, type TeamRow, type UserRow } from "@/lib/data";
+import { VirtualTable, type VirtualTableColumn } from "@/components/ui/virtual-table";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, useNow } from "@/lib/format";
 import { canManageTeam, canOrchestrate, isSuperAdmin, roleLabel, useSession, type Role } from "@/lib/session";
@@ -811,8 +812,44 @@ function RoleSelect({ u }: { u: UserRow }) {
 const signIn = (u: UserRow) => (u.disabled ? "disabled" : u.linked ? "signed in" : "local (no sign-in)");
 
 export function UsersAdminPage() {
-  const users = useV1<UserRow[]>("/users");
-  const rows = users.data ?? [];
+  const [params, setParams] = useSearchParams();
+  const q = params.get("q") ?? "";
+  const users = useUsers(q);
+  const rows = users.items;
+  // the search box types freely; the URL (and so the query) follows 250 ms after the last key
+  const typing = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const onSearch = (text: string) => {
+    clearTimeout(typing.current);
+    typing.current = setTimeout(
+      () =>
+        setParams(
+          (p) => {
+            const n = new URLSearchParams(p);
+            if (text.trim()) n.set("q", text.trim());
+            else n.delete("q");
+            return n;
+          },
+          { replace: true },
+        ),
+      250,
+    );
+  };
+  const columns = useMemo<VirtualTableColumn<UserRow>[]>(
+    () => [
+      {
+        id: "user",
+        header: "User",
+        cell: (u) => (
+          <span className="flex items-center gap-2.5">
+            <Avatar name={u.name} /> <PersonName name={u.name} displayName={u.display_name} />
+          </span>
+        ),
+      },
+      { id: "role", header: "Role", cell: (u) => <RoleSelect u={u} /> },
+      { id: "signin", header: "Sign-in", cell: (u) => signIn(u), className: "text-[12.5px] text-muted-foreground" },
+    ],
+    [],
+  );
 
   return (
     <PageShell
@@ -820,51 +857,56 @@ export function UsersAdminPage() {
       title="Users"
       sub="People who have signed in through your identity provider. Each gets a kitchen handle at their first sign-in and can change it from the account menu. A role set here sticks: the identity provider no longer changes it."
     >
+      <div className="relative mb-4 min-w-0 sm:max-w-md" role="search">
+        <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        <Input
+          type="search"
+          aria-label="Find a person by handle or name"
+          defaultValue={q}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder="Find a person…"
+          className="h-11 rounded-full pr-3 pl-10 text-[14px] md:h-9 md:text-[13px]"
+        />
+      </div>
       {users.isLoading ? (
         <RowSkeleton rows={3} />
-      ) : rows.length === 0 ? (
-        <EmptyState title="No users yet">People show up here after their first sign-in.</EmptyState>
       ) : (
-        <>
-          <ul className="divide-y divide-border overflow-hidden rounded-[14px] border border-border bg-card md:hidden">
-            {rows.map((u) => (
-              <li key={u.name} className="flex min-h-16 items-center gap-3 px-4 py-3">
-                <Avatar name={u.name} className="size-9 rounded-lg text-[16px]" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[14.5px] leading-tight">
-                    <PersonName name={u.name} displayName={u.display_name} />
-                  </p>
-                  <p className="mt-0.5 text-[12px] text-muted-foreground">{signIn(u)}</p>
-                </div>
-                <RoleSelect u={u} />
-              </li>
-            ))}
-          </ul>
-          <DataTable className="max-md:hidden">
-            <thead>
-              <tr>
-                <TH>User</TH>
-                <TH>Role</TH>
-                <TH>Sign-in</TH>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((u) => (
-                <tr key={u.name}>
-                  <TD>
-                    <span className="flex items-center gap-2.5">
-                      <Avatar name={u.name} /> <PersonName name={u.name} displayName={u.display_name} />
-                    </span>
-                  </TD>
-                  <TD>
-                    <RoleSelect u={u} />
-                  </TD>
-                  <TD className="text-[12.5px] text-muted-foreground">{signIn(u)}</TD>
-                </tr>
-              ))}
-            </tbody>
-          </DataTable>
-        </>
+        <VirtualTable
+          aria-label="Users"
+          rows={rows}
+          rowKey={(u) => u.name}
+          columns={columns}
+          onEndReached={users.hasNextPage ? () => void users.fetchNextPage() : undefined}
+          empty={
+            q ? (
+              <EmptyState band={false} title="No one by that name">Nobody's handle or name contains “{q}”.</EmptyState>
+            ) : (
+              <EmptyState title="No users yet">People show up here after their first sign-in.</EmptyState>
+            )
+          }
+          footer={
+            users.hasNextPage ? (
+              <div className="flex justify-center py-3">
+                <Button type="button" variant="ghost" size="sm" disabled={users.isFetchingNextPage} onClick={() => void users.fetchNextPage()}>
+                  {users.isFetchingNextPage && <Loader2 className="animate-spin" />}
+                  Show more people
+                </Button>
+              </div>
+            ) : null
+          }
+          card={(u) => (
+            <div className="flex min-h-16 items-center gap-3 px-4 py-3">
+              <Avatar name={u.name} className="size-9 rounded-lg text-[16px]" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[14.5px] leading-tight">
+                  <PersonName name={u.name} displayName={u.display_name} />
+                </p>
+                <p className="mt-0.5 text-[12px] text-muted-foreground">{signIn(u)}</p>
+              </div>
+              <RoleSelect u={u} />
+            </div>
+          )}
+        />
       )}
     </PageShell>
   );

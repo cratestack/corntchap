@@ -582,6 +582,63 @@ pub async fn recall(db: &PgPool, p: &Principal, r: Recall) -> Result<Value> {
     Ok(Value::Array(rows))
 }
 
+/// A page of the pantry for the console (`memoryPage`), most recently changed first (updated_at
+/// desc, key), filtered by kind and tags. Bodies are cut to an excerpt like in [`recall`]; searching
+/// stays [`recall`]. Reading the first page counts as reading the pantry.
+pub async fn page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    kind: Option<&str>,
+    tags: &[String],
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let kind = kind_of(kind)?;
+    let tags = clean_tags(tags);
+    let paging = crate::paging::paging(
+        page,
+        "-updated_at,key",
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.to_uppercase()).await?;
+    if paging.after.is_none() {
+        mark_read(&mut c, p.id, pr.id).await?;
+    }
+    let sql = format!(
+        "select {MEMORY_JSON}, array[m.updated_at::text, m.key]
+         from memories m join projects pr on pr.id = m.project_id
+         where m.project_id = $1 and ($2::text is null or m.kind = $2) and m.tags @> $3
+           and ($4::text is null or m.updated_at < $4::text::timestamptz
+                or (m.updated_at = $4::text::timestamptz and m.key > $5))
+         order by m.updated_at desc, m.key limit $6"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(kind.as_deref())
+        .bind(&tags)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(mut m, k)| {
+            let body = m["body"].as_str().unwrap_or("");
+            if body.chars().count() > EXCERPT {
+                let cut: String = body.chars().take(EXCERPT).collect();
+                m["body"] = json!(format!("{}…", cut.trim_end()));
+                m["truncated"] = json!(true);
+            }
+            (m, k.into_iter().map(Some).collect())
+        })
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 /// Forget a memory. People and admins can forget any memory of a project they can see; an agent
 /// only the ones it created (ask a human for the rest, or overwrite with `remember`).
 pub async fn forget(

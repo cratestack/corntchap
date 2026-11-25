@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import type { QuestionView } from "@corntchap/api";
 import {
@@ -21,7 +21,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { useProc, useProcCall, useQuestions, useReviews } from "@/lib/data";
+import { useProc, useProcCall, useProjects, useReviews } from "@/lib/data";
+import { useProcInfinite } from "@/lib/paging";
 import { errorMessage } from "@/lib/api";
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { useIsPhone } from "@/lib/media";
@@ -459,24 +460,31 @@ function ClosedCard({ q, highlight }: { q: QuestionView; highlight: boolean }) {
 
 type Filter = "open" | "answered" | "dismissed" | "reviews";
 
+/** Questions per page of a status. */
+const QUESTION_PAGE = 25;
+
 export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => void }) {
-  const open = useQuestions(potKey, "open");
-  const all = useQuestions(potKey, "all");
-  const waitingReviews = useReviews(potKey, "mine");
-  const allReviews = useReviews(potKey, "all");
   const [params] = useSearchParams();
   const focus = params.get("question");
   const [filter, setFilter] = useState<Filter>("open");
   const [sheet, setSheet] = useState<SheetState>({ id: null, mode: "answer" });
+  const useStatusPage = (status: "open" | "answered" | "dismissed", enabled: boolean) =>
+    useProcInfinite("questionPage", { project: potKey, status }, { getCursor: (p) => p.nextCursor, pageSize: QUESTION_PAGE, enabled });
+  const open = useStatusPage("open", true);
+  // the closed lists load when their tab is open, or to find where a linked question is
+  const answered = useStatusPage("answered", filter === "answered" || !!focus);
+  const dismissed = useStatusPage("dismissed", filter === "dismissed" || !!focus);
+  const waitingReviews = useReviews(potKey, "mine");
+  const allReviews = useReviews(potKey, "all", filter === "reviews");
 
-  const openList = useMemo(() => open.data ?? [], [open.data]);
-  const answered = useMemo(() => (all.data ?? []).filter((q) => q.status === "answered"), [all.data]);
-  const dismissed = useMemo(() => (all.data ?? []).filter((q) => q.status === "dismissed"), [all.data]);
+  const openList = open.items;
+  // the open tab counts every open question, not only the loaded pages (the pot summary has the count)
+  const openTotal = useProjects().data?.find((p) => p.key === potKey)?.open_questions ?? 0;
   const focusFilter: Filter | null = !focus
     ? null
-    : answered.some((q) => q.id === focus)
+    : answered.items.some((q) => q.id === focus)
       ? "answered"
-      : dismissed.some((q) => q.id === focus)
+      : dismissed.items.some((q) => q.id === focus)
         ? "dismissed"
         : null;
   useEffect(() => {
@@ -493,13 +501,14 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
   }
 
   const tabs: { id: Filter; label: string; n: number }[] = [
-    { id: "open", label: "Open", n: openList.length },
-    { id: "answered", label: "Answered", n: answered.length },
-    { id: "dismissed", label: "Dismissed", n: dismissed.length },
-    { id: "reviews", label: "Reviews", n: (allReviews.data ?? []).length },
+    { id: "open", label: "Open", n: open.hasNextPage ? Math.max(openTotal, openList.length) : openList.length },
+    { id: "answered", label: "Answered", n: answered.items.length },
+    { id: "dismissed", label: "Dismissed", n: dismissed.items.length },
+    { id: "reviews", label: "Reviews", n: allReviews.data.length },
   ];
-  const waiting = waitingReviews.data ?? [];
-  const shown = filter === "answered" ? answered : dismissed;
+  const waiting = waitingReviews.data;
+  const closed = filter === "answered" ? answered : dismissed;
+  const shown = closed.items;
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -532,7 +541,10 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
       </div>
 
       {filter === "reviews" ? (
-        <ReviewsList reviews={allReviews.data ?? []} loading={allReviews.isLoading} />
+        <>
+          <ReviewsList reviews={allReviews.data} loading={allReviews.isLoading} />
+          <MoreButton more={allReviews} what="reviews" />
+        </>
       ) : filter === "open" ? (
         openList.length === 0 && waiting.length === 0 ? (
           <EmptyState
@@ -562,11 +574,12 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
                     <QuestionCard key={q.id} q={q} highlight={focus === q.id} onOpen={(id, mode, option) => setSheet({ id, mode, option })} />
                   ))}
                 </ul>
+                <MoreButton more={open} what="questions" />
               </>
             )}
           </>
         )
-      ) : shown.length === 0 ? (
+      ) : shown.length === 0 && !closed.isLoading ? (
         <EmptyState band={false} className="mt-4" title={`No ${filter} questions`}>
           {filter === "answered" ? "Questions you answer show up here." : "Questions you dismiss show up here, with the reason you gave."}
         </EmptyState>
@@ -577,6 +590,7 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
           ))}
         </ul>
       )}
+      {(filter === "answered" || filter === "dismissed") && <MoreButton more={closed} what="questions" />}
 
       <QuestionSheet
         key={sheet.id ? `${sheet.id}/${sheet.option ?? ""}` : "none"}
@@ -584,6 +598,19 @@ export function QuestionsView({ potKey, onAsk }: { potKey: string; onAsk: () => 
         setMode={(mode) => setSheet((st) => ({ ...st, mode }))}
         onClose={() => setSheet((st) => ({ ...st, id: null }))}
       />
+    </div>
+  );
+}
+
+/** "Show more" under a paged list. */
+function MoreButton({ more, what }: { more: { hasNextPage: boolean; isFetchingNextPage: boolean; fetchNextPage: () => unknown }; what: string }) {
+  if (!more.hasNextPage) return null;
+  return (
+    <div className="mt-4 flex justify-center">
+      <Button type="button" variant="outline" disabled={more.isFetchingNextPage} onClick={() => void more.fetchNextPage()}>
+        {more.isFetchingNextPage && <Loader2 className="animate-spin" />}
+        Show more {what}
+      </Button>
     </div>
   );
 }

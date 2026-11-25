@@ -40,3 +40,12 @@ mutation procedure viewDelete(project: String, key: String): OkResult
 procedure viewRun(project: String, key: String?, where: String?, orderBy: String?): TaskView[]
   @allow(auth() != null)
   @mcp(tool: "run_view", description: "Run a saved view, or try a SQL condition and order over a pot's tasks before saving it with save_view (at most 500 tasks).")
+
+/// A page of the tasks of a saved view, or of a condition you are trying out, for the console (not an MCP tool).
+/// @param project Pot key, e.g. PAY.
+/// @param key A saved view's key.
+/// @param where A condition to try instead.
+/// @param orderBy An order to try.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure viewPage(project: String, key: String?, where: String?, orderBy: String?, page: CursorPageInput): CursorPage<TaskView>
+  @allow(auth() != null)

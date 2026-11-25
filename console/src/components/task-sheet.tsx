@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useSearchParams } from "react-router";
 import type { TaskDetail } from "@corntchap/api";
 import { CheckCheck, ChevronLeft, Flame, Loader2, MoreHorizontal, Pencil, Send, Trash2, Undo2, Unlock } from "lucide-react";
 import { toast } from "sonner";
@@ -89,8 +90,15 @@ function Prop({ children, className, title }: { children: React.ReactNode; class
   );
 }
 
+/** Comments a task opens with, and how many more "Show earlier" adds. */
+const COMMENTS_FIRST = 30;
+const COMMENTS_MORE = 50;
+
 function TaskDetailBody({ id }: { id: string }) {
-  const q = useProc("taskDetail", { id });
+  // the newest comments come with the task; "Show earlier" asks for more, kept in the URL (`?comments=80`)
+  const [params, setParams] = useSearchParams();
+  const commentsLimit = Math.max(COMMENTS_FIRST, Number(params.get("comments")) || COMMENTS_FIRST);
+  const q = useProc("taskDetail", { id, commentsLimit }, { keepPrevious: true });
   const me = useSession();
   const call = useProcCall();
   const v1 = useV1Call();
@@ -105,7 +113,8 @@ function TaskDetailBody({ id }: { id: string }) {
 
   useEffect(() => setEditing(false), [id]);
 
-  const t = q.data;
+  // while the limit changes the previous answer stays up; another task's answer never does
+  const t = q.data?.id === id ? q.data : undefined;
   const activity = useMemo(() => events.filter((e) => e.task === id && e.kind !== "task.commented"), [events, id]);
 
   if (q.error && !t) {
@@ -350,10 +359,30 @@ function TaskDetailBody({ id }: { id: string }) {
 
               <section aria-labelledby="cm">
                 <SectionLabel>
-                  <span id="cm">Comments · {t.comments.length}</span>
+                  <span id="cm">Comments · {t.comments_total}</span>
                 </SectionLabel>
+                {t.comments_total > t.comments.length && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="mt-2 text-[12.5px] text-muted-foreground"
+                    onClick={() =>
+                      setParams(
+                        (p) => {
+                          const n = new URLSearchParams(p);
+                          n.set("comments", String(commentsLimit + COMMENTS_MORE));
+                          return n;
+                        },
+                        { replace: true },
+                      )
+                    }
+                  >
+                    Show earlier ({t.comments_total - t.comments.length})
+                  </Button>
+                )}
                 <ul className="mt-3 space-y-3">
-                  {t.comments.length === 0 && <li className="text-muted-foreground">No comments yet. Leave a note for the next cook.</li>}
+                  {t.comments_total === 0 && <li className="text-muted-foreground">No comments yet. Leave a note for the next cook.</li>}
                   {t.comments.map((c, i) => (
                     <li key={i} className="flex gap-3">
                       <Avatar name={c.author ?? "?"} className="mt-0.5 size-7 text-[12px]" />
