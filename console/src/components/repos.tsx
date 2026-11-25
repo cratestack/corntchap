@@ -77,7 +77,7 @@ export function PotRepos({ project, canManage }: { project: ProjectSummary; canM
         }
         aside={
           canManage ? (
-            <span className="flex gap-1.5">
+            <span className="flex flex-wrap gap-1.5">
               <Button size="sm" variant="outline" onClick={() => setDlg({ kind: "github" })} className="h-8 pointer-coarse:h-11">
                 <CloudDownload /> Add from GitHub
               </Button>

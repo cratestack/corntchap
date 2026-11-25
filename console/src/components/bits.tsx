@@ -239,7 +239,7 @@ export function Group({
 }) {
   return (
     <section aria-label={title} className={cn("min-w-0", className)}>
-      <div className="mb-1.5 flex items-baseline justify-between gap-3 px-1">
+      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1.5 px-1">
         <h2 className={cn("label-caps", tone === "danger" && "text-destructive")}>{title}</h2>
         {aside}
       </div>

@@ -6,7 +6,7 @@ import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BucketMore } from "@/lib/board";
 import { BUCKETS, type Bucket } from "@/lib/format";
-import { useIsPhone } from "@/lib/media";
+import { useAtLeastWide } from "@/lib/use-element";
 import { useStoreValue } from "@/lib/use-store-value";
 import { Button } from "@/components/ui/button";
 import { VirtualColumn } from "@/components/ui/virtual-column";
@@ -50,19 +50,51 @@ export function BoardView({
   menus: Record<string, string>;
 }) {
   const groups = columns.groups;
-  const phone = useIsPhone();
-  if (loading) return <BoardSkeleton phone={phone} />;
-  if (bare) {
+  // five columns side by side only when all five fit; otherwise one column at a time under a tab strip. Measured on
+  // the board's own box (not the window): a wrapping grid would put a column below one that pages forever.
+  const { fits: allFit, ref } = useAtLeastWide<HTMLDivElement>(ALL_COLUMNS_REM);
+  if (bare && !loading) {
     return (
       <EmptyState title="The board is bare" action={<Button onClick={onNew}>New task</Button>}>
         Tasks go from ready to scoop, to on the fire, to served; a task waiting on a person or a dependency sits in between, and tossed ones are kept aside.
       </EmptyState>
     );
   }
-  if (phone) return <PhoneBoard columns={columns} selected={selected} onOpen={onOpen} menus={menus} />;
   return (
-    // as many columns across as fit (five on a wide screen); the page scrolls through all of them
-    <div role="region" aria-label="Board" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,17rem),1fr))] items-start gap-3.5">
+    <div ref={ref} className="min-w-0">
+      {loading || allFit === null ? (
+        <BoardSkeleton across={allFit ? BOARD_COLS.length : 1} />
+      ) : allFit ? (
+        <WideBoard columns={columns} selected={selected} onOpen={onOpen} menus={menus} groups={groups} />
+      ) : (
+        <TabBoard columns={columns} selected={selected} onOpen={onOpen} menus={menus} />
+      )}
+    </div>
+  );
+}
+
+/** The narrowest a column gets side by side. */
+const COLUMN_MIN_REM = 17;
+const COLUMN_GAP_REM = 0.875;
+/** The room five columns need side by side (5 × 17rem and four 0.875rem gaps: 1416px). */
+const ALL_COLUMNS_REM = BOARD_COLS.length * COLUMN_MIN_REM + (BOARD_COLS.length - 1) * COLUMN_GAP_REM;
+
+/** All five columns side by side, each as tall as its cards; the page scrolls through them. */
+function WideBoard({
+  columns,
+  groups,
+  selected,
+  onOpen,
+  menus,
+}: {
+  columns: BoardColumns;
+  groups: BoardColumns["groups"];
+  selected: string | null;
+  onOpen: (id: string) => void;
+  menus: Record<string, string>;
+}) {
+  return (
+    <div role="region" aria-label="Board" className="grid grid-cols-5 items-start gap-3.5">
       {BOARD_COLS.map((id) => {
         const meta = BUCKETS.find((b) => b.id === id)!;
         const col = groups[id];
@@ -128,10 +160,10 @@ const BOARD_EMPTY: Record<Bucket, string> = {
 
 const SKELETON_WIDTH = ["w-[88%]", "w-[74%]", "w-[60%]"];
 
-function BoardSkeleton({ phone }: { phone: boolean }) {
+function BoardSkeleton({ across }: { across: number }) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,17rem),1fr))] items-start gap-3" aria-busy="true" aria-label="Loading the board">
-      {Array.from({ length: phone ? 1 : 3 }).map((_, c) => (
+    <div className={cn("grid items-start gap-3.5", across > 1 ? "grid-cols-5" : "grid-cols-1")} aria-busy="true" aria-label="Loading the board">
+      {Array.from({ length: across }).map((_, c) => (
         <div key={c} className="space-y-2 rounded-[14px] bg-column p-2.5">
           {Array.from({ length: 3 }).map((__, i) => (
             <div key={i} className="space-y-2.5 rounded-[10px] border border-border bg-card p-3">
@@ -153,10 +185,11 @@ function activeColumn(params: URLSearchParams): Bucket {
 }
 
 /**
- * Phone board: a tab strip, sticky under the top bar, and one column at a time below it. The page scrolls through the
- * column; each column's scroll position is kept for when its tab is picked again. The tab is in the URL (`?col=`).
+ * The board when five columns do not fit side by side (phones, tablets, most laptops): a tab strip, sticky at the top
+ * of the page (under the phone's top bar), and one column at a time below it. The page scrolls through the column;
+ * each column's scroll position is kept for when its tab is picked again. The tab is in the URL (`?col=`).
  */
-function PhoneBoard({
+function TabBoard({
   columns,
   selected,
   onOpen,
@@ -223,7 +256,7 @@ function PhoneBoard({
         ref={tabs}
         role="tablist"
         aria-label="Board columns"
-        className="sticky top-[calc(3.5rem+env(safe-area-inset-top))] z-20 -mx-4 bg-background/95 px-4 pb-2 backdrop-blur-md supports-[backdrop-filter]:bg-background/80"
+        className="sticky top-[calc(3.5rem+env(safe-area-inset-top))] z-20 -mx-4 bg-background/95 px-4 pb-2 backdrop-blur-md supports-[backdrop-filter]:bg-background/80 md:top-0 md:-mx-5 md:px-5 md:pt-2 lg:-mx-8 lg:px-8"
       >
         <div className="grid grid-cols-5 gap-0.5 rounded-xl bg-muted p-1">
           {BOARD_COLS.map((id) => (
@@ -236,15 +269,16 @@ function PhoneBoard({
               aria-controls="board-panel"
               onClick={() => pick(id)}
               className={cn(
-                "flex min-h-10 flex-col items-center justify-center rounded-lg px-0.5 text-[11.5px] leading-tight font-medium transition-colors",
+                "flex min-h-10 min-w-0 flex-col items-center justify-center rounded-lg px-0.5 text-[11.5px] leading-tight font-medium transition-colors sm:flex-row sm:gap-2 sm:text-[13px]",
                 active === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
               )}
             >
-              <span className="flex items-center gap-1">
-                <span className={cn("size-1.5 rounded-full", BUCKET_DOT[id], id === "claimed" && groups[id].length > 0 && "live-dot")} aria-hidden="true" />
-                {BOARD_SHORT[id]}
+              <span className="flex min-w-0 items-center gap-1 sm:gap-1.5">
+                <span className={cn("size-1.5 shrink-0 rounded-full sm:size-2", BUCKET_DOT[id], id === "claimed" && groups[id].length > 0 && "live-dot")} aria-hidden="true" />
+                <span className="lg:hidden">{BOARD_SHORT[id]}</span>
+                <span className="truncate max-lg:hidden">{BUCKETS.find((b) => b.id === id)!.label}</span>
               </span>
-              <span className="font-mono text-[11px] tabular-nums">{columns.totals?.[id] ?? groups[id].length}</span>
+              <span className="font-mono text-[11px] tabular-nums sm:text-[11.5px] sm:text-muted-foreground">{columns.totals?.[id] ?? groups[id].length}</span>
             </button>
           ))}
         </div>

@@ -136,6 +136,15 @@ const toColumnEnd = (page, name) =>
     if (el) window.scrollTo(0, el.getBoundingClientRect().bottom + window.scrollY - window.innerHeight / 3);
   }, name);
 
+// the board's columns as laid out: one box per column section
+const columnBoxes = (page) =>
+  page.evaluate(() => [...document.querySelectorAll("[role=region][aria-label=Board] > section, [role=tabpanel] > section")].map((e) => { const r = e.getBoundingClientRect(); return { name: e.getAttribute("aria-label"), x: Math.round(r.left), y: Math.round(r.top + window.scrollY), w: Math.round(r.width) }; }));
+// five columns on one row, left to right, none overlapping
+const sideBySide = async (page) => {
+  const b = await columnBoxes(page);
+  return b.length === 5 && b.every((c) => c.y === b[0].y) && b.every((c, i) => i === 0 || c.x >= b[i - 1].x + b[i - 1].w);
+};
+
 {
   // desktop: 2,000 tasks a column on one page: the page is the only scroller, and each column renders only what is near
   const page = await browser.newPage({ viewport: wide, deviceScaleFactor: 1 });
@@ -158,6 +167,7 @@ const toColumnEnd = (page, name) =>
     }
   }
   const own = await page.evaluate(() => [...document.querySelectorAll("[data-virtuoso-scroller]")].filter((e) => e.scrollHeight > e.clientHeight + 1).length);
+  check("board 1920: all five columns side by side, no tab strip", (await sideBySide(page)) && (await page.getByRole("tablist").count()) === 0, JSON.stringify(await columnBoxes(page)));
   check("board desktop: every column's last task renders when the page is scrolled to its end", reached.length === 5, `reached=${reached}`);
   check("board desktop: the DOM stays bounded", peak < MAX_ROWS * 3, `peak=${peak}`);
   check("board desktop: no column has a scroller of its own", own === 0, `scrollers=${own}`);
@@ -187,6 +197,66 @@ const toColumnEnd = (page, name) =>
   check("board desktop paged: every column asked for its own pages", Object.values(loads).every((n) => n >= 49), JSON.stringify(loads));
   check("board desktop paged: the DOM stays bounded", peak < MAX_ROWS * 3, `peak=${peak}`);
   check("board desktop paged: no page errors", errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
+// Narrower than five columns (1280, 768, 375): a tab strip and one column; every tab's column scrolls to its last
+// task. A wrapping grid here would put a column below one that pages forever.
+const TAB_LASTS = [/^PAY-9996$/, /^PAY-9997$/, /^PAY-9998$/, /^PAY-9999$/, /^PAY-10000$/];
+for (const width of [1280, 768, 375]) {
+  const page = await browser.newPage({ viewport: { width, height: width < 768 ? 812 : 800 }, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=console-board--ten-thousand-tasks&viewMode=story`);
+  await page.waitForSelector("[role=listitem]", { timeout: 20000 });
+  const tabs = page.getByRole("tab");
+  check(`board ${width}: a tab strip of five and one column`, (await tabs.count()) === 5 && (await columnBoxes(page)).length === 1, JSON.stringify(await columnBoxes(page)));
+  const reached = [];
+  let peak = 0;
+  for (let t = 0; t < 5; t++) {
+    await tabs.nth(t).click();
+    await page.waitForTimeout(300);
+    const selected = (await tabs.nth(t).getAttribute("aria-selected")) === "true";
+    for (let i = 0; i < 60; i++) {
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.waitForTimeout(100);
+      peak = Math.max(peak, await page.locator("[role=listitem]").count());
+      if (selected && (await page.locator("[role=tabpanel]").getByText(TAB_LASTS[t]).count()) > 0) {
+        reached.push(t);
+        break;
+      }
+    }
+    // the tab strip stays in view at the bottom of a 2,000-card column
+    const strip = await page.getByRole("tablist").boundingBox();
+    if (!strip || strip.y < 0 || strip.y > 80) reached.push(`tabs off screen at ${strip?.y}`);
+  }
+  const sw = await page.evaluate(() => document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth);
+  check(`board ${width}: every tab's column scrolls to its last task`, reached.join() === "0,1,2,3,4", `reached=${reached}`);
+  check(`board ${width}: the DOM stays bounded`, peak < MAX_ROWS * 2, `peak=${peak}`);
+  check(`board ${width}: no horizontal page scroll`, sw <= 0, `overflow=${sw}px`);
+  check(`board ${width}: no page errors`, errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
+{
+  // 1280, paged: the last tab (Tossed) pages to its 10,000th task by scrolling the page, and nothing else loads
+  const page = await browser.newPage({ viewport: desktop, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=console-board--paged-laptop&viewMode=story`);
+  await page.waitForSelector("[role=listitem]", { timeout: 20000 });
+  await page.getByRole("tab", { name: /^Tossed/ }).click();
+  await page.waitForTimeout(300);
+  let found = false;
+  for (let i = 0; i < 200 && !found; i++) {
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(100);
+    found = (await page.locator("[role=tabpanel]").getByText(/^PAY-10000$/).count()) > 0;
+  }
+  const loads = await loadsOf(page);
+  check("board 1280 paged: Tossed scrolls to its 10,000th task", found && loads.cancelled >= 49, JSON.stringify(loads));
+  check("board 1280 paged: no other column loads", loads.ready <= 1 && loads.claimed === 0 && loads.waiting === 0 && loads.done === 0, JSON.stringify(loads));
+  check("board 1280 paged: no page errors", errors.length === 0, errors.join("|"));
   await page.close();
 }
 

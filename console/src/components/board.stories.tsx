@@ -21,8 +21,20 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Desktop: columns side by side as many as fit, the page scrolls through them; 2,000 cards each. */
+/**
+ * 2,000 cards a column. Where all five columns fit side by side (a board about 1416px wide or more) they sit side by
+ * side and the page scrolls through them; anywhere narrower, a tab strip and one column at a time.
+ */
 export const TenThousandTasks: Story = {};
+
+/** A wide desktop (1920px): all five columns side by side. */
+export const Wide: Story = { globals: { viewport: { value: "wide", isRotated: false } } };
+
+/** A laptop (1280px): five columns do not fit, so it is the tab strip and one column, as on a phone. */
+export const Laptop: Story = { globals: { viewport: { value: "desktop", isRotated: false } } };
+
+/** A tablet (768px): the tab strip and one column. */
+export const Tablet: Story = { globals: { viewport: { value: "tablet", isRotated: false } } };
 
 /** Phone: a tab strip and one column below it; the page scrolls. */
 export const Phone: Story = { globals: { viewport: { value: "phone", isRotated: false } } };
@@ -76,8 +88,11 @@ function PagedColumns(args: Parameters<typeof BoardView>[0]) {
   );
 }
 
-/** Desktop: 10,000 tasks in every column, each paged on its own as its end is scrolled to. */
+/** 10,000 tasks in every column, each paged on its own as its end is scrolled to (side by side on a wide screen, tabs below). */
 export const PagedTenThousandPerColumn: Story = { render: (args) => <PagedColumns {...args} /> };
+
+/** A laptop (1280px): the same paged columns behind tabs, so the last column pages as far as the first. */
+export const PagedLaptop: Story = { render: (args) => <PagedColumns {...args} />, globals: { viewport: { value: "desktop", isRotated: false } } };
 
 /** Phone: the same paged columns; only the column in the open tab loads more as the page scrolls. */
 export const PagedPhone: Story = { render: (args) => <PagedColumns {...args} />, globals: { viewport: { value: "phone", isRotated: false } } };
