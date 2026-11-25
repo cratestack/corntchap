@@ -109,10 +109,29 @@ export function useGrowing<T>(make: (count: number) => T[], start: number, step 
   return useSyncExternalStore(store.subscribe, store.get);
 }
 
-/** Pages in `page` more items 600 ms after `loadMore()`, up to `total`; a stand-in for a server-paged bucket. */
-export function usePaged<T>(make: (count: number) => T[], first: number, page: number, total: number) {
+/**
+ * Tasks of one board column (`bucket`), numbered `1..count` in the column's own order: what `taskPage` answers
+ * for it. Every column has its own run of ids, so the columns can all be 10,000 long.
+ */
+export function makeColumnTasks(bucket: "ready" | "claimed" | "waiting" | "done" | "cancelled", count: number): TaskView[] {
+  const status = { ready: "open", claimed: "claimed", waiting: "blocked", done: "done", cancelled: "cancelled" }[bucket];
+  return makeTasks(count).map((t, i) => ({
+    ...t,
+    status,
+    claimed_by: bucket === "claimed" ? ACTORS[i % ACTORS.length]! : null,
+    lease_live: bucket === "claimed",
+    lease_expires_at: bucket === "claimed" ? new Date(NOW + 20 * 60_000).toISOString() : null,
+    ready: bucket === "ready",
+  }));
+}
+
+/**
+ * Pages in `page` more items `ms` after `loadMore()`, up to `total`; a stand-in for a server-paged bucket.
+ * `loads` counts the pages asked for, so a story can show which columns loaded.
+ */
+export function usePaged<T>(make: (count: number) => T[], first: number, page: number, total: number, ms = 600) {
   const store = useMemo(() => {
-    let state = { items: make(first), loading: false };
+    let state = { items: make(first), loading: false, loads: 0 };
     const listeners = new Set<() => void>();
     const set = (next: typeof state) => {
       state = next;
@@ -126,14 +145,14 @@ export function usePaged<T>(make: (count: number) => T[], first: number, page: n
       },
       loadMore: () => {
         if (state.loading || state.items.length >= total) return;
-        set({ ...state, loading: true });
-        setTimeout(() => set({ items: make(Math.min(total, state.items.length + page)), loading: false }), 600);
+        set({ ...state, loading: true, loads: state.loads + 1 });
+        setTimeout(() => set({ ...state, items: make(Math.min(total, state.items.length + page)), loading: false }), ms);
       },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const { items, loading } = useSyncExternalStore(store.subscribe, store.get);
-  return { items, loading, done: items.length >= total, loadMore: store.loadMore };
+  const { items, loading, loads } = useSyncExternalStore(store.subscribe, store.get);
+  return { items, loading, loads, done: items.length >= total, loadMore: store.loadMore };
 }
 
 // ---- a chat thread: oldest first, older pages load on request, new messages can arrive ----

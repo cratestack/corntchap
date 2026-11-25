@@ -26,14 +26,16 @@ procedure projectTasks(project: String, status: String?, label: String?, readyOn
 
 /// A page of a project's tasks, for the console's board (not an MCP tool: `list_tasks` is the agents' list).
 /// @param project Project key, e.g. PAY.
-/// @param bucket active (open, claimed and blocked: priority, then number), done (served) or cancelled (tossed): newest change first.
+/// @param bucket A board column: ready (open with nothing in the way, or a lapsed lease), claimed (on the fire), waiting (blocked or waiting on other tasks): priority, then number; done (served) or cancelled (tossed): newest change first; or active (ready, claimed and waiting together).
 /// @param label Only tasks carrying this label.
 /// @param menu Only tasks on this menu (key); - for tasks on no menu.
 /// @param owner Only tasks owned by this handle; me for yours; - for tasks nobody owns.
 /// @param repo Only tasks about this repository alias.
 /// @param q Only tasks whose id, title or body contain this text.
-/// @param page limit (active: default and most 500; done and cancelled: default 25, at most 200) and the cursor of the previous page.
-procedure taskPage(project: String, bucket: String, label: String?, menu: String?, owner: String?, repo: String?, q: String?, page: CursorPageInput): TaskPage
+/// @param holder Only tasks held by this cook (the claimed_by name).
+/// @param status Only this board column: ready, claimed, waiting, done or cancelled.
+/// @param page limit (default 25, at most 200) and the cursor of the previous page.
+procedure taskPage(project: String, bucket: String, label: String?, menu: String?, owner: String?, repo: String?, q: String?, holder: String?, status: String?, page: CursorPageInput): TaskPage
   @allow(auth() != null)
 
 /// One task in full.

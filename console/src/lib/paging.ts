@@ -40,6 +40,11 @@ export interface PagedOptions<Page extends PageShape> {
   /** A row's identity, to drop the rows a refresh shows twice (default: its `id`, else its `key`). */
   itemKey?: (item: Page["items"][number]) => string;
   enabled?: boolean;
+  /**
+   * Most pages the list keeps loadable (default {@link MAX_PAGES}; `Infinity` for none). A virtualized list bounds
+   * the DOM, so it can go on for as long as the reader scrolls.
+   */
+  maxPages?: number;
 }
 
 export type ProcInfiniteOptions<N extends PagedProc> = PagedOptions<ProcOut<N>>;
@@ -74,6 +79,7 @@ export function usePagedQuery<Page extends PageShape>(
   const pageSize = opts.pageSize ?? 25;
   const maxLimit = opts.maxLimit ?? 200;
   const getCursor = opts.getCursor;
+  const maxPages = opts.maxPages ?? MAX_PAGES;
   const meta: { paging: PagingMeta } = {
     paging: {
       ...(extra.name ? { name: extra.name } : {}),
@@ -89,7 +95,7 @@ export function usePagedQuery<Page extends PageShape>(
     queryKey: ["data", "inf", ...key],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) => load(pageSize, pageParam),
-    getNextPageParam: (last, all) => (all.length >= MAX_PAGES ? undefined : (getCursor(last) ?? undefined)),
+    getNextPageParam: (last, all) => (all.length >= maxPages ? undefined : (getCursor(last) ?? undefined)),
     staleTime: 30_000,
     refetchOnWindowFocus: false,
     enabled: opts.enabled ?? true,
@@ -106,8 +112,8 @@ export function usePagedQuery<Page extends PageShape>(
     fetchNextPage: q.fetchNextPage,
     hasNextPage: q.hasNextPage,
     isFetchingNextPage: q.isFetchingNextPage,
-    /** The 20 loaded pages are the most one list holds. */
-    capped: (pages?.length ?? 0) >= MAX_PAGES,
+    /** The most pages one list holds are loaded. */
+    capped: (pages?.length ?? 0) >= maxPages,
   };
 }
 

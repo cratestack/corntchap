@@ -139,6 +139,55 @@ for (const [label, viewport] of [["desktop", desktop], ["phone", phone]]) {
   await page.close();
 }
 
+// ---- the board: every column pages on its own ----
+
+const loadsOf = (page) => page.evaluate(() => { const o = document.querySelector("[data-testid=loads]"); return Object.fromEntries(["ready", "claimed", "waiting", "done", "cancelled"].map((k) => [k, Number(o.dataset[k])])); });
+
+{
+  // desktop: scrolling each column to its end loads pages until the mocked total (10,000) is on screen
+  const page = await browser.newPage({ viewport: desktop, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=console-board--paged-ten-thousand-per-column&viewMode=story`);
+  await page.waitForSelector("[role=listitem]", { timeout: 20000 });
+  const names = ["Ready to scoop", "On the fire", "Waiting", "Served", "Tossed"];
+  const reached = new Set();
+  let peak = 0;
+  for (let i = 0; i < 400 && reached.size < names.length; i++) {
+    await page.evaluate(() => { for (const el of document.querySelectorAll("[data-virtuoso-scroller]")) el.scrollTop = el.scrollHeight; });
+    await page.waitForTimeout(100);
+    peak = Math.max(peak, await page.locator("[role=listitem]").count());
+    for (const n of names) if (!reached.has(n) && (await page.getByRole("region", { name: n }).getByText(/^PAY-10000$/).count()) > 0) reached.add(n);
+  }
+  const loads = await loadsOf(page);
+  const each = Object.values(loads).every((n) => n >= 49);
+  check("board desktop: every column scrolls to its 10,000th task", reached.size === names.length, `reached=${[...reached]} loads=${JSON.stringify(loads)}`);
+  check("board desktop: every column asked for its own pages", each, JSON.stringify(loads));
+  check("board desktop: the DOM stays bounded", peak < MAX_ROWS * 3, `peak=${peak}`);
+  check("board desktop: no page errors", errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
+{
+  // phone: scrolling the Served column loads Served only; the other columns do not load as the window scrolls
+  const page = await browser.newPage({ viewport: phone, deviceScaleFactor: 1 });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(`${base}/iframe.html?id=console-board--paged-phone&viewMode=story`);
+  await page.waitForSelector("[role=listitem]", { timeout: 20000 });
+  await page.getByRole("tab", { name: /^Served/ }).click();
+  await page.waitForTimeout(1000);
+  for (let i = 0; i < 25; i++) {
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(150);
+  }
+  const loads = await loadsOf(page);
+  check("board phone: scrolling Served loads Served", loads.done >= 5, JSON.stringify(loads));
+  check("board phone: no other column loads", loads.ready === 0 && loads.claimed === 0 && loads.waiting === 0 && loads.cancelled === 0, JSON.stringify(loads));
+  check("board phone: no page errors", errors.length === 0, errors.join("|"));
+  await page.close();
+}
+
 await browser.close();
 server.close();
 process.exit(failed ? 1 : 0);

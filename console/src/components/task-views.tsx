@@ -189,6 +189,7 @@ export function TaskGroup({
   onOpen,
   menus,
   defaultOpen = true,
+  onEndReached,
 }: {
   bucket: Bucket;
   tasks: TaskView[];
@@ -196,6 +197,8 @@ export function TaskGroup({
   onOpen: (id: string) => void;
   menus?: MenuNames | undefined;
   defaultOpen?: boolean;
+  /** The group's last row came into view: load the next page of the list it is cut from. */
+  onEndReached?: (() => void) | undefined;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const phone = useIsPhone();
@@ -224,6 +227,7 @@ export function TaskGroup({
           aria-label={meta.label}
           items={tasks}
           itemKey={(t) => t.id}
+          onEndReached={onEndReached}
           defaultItemHeight={phone ? 72 : 76}
           className={cn("mt-1.5", phone && "overflow-hidden rounded-xl border border-border bg-card")}
           itemClassName={phone ? undefined : "pb-1.5"}

@@ -1,10 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import type { TaskView } from "@corntchap/api";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { BucketMore } from "@/lib/board";
 import { BUCKETS, type Bucket } from "@/lib/format";
 import { useIsPhone } from "@/lib/media";
+import { useStoreValue } from "@/lib/use-store-value";
 import { Button } from "@/components/ui/button";
 import { VirtualColumn } from "@/components/ui/virtual-column";
 import { BUCKET_DOT, EmptyState } from "./bits";
@@ -19,10 +20,13 @@ export interface BoardColumns {
   more?: Partial<Record<Bucket, BucketMore>>;
 }
 
-/** A saved view's tasks, bucketed (`keepOrder`: the view's own order). */
-export function useColumns(tasks: TaskView[], keepOrder: boolean): BoardColumns {
+/**
+ * A saved view's tasks, bucketed (`keepOrder`: the view's own order). The view is one list: `more` loads its next
+ * page, whichever column asks for it.
+ */
+export function useColumns(tasks: TaskView[], keepOrder: boolean, more?: BucketMore): BoardColumns {
   const groups = useMemo(() => groupTasks(tasks, keepOrder), [tasks, keepOrder]);
-  return useMemo(() => ({ groups }), [groups]);
+  return useMemo(() => ({ groups, ...(more ? { more: { ready: more, claimed: more, waiting: more, done: more, cancelled: more } } : {}) }), [groups, more]);
 }
 
 export function BoardView({
@@ -94,9 +98,6 @@ export function BoardView({
 
 /** After a column's last card: a spinner while the next page loads, or a button when the end was not reached by scrolling. */
 function MoreFooter({ more, loaded, total }: { more: BucketMore | undefined; loaded: number; total: number | undefined }) {
-  if (more?.capped && !more.has && total != null && loaded < total) {
-    return <p className="px-2 pb-3 text-center text-[12px] text-muted-foreground">Showing the newest {loaded} of {total}. Filter the board to find older ones.</p>;
-  }
   if (!more?.has) return null;
   return (
     <div className="flex justify-center px-2 pb-3">
@@ -118,6 +119,8 @@ const BOARD_EMPTY: Record<Bucket, string> = {
   cancelled: "Nothing tossed.",
 };
 
+const SKELETON_WIDTH = ["w-[88%]", "w-[74%]", "w-[60%]"];
+
 function BoardSkeleton({ phone }: { phone: boolean }) {
   return (
     <div className="flex gap-3 overflow-hidden" aria-busy="true" aria-label="Loading the board">
@@ -126,7 +129,7 @@ function BoardSkeleton({ phone }: { phone: boolean }) {
           {Array.from({ length: 3 }).map((__, i) => (
             <div key={i} className="space-y-2.5 rounded-[10px] border border-border bg-card p-3">
               <div className="h-2.5 w-12 animate-pulse rounded bg-muted" />
-              <div className="h-3.5 animate-pulse rounded bg-muted" style={{ width: `${88 - i * 14}%` }} />
+              <div className={cn("h-3.5 animate-pulse rounded bg-muted", SKELETON_WIDTH[i])} />
               <div className="h-2 w-2/3 animate-pulse rounded-full bg-muted" />
             </div>
           ))}
@@ -150,7 +153,8 @@ function PhoneBoard({
 }) {
   const groups = columns.groups;
   const scroller = useRef<HTMLDivElement>(null);
-  const [active, setActive] = useState(0);
+  // the column in view: only it loads more, however the page is scrolled
+  const { value: active, set: setActive } = useStoreValue(0);
   const start = () => {
     const el = scroller.current;
     return el ? parseFloat(getComputedStyle(el).paddingLeft) || 0 : 0;
@@ -206,7 +210,7 @@ function PhoneBoard({
         onScroll={onScroll}
         className="scrollbar-none relative -mx-4 flex snap-x snap-mandatory items-start gap-3 overflow-x-auto overscroll-x-contain scroll-px-4 px-4 pb-2"
       >
-        {BOARD_COLS.map((id) => {
+        {BOARD_COLS.map((id, i) => {
           const meta = BUCKETS.find((b) => b.id === id)!;
           const col = groups[id];
           const more = columns.more?.[id];
@@ -225,7 +229,7 @@ function PhoneBoard({
               items={col}
               itemKey={(t) => t.id}
               empty={<p className="px-2 py-8 text-center text-[13px] text-muted-foreground">{BOARD_EMPTY[id]}</p>}
-              onEndReached={more?.has ? more.load : undefined}
+              onEndReached={more?.has && i === active ? more.load : undefined}
               footer={<MoreFooter more={more} loaded={col.length} total={columns.totals?.[id]} />}
               renderItem={(t) => <TaskCard task={t} selected={selected === t.id} onOpen={onOpen} menus={menus} />}
             />

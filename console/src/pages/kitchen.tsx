@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import type { MenuView, ProjectSummary, TaskView } from "@corntchap/api";
 import type { ViewOut } from "@corntchap/api";
-import { Check, ChevronDown, GitBranch, Pencil, Plus, Settings2, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, GitBranch, Loader2, Pencil, Plus, Settings2, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useProc, useProjects } from "@/lib/data";
-import { useBoardData } from "@/lib/board";
+import { useProjects } from "@/lib/data";
+import { useBoardData, type BucketMore } from "@/lib/board";
+import { useProcInfinite } from "@/lib/paging";
 import { KEEP, useLive } from "@/lib/live";
 import { useOlderEvents } from "@/lib/older-events";
 import { useSession } from "@/lib/session";
@@ -854,10 +855,16 @@ function SavedViewBody({
   menus: Record<string, string>;
 }) {
   const me = useSession();
-  const run = useProc("viewRun", { project: potKey, key: view?.key ?? null }, { enabled: !!view });
-  const tasks = run.data ?? [];
+  // a view is read a page at a time, as far as the reader scrolls; the chips filter what is loaded
+  const run = useProcInfinite("viewPage", { project: potKey, key: view?.key ?? null, where: null, orderBy: null }, { getCursor: (p) => p.nextCursor, pageSize: 50, maxLimit: 200, maxPages: Infinity, enabled: !!view });
+  const tasks = run.items;
   const visible = applyFilters(tasks, filters, me.name);
-  const columns = useColumns(visible, true);
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = run;
+  const more = useMemo<BucketMore>(
+    () => ({ has: !!hasNextPage, loading: isFetchingNextPage, load: () => void (hasNextPage && !isFetchingNextPage && fetchNextPage()) }),
+    [hasNextPage, isFetchingNextPage, fetchNextPage],
+  );
+  const columns = useColumns(visible, true, more);
   if (loadingViews) return <RowSkeleton rows={4} />;
   if (!view) {
     return (
@@ -895,6 +902,7 @@ function SavedViewBody({
       onNew={() => undefined}
       menus={menus}
       keepOrder
+      more={more}
     />
   ) : (
     <BoardView loading={run.isLoading} columns={columns} selected={selected} onOpen={onOpen} onNew={() => undefined} bare={tasks.length === 0} menus={menus} />
@@ -917,6 +925,7 @@ function ListView({
   onNew,
   menus,
   keepOrder = false,
+  more,
 }: {
   loading: boolean;
   error: unknown;
@@ -931,6 +940,8 @@ function ListView({
   onNew: () => void;
   menus: Record<string, string>;
   keepOrder?: boolean;
+  /** The list goes on past what is loaded: the end of a group, or the button below, loads the next page. */
+  more?: BucketMore;
 }) {
   const groups = useMemo(() => groupTasks(tasks, keepOrder), [tasks, keepOrder]);
   return (
@@ -959,9 +970,18 @@ function ListView({
                 onOpen={onOpen}
                 menus={menus}
                 defaultOpen={b.id !== "cancelled"}
+                onEndReached={more?.has ? more.load : undefined}
               />
             ) : null,
           )}
+        {more?.has && (
+          <div className="flex justify-center">
+            <Button type="button" variant="ghost" size="sm" disabled={more.loading} onClick={more.load} className="text-[12.5px] text-muted-foreground">
+              {more.loading && <Loader2 className="animate-spin" />}
+              {more.loading ? "Loading" : "Show more"}
+            </Button>
+          </div>
+        )}
       </div>
       <aside aria-label="From the kitchen" className="hidden xl:block">
         <div className="sticky top-6 rounded-[14px] border border-border bg-card">

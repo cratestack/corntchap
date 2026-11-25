@@ -31,7 +31,7 @@ export function CommandPalette() {
   // the palette lists the first 80 tasks still in play, best first
   const tasks = useProc(
     "taskPage",
-    { project: pot ?? "", bucket: "active", label: null, menu: null, owner: null, repo: null, q: null, page: { limit: 80, cursor: null } },
+    { project: pot ?? "", bucket: "active", label: null, menu: null, owner: null, repo: null, q: null, holder: null, status: null, page: { limit: 80, cursor: null } },
     { enabled: !!pot && paletteOpen },
   );
 
