@@ -23,11 +23,13 @@ import { cn } from "@/lib/utils";
 import { canOrchestrate, isSuperAdmin, logout, roleLabel, useSession } from "@/lib/session";
 import { useUi } from "@/lib/ui";
 import { useLive } from "@/lib/live";
-import { useAgents, useClaimedTasks, useInvalidateAll, useMyWork, useOpenQuestionCounts, useProjects, useV1, type AgentRow } from "@/lib/data";
+import { useClaimedTasks, useInvalidateAll, useMyWork, useOpenQuestionCounts, useProjects } from "@/lib/data";
+import { useCooksSource } from "@/lib/sources";
+import { principalState, useFireSummary } from "@/lib/people";
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import { lastView } from "@/lib/views";
-import { Avatar, PersonName, StateDot, STATE_LABEL, cookState } from "./bits";
+import { Avatar, PersonName, StateDot, STATE_LABEL } from "./bits";
 import { HandleDialog } from "./handle-dialog";
 import { LogoMark, Wordmark } from "./brand";
 import { CommandPalette } from "./command-palette";
@@ -52,12 +54,9 @@ function navClass(active: boolean) {
 }
 
 function FireCard() {
-  const relays = useV1<AgentRow[]>("/relays");
   const { status } = useLive();
   const now = useNow();
-  const rows = relays.data ?? [];
-  const lit = rows.filter((r) => !r.disabled && r.last_seen_at && now - new Date(r.last_seen_at).getTime() < 5 * 60_000);
-  const newest = rows.map((r) => r.last_seen_at).filter(Boolean).sort().at(-1) ?? null;
+  const { rows, lit, newest, more } = useFireSummary(now);
   return (
     <NavLink
       to="/fires"
@@ -66,7 +65,7 @@ function FireCard() {
       <div className="flex items-center gap-2">
         <Flame className={cn("size-4", lit.length ? "text-corn" : "text-sidebar-muted")} aria-hidden="true" />
         <span className="font-display text-[14px] text-sidebar-foreground">
-          {lit.length ? (lit.length === 1 ? "Fire is lit" : `${lit.length} fires lit`) : "No fire lit"}
+          {lit.length ? (lit.length === 1 && !more ? "Fire is lit" : `${lit.length}${more ? "+" : ""} fires lit`) : "No fire lit"}
         </span>
         {lit.length > 0 && <span className="live-dot ml-auto size-2 rounded-full bg-corn" aria-hidden="true" />}
       </div>
@@ -166,7 +165,7 @@ function MyWorkLink({ onNavigate }: { onNavigate?: (() => void) | undefined }) {
 function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   const me = useSession();
   const projects = useProjects();
-  const agents = useAgents();
+  const agents = useCooksSource();
   const claimed = useClaimedTasks(projects.data);
   const now = useNow();
   const loc = useLocation();
@@ -176,7 +175,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
     return m;
   }, [claimed.tasks]);
   const asks = useOpenQuestionCounts(projects.data);
-  const cooks = (agents.data ?? []).filter((a) => !a.disabled || a.busy > 0).slice(0, 7);
+  const cooks = agents.items.filter((a) => !a.disabled || a.busy > 0).slice(0, 7);
 
   return (
     <div className="flex h-full flex-col text-sidebar-foreground">
@@ -248,7 +247,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
           <ul className="space-y-0.5">
             {agents.isLoading && [0, 1].map((i) => <li key={i} className="mx-2.5 my-2 h-4 animate-pulse rounded bg-sidebar-panel" />)}
             {cooks.map((a) => {
-              const st = cookState(a, now);
+              const st = principalState(a, now);
               const cur = byCook.get(a.name);
               return (
                 <li key={a.name}>
@@ -260,7 +259,7 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
                 </li>
               );
             })}
-            {agents.data?.length === 0 && <li className="px-2.5 py-1 text-[12px] text-sidebar-muted">No cooks yet.</li>}
+            {!agents.isLoading && agents.items.length === 0 && <li className="px-2.5 py-1 text-[12px] text-sidebar-muted">No cooks yet.</li>}
           </ul>
         </div>
 

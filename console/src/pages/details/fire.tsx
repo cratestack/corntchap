@@ -1,28 +1,38 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Link, useParams } from "react-router";
+import type { PrincipalView } from "@corntchap/api";
 import { PageShell } from "@/components/page";
-import { Avatar, EmptyState, Group, GroupRow, RowSkeleton, StatePill, cookState } from "@/components/bits";
+import { Avatar, EmptyState, Group, GroupRow, RowSkeleton, StatePill } from "@/components/bits";
 import { CopyLine } from "@/components/secret-dialog";
+import { SourceList } from "@/components/source-list";
 import { Button } from "@/components/ui/button";
 import { FireBadge, FireManage, fireState } from "@/pages/admin";
 import { errorMessage } from "@/lib/api";
-import { useAgents, useV1, type AgentRow } from "@/lib/data";
+import { useCooksSource } from "@/lib/sources";
+import { principalState, useFireByName } from "@/lib/people";
 import { fmtAgo, useNow } from "@/lib/format";
 import { useLive } from "@/lib/live";
 import { Crumb, linkClass, useWakeTargetsOf } from "./common";
 
 export function FireDetailsPage() {
   const { name = "" } = useParams();
-  const relays = useV1<AgentRow[]>("/relays");
-  const agents = useAgents();
+  const found = useFireByName(name);
+  const fire = found.item;
   const { events } = useLive();
   const now = useNow();
 
-  const fire = (relays.data ?? []).find((r) => r.name.toLowerCase() === name.toLowerCase());
-  // the cooks a fire may wake are its owner's
-  const owned = useMemo(() => (agents.data ?? []).filter((a) => !!fire?.owner && a.owner === fire.owner), [agents.data, fire]);
-  const wake = useWakeTargetsOf(useMemo(() => owned.map((a) => a.name), [owned]));
-  const wakes = owned.filter((a) => (wake.byCook.get(a.name) ?? []).some((w) => w.type === "relay"));
+  // the cooks a fire may wake are its owner's: their pages are read as the list is scrolled, and a cook is listed once its wake targets say it has a relay
+  const owner = fire?.owner ?? null;
+  const owned = useCooksSource({ ...(owner ? { owner } : {}), enabled: !!owner });
+  const wake = useWakeTargetsOf(useMemo(() => owned.items.map((a) => a.name), [owned.items]));
+  const wakes = useMemo(() => owned.items.filter((a) => (wake.byCook.get(a.name) ?? []).some((w) => w.type === "relay")), [owned.items, wake.byCook]);
+  // none of the cooks read so far has one: read on, so "none yet" is only said when every cook was looked at
+  const looking = wakes.length === 0 && owned.hasNextPage;
+  const { fetchNextPage, isFetchingNextPage } = owned;
+  useEffect(() => {
+    if (looking && !wake.isLoading && !isFetchingNextPage) fetchNextPage();
+  }, [looking, wake.isLoading, isFetchingNextPage, fetchNextPage]);
+  const wakeSource = useMemo(() => ({ ...owned, items: wakes, isLoading: owned.isLoading || wake.isLoading || looking }), [owned, wakes, wake.isLoading, looking]);
 
   // `run.started` / `run.finished` are what the relay reports for each agent it starts
   const runs = useMemo(() => {
@@ -35,7 +45,7 @@ export function FireDetailsPage() {
 
   const crumb = <Crumb to="/fires" parent="Fires" here={name} />;
 
-  if (relays.isLoading) {
+  if (found.isLoading) {
     return (
       <>
         {crumb}
@@ -45,13 +55,13 @@ export function FireDetailsPage() {
       </>
     );
   }
-  if (relays.error || !fire) {
+  if (found.error || !fire) {
     return (
       <>
         {crumb}
         <PageShell eyebrow="Fire" title={name} className="pt-2">
-          <EmptyState title={relays.error ? "Could not reach the fires" : "No such fire"} action={<Button asChild variant="outline"><Link to="/fires">Back to Fires</Link></Button>}>
-            {relays.error ? errorMessage(relays.error) : `${name} is not a fire you can see.`}
+          <EmptyState title={found.error ? "Could not reach the fires" : "No such fire"} action={<Button asChild variant="outline"><Link to="/fires">Back to Fires</Link></Button>}>
+            {found.error ? errorMessage(found.error) : `${name} is not a fire you can see.`}
           </EmptyState>
         </PageShell>
       </>
@@ -81,7 +91,7 @@ export function FireDetailsPage() {
                 hint={lit ? "Heard from in the last five minutes" : label === "put out" ? "Put out: it cannot listen" : "Not heard from lately"}
                 trailing={<FireBadge lit={lit} label={label} />}
               />
-              <GroupRow label="Last seen" value={fmtAgo(fire.last_seen_at, now)} />
+              <GroupRow label="Last seen" value={fmtAgo(fire.last_seen_at ?? null, now)} />
               <GroupRow label="Owner" value={fire.owner ?? "none"} />
             </Group>
 
@@ -92,31 +102,25 @@ export function FireDetailsPage() {
             </Group>
 
             <Group title="Cooks it wakes" hint="The owner's cooks that have a relay wake target.">
-              {agents.isLoading || wake.isLoading ? (
-                <div className="p-3">
-                  <RowSkeleton rows={2} />
-                </div>
-              ) : wakes.length === 0 ? (
-                <GroupRow label="None yet" hint={`No cook of ${fire.owner ?? "its owner"} has a relay wake target. Add one on the cook, or run corntchap-cli cook setup.`} />
-              ) : (
-                wakes.map((a) => {
-                  const cs = cookState(a, now);
-                  return (
-                    <Link
-                      key={a.name}
-                      to={`/cooks/${a.name}`}
-                      className="flex min-h-14 items-center gap-3 px-4 py-2.5 outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted"
-                    >
-                      <Avatar name={a.name} className="size-8 rounded-lg text-[14px]" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[14px] font-medium leading-tight">{a.name}</span>
-                        {(a.teams ?? []).length > 0 && <span className="block truncate font-mono text-[11px] text-muted-foreground">{(a.teams ?? []).join(" · ")}</span>}
-                      </span>
-                      <StatePill state={cs} />
-                    </Link>
-                  );
-                })
-              )}
+              <SourceList<PrincipalView>
+                source={wakeSource}
+                itemKey={(a) => a.name}
+                label="Cooks it wakes"
+                empty={<>None yet. No cook of {fire.owner ?? "its owner"} has a relay wake target. Add one on the cook, or run corntchap-cli cook setup.</>}
+                renderItem={(a) => (
+                  <Link
+                    to={`/cooks/${a.name}`}
+                    className="flex min-h-14 items-center gap-3 px-4 py-2.5 outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted"
+                  >
+                    <Avatar name={a.name} className="size-8 rounded-lg text-[14px]" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[14px] font-medium leading-tight">{a.name}</span>
+                      {a.teams.length > 0 && <span className="block truncate font-mono text-[11px] text-muted-foreground">{a.teams.join(" · ")}</span>}
+                    </span>
+                    <StatePill state={principalState(a, now)} />
+                  </Link>
+                )}
+              />
             </Group>
           </div>
 

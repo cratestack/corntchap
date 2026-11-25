@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { useQueries } from "@tanstack/react-query";
 import { Cloud, Flame, MessageSquare, Loader2, MessageCircle, Minus, Pencil, Plug, Plus, Power, RotateCw, Server, Trash2, UserPlus, Webhook } from "lucide-react";
 import { toast } from "sonner";
-import type { ActivityView } from "@corntchap/api";
+import type { ActivityView, PrincipalView, TeamView, WakeTargetView } from "@corntchap/api";
 import { cn } from "@/lib/utils";
 import { PageShell } from "@/components/page";
 import {
@@ -17,11 +17,11 @@ import {
   LabelChip,
   RowSkeleton,
   StatePill,
-  cookState,
   formSheetClass,
 } from "@/components/bits";
-import { useProcInfinite } from "@/lib/paging";
 import { CloudRunList, StationList } from "@/components/stations";
+import { LoadMore, SourceList } from "@/components/source-list";
+import { VirtualMenu } from "@/components/ui/virtual-menu";
 import { CookRepoScopes } from "@/components/repos";
 import { UsagePanel } from "@/components/usage";
 import { RestaurantLog } from "@/components/restaurant-log";
@@ -32,19 +32,10 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { client, errorMessage } from "@/lib/api";
-import {
-  useAgents,
-  useClaimedTasks,
-  useInvalidateAll,
-  useProc,
-  useProcCall,
-  useProjects,
-  useV1,
-  useV1Call,
-  type AgentRow,
-  type TeamRow,
-  type WakeTargetRow,
-} from "@/lib/data";
+import { useClaimedTasks, useInvalidateAll, useProc, useProcCall, useProjects, useV1Call } from "@/lib/data";
+import { useStationsSource, useTeamsSource, useWakeTargetsSource } from "@/lib/sources";
+import { principalState, useCookByName, useTeamByName } from "@/lib/people";
+import { useStoreValue } from "@/lib/use-store-value";
 import { fmtAgo, plural, useNow } from "@/lib/format";
 import { useLive } from "@/lib/live";
 import { useOpenTask } from "@/lib/nav";
@@ -60,7 +51,7 @@ const activityLine = (a: ActivityView) => {
 // ------------------------------------------------------------------ leases
 
 /** Tasks held right now out of the cook's limit, which its owner (or a super-admin) can step up or down. */
-function LeaseRow({ a }: { a: AgentRow }) {
+function LeaseRow({ a }: { a: PrincipalView }) {
   const invalidate = useInvalidateAll();
   const [busy, setBusy] = useState(false);
   async function set(n: number) {
@@ -110,7 +101,7 @@ const GRANTS: { id: string; label: string; hint: string }[] = [
 ];
 
 /** What a cook may do beyond working its tasks. A cook never exceeds its owner and cannot change this itself. */
-function GrantRows({ a }: { a: AgentRow }) {
+function GrantRows({ a }: { a: PrincipalView }) {
   const call = useV1Call();
   const [busy, setBusy] = useState<string | null>(null);
   const have = new Set(a.grants ?? []);
@@ -151,95 +142,89 @@ function GrantRows({ a }: { a: AgentRow }) {
 
 // ------------------------------------------------------------------ teams
 
-/** Pick a team to put the cook in: big rows, one tap. */
-function TeamPicker({ open, onOpenChange, a, addable }: { open: boolean; onOpenChange: (o: boolean) => void; a: AgentRow; addable: TeamRow[] }) {
-  const call = useV1Call();
-  const [busy, setBusy] = useState<string | null>(null);
-  async function add(team: string) {
-    setBusy(team);
-    try {
-      await call("POST", `/teams/${team}/members`, { principal: a.name, role: "chef" });
-      toast.success(`${a.name} joined ${team}`);
-      onOpenChange(false);
-    } catch (e) {
-      toast.error("Could not add it to that team", { description: errorMessage(e) });
-    } finally {
-      setBusy(null);
-    }
-  }
+const teamKey = (t: TeamView) => t.name;
+
+/** One team the cook is in: its pots, and a button to take the cook out when the signed-in person may. */
+function CookTeamRow({ team, a, pots, onLeave }: { team: string; a: PrincipalView; pots: { key: string; team?: string | null }[]; onLeave: (team: string) => void }) {
+  const me = useSession();
+  const found = useTeamByName(team);
+  // a team's owners and super-admins may move any cook in or out of it, but only its owner (or a super-admin) manages the cook itself; any chef may add or remove a cook they own
+  const manageable = isSuperAdmin(me) || a.owner === me.name || canManageTeam(me, found.item?.role);
+  const tp = pots.filter((p) => p.team === team);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn(formSheetClass, "sm:max-w-sm")}>
-        <FormSheetHead>
-          <DialogTitle className="text-[22px] leading-tight">Add {a.name} to a team</DialogTitle>
-          <DialogDescription>The team decides which pots the cook sees.</DialogDescription>
-        </FormSheetHead>
-        <FormSheetBody className="space-y-0 px-0 pb-4">
-          <ul className="divide-y divide-border border-y border-border">
-            {addable.length === 0 && <li className="px-6 py-4 text-[13px] text-muted-foreground">Every team you are in already has it.</li>}
-            {addable.map((t) => (
-              <li key={t.name}>
-                <button
-                  type="button"
-                  disabled={!!busy}
-                  onClick={() => void add(t.name)}
-                  className="flex min-h-14 w-full items-center gap-3 px-6 py-2.5 text-left hover:bg-muted/50 active:bg-muted disabled:opacity-60"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[14px] font-medium">{t.name}</span>
-                    <span className="block font-mono text-[11px] text-muted-foreground">
-                      {t.members} {t.members === 1 ? "chef" : "chefs"} · pots {t.projects.length ? t.projects.join(", ") : "none"}
-                    </span>
-                  </span>
-                  {busy === t.name ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Plus className="size-4 text-muted-foreground" aria-hidden="true" />}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </FormSheetBody>
-      </DialogContent>
-    </Dialog>
+    <GroupRow
+      label={
+        <Link to={`/teams/${team}`} className={linkClass}>
+          {team}
+        </Link>
+      }
+      hint={<span className="font-mono">{tp.length === 0 ? "no pots" : tp.map((p) => p.key).join(" · ")}</span>}
+      trailing={
+        manageable ? (
+          <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${a.name} from ${team}`} onClick={() => onLeave(team)}>
+            <Minus />
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
 
 /** The teams a cook is in: they decide which pots it sees. Its owner, a team's owners and super-admins can move the cook in and out. */
-function TeamGroup({ a, pots }: { a: AgentRow; pots: { key: string; team?: string | null }[] }) {
+function TeamGroup({ a, pots }: { a: PrincipalView; pots: { key: string; team?: string | null }[] }) {
   const me = useSession();
   const call = useV1Call();
-  const teams = useV1<TeamRow[]>("/teams");
-  const [picking, setPicking] = useState(false);
+  const teamQ = useStoreValue("");
+  const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState<string | null>(null);
-  const mine = a.teams ?? [];
-  // a team's owners and super-admins may move any cook in or out of it, but only its owner (or a super-admin) manages the cook itself; any chef may add or remove a cook they own
-  const mineOwn = a.owner === me.name;
-  const manageable = (t: string) => isSuperAdmin(me) || mineOwn || canManageTeam(me, (teams.data ?? []).find((x) => x.name === t)?.role);
-  const addable = (teams.data ?? []).filter((t) => !mine.includes(t.name) && (isSuperAdmin(me) || mineOwn));
+  const mine = a.teams;
+  const addable = isSuperAdmin(me) || a.owner === me.name;
+  const teams = useTeamsSource(teamQ.value, { enabled: addable });
+  async function add(team: string) {
+    setBusy(true);
+    try {
+      await call("POST", `/teams/${team}/members`, { principal: a.name, role: "chef" });
+      toast.success(`${a.name} joined ${team}`);
+    } catch (e) {
+      toast.error("Could not add it to that team", { description: errorMessage(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <Group title="Teams" hint="The teams decide which pots this cook sees. With no team it sees none.">
       {mine.length === 0 && <GroupRow label="In no team" hint="It sees no pot yet." />}
-      {mine.map((t) => {
-        const tp = pots.filter((p) => p.team === t);
-        return (
-          <GroupRow
-            key={t}
-            label={
-              <Link to={`/teams/${t}`} className={linkClass}>
-                {t}
-              </Link>
-            }
-            hint={<span className="font-mono">{tp.length === 0 ? "no pots" : tp.map((p) => p.key).join(" · ")}</span>}
-            trailing={
-              manageable(t) ? (
-                <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${a.name} from ${t}`} onClick={() => setLeaving(t)}>
-                  <Minus />
-                </Button>
-              ) : undefined
-            }
-          />
-        );
-      })}
-      {addable.length > 0 && <GroupRow icon={<UserPlus />} label="Add to a team" onClick={() => setPicking(true)} />}
-      <TeamPicker open={picking} onOpenChange={setPicking} a={a} addable={addable} />
+      {mine.map((t) => (
+        <CookTeamRow key={t} team={t} a={a} pots={pots} onLeave={setLeaving} />
+      ))}
+      {addable && (
+        <VirtualMenu<TeamView>
+          label={`Add ${a.name} to a team`}
+          source={teams}
+          onQuery={teamQ.set}
+          itemKey={teamKey}
+          mode="action"
+          isDisabled={(t) => mine.includes(t.name) || busy}
+          onSelect={(t) => void add(t.name)}
+          empty="Every team you are in already has it."
+          renderItem={(t) => (
+            <span className="block min-w-0">
+              <span className="block truncate text-[14px] font-medium">{t.name}</span>
+              <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                {mine.includes(t.name) ? "already in" : `${t.members} ${t.members === 1 ? "chef" : "chefs"} · pots ${t.projects.length ? t.projects.join(", ") : "none"}`}
+              </span>
+            </span>
+          )}
+          trigger={
+            <button type="button" className="flex min-h-12 w-full items-center gap-3 px-4 py-2.5 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/60 active:bg-muted">
+              <span aria-hidden="true" className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-4">
+                <UserPlus />
+              </span>
+              <span className="min-w-0 flex-1 text-[14px] font-medium">Add to a team</span>
+            </button>
+          }
+        />
+      )}
       <ConfirmDialog
         open={!!leaving}
         onOpenChange={(o) => !o && setLeaving(null)}
@@ -267,21 +252,20 @@ const WAKE_KIND: Record<string, { title: string; icon: typeof Flame }> = {
   devin: { title: "Devin session", icon: Server },
 };
 
-function wakeDetail(w: WakeTargetRow): string {
-  if (w.type === "webhook" || w.type === "coder") return String(w.config.url ?? "");
-  if (w.type === "devin") return `org ${String(w.config.organization ?? "")}`;
-  if (w.type === "claude-routine") return `routine ${String(w.config.url ?? "").match(/trig_[A-Za-z0-9]+/)?.[0] ?? ""}`;
-  if (w.type === "github-comment") return `${String(w.config.mention ?? "the default mention")} on ${String(w.config.repo ?? "")}#${String(w.config.issue ?? "")}`;
-  return "wakes the sessions on its machine";
+/** Where a wake target goes: the server names it (a webhook's URL, a repository and issue; secrets are never shown). */
+function wakeDetail(w: WakeTargetView): string {
+  if (w.type === "relay") return "wakes the sessions on its machine";
+  return w.target ?? "";
 }
 
+const wakeKey = (w: WakeTargetView) => w.id;
+
 function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }) {
-  const q = useV1<WakeTargetRow[]>(`/agents/${agent}/wake-targets`);
+  const targets = useWakeTargetsSource(agent);
   const call = useV1Call();
   const me = useSession();
   const [adding, setAdding] = useState(false);
-  const [removing, setRemoving] = useState<WakeTargetRow | null>(null);
-  const rows = q.data ?? [];
+  const [removing, setRemoving] = useState<WakeTargetView | null>(null);
   const cloud = runtime === "cloud";
   return (
     <Group
@@ -292,46 +276,43 @@ function WakeGroup({ agent, runtime }: { agent: string; runtime: string | null }
           : "How an idle cook hears there is work: a fire on its machine wakes its sessions."
       }
     >
-      {q.isLoading && <GroupRow label="Loading…" />}
-      {!q.isLoading && rows.length === 0 && (
-        <GroupRow label="No wake target" hint={cloud ? "Nothing can start it yet. Connect a routine, GitHub comments or a webhook." : "Add a relay so a fire wakes it."} />
-      )}
-      {rows.map((w) => {
-        const kind = WAKE_KIND[w.type] ?? { title: w.type, icon: Cloud };
-        const Icon = kind.icon;
-        return (
-          <GroupRow
-            key={w.id}
-            icon={<Icon />}
-            label={
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                {kind.title}
-              </span>
-            }
-            hint={
-              <>
-                <span className="block truncate font-mono text-[11px]">{wakeDetail(w)}</span>
-                {typeof w.config.session_url === "string" && /^https?:\/\//.test(w.config.session_url) && (
-                  <a href={w.config.session_url} target="_blank" rel="noreferrer" className="block truncate text-[11.5px] underline underline-offset-2">
-                    Latest session
-                  </a>
-                )}
-                {(w.projects.length > 0 || w.labels.length > 0) && (
-                  <span className="block text-[11.5px]">
-                    {w.projects.length > 0 && <>pots {w.projects.join(", ")} </>}
-                    {w.labels.length > 0 && <>labels {w.labels.join(", ")}</>}
-                  </span>
-                )}
-              </>
-            }
-            trailing={
-              <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${kind.title} wake target`} onClick={() => setRemoving(w)}>
-                <Trash2 />
-              </Button>
-            }
-          />
-        );
-      })}
+      <SourceList<WakeTargetView>
+        source={targets}
+        itemKey={wakeKey}
+        label="Wake targets"
+        empty={
+          <>
+            <p className="font-medium text-foreground">No wake target</p>
+            <p>{cloud ? "Nothing can start it yet. Connect a routine, GitHub comments or a webhook." : "Add a relay so a fire wakes it."}</p>
+          </>
+        }
+        renderItem={(w) => {
+          const kind = WAKE_KIND[w.type] ?? { title: w.type, icon: Cloud };
+          const Icon = kind.icon;
+          return (
+            <GroupRow
+              icon={<Icon />}
+              label={<span className="flex flex-wrap items-center gap-x-2 gap-y-1">{kind.title}</span>}
+              hint={
+                <>
+                  <span className="block truncate font-mono text-[11px]">{wakeDetail(w)}</span>
+                  {(w.projects.length > 0 || w.labels.length > 0) && (
+                    <span className="block text-[11.5px]">
+                      {w.projects.length > 0 && <>pots {w.projects.join(", ")} </>}
+                      {w.labels.length > 0 && <>labels {w.labels.join(", ")}</>}
+                    </span>
+                  )}
+                </>
+              }
+              trailing={
+                <Button type="button" size="icon" variant="ghost" aria-label={`Remove ${kind.title} wake target`} onClick={() => setRemoving(w)}>
+                  <Trash2 />
+                </Button>
+              }
+            />
+          );
+        }}
+      />
       <GroupRow icon={<Plus />} label="Add a wake target" hint={cloud ? "Goes to the cloud setup steps" : undefined} onClick={() => setAdding(true)} />
       <AddWake open={adding} onOpenChange={setAdding} agent={agent} runtime={runtime} admin={isSuperAdmin(me)} />
       <ConfirmDialog
@@ -467,14 +448,16 @@ export function AddWake({
 
 // ------------------------------------------------------------------ the page
 
+const RECENT = 15;
+
 type Dlg = "rename" | "delete" | "rotate" | "disable" | "mcp" | null;
 
 export function CookDetailsPage() {
   const { name = "" } = useParams();
-  const agents = useAgents();
+  const found = useCookByName(name);
   const projects = useProjects();
-  const stationsQ = useProc("stationList", { cook: name, kind: "session" });
-  const cloudQ = useProcInfinite("cloudRunPage", { cook: name, project: null, live: null }, { getCursor: (p) => p.nextCursor });
+  const sessions = useStationsSource({ cook: name, kind: "session" });
+  const cloudRuns = useStationsSource({ cook: name, kind: "cloud-run" });
   const usage = useProc("usageReport", { cook: name, days: 7 });
   const claimed = useClaimedTasks(projects.data);
   const { events } = useLive();
@@ -486,9 +469,8 @@ export function CookDetailsPage() {
   const [dialog, setDialog] = useState<Dlg>(null);
   const [token, setToken] = useState<{ token: string; title: string; hint?: string } | null>(null);
 
-  const cook = (agents.data ?? []).find((a) => a.name.toLowerCase() === name.toLowerCase());
-  const stations = useMemo(() => stationsQ.data ?? [], [stationsQ.data]);
-  const cloudRuns = cloudQ.items;
+  const cook = found.item;
+  const stations = useMemo(() => [...sessions.items], [sessions.items]);
 
   const myTeams = useMemo(() => cook?.teams ?? [], [cook]);
   const pots = useMemo(() => (projects.data ?? []).filter((p) => p.team && myTeams.includes(p.team)), [projects.data, myTeams]);
@@ -506,10 +488,12 @@ export function CookDetailsPage() {
     return out;
   }, [events, name]);
 
+  // what the cook's stations reported last, a page for each pot they are in (the latest few: `activityPage` has the rest)
+  const stationPots = useMemo(() => [...new Set(stations.map((s) => s.project))], [stations]);
   const activity = useQueries({
-    queries: stations.map((s) => ({
-      queryKey: ["data", "activity", s.project, s.id],
-      queryFn: () => client.procedures.activityList({ project: s.project, station: s.id, limit: 10 }),
+    queries: stationPots.map((project) => ({
+      queryKey: ["data", "activity", project, "cook", name],
+      queryFn: () => client.procedures.activityPage({ project, cook: name, page: { limit: RECENT, cursor: null } }),
       staleTime: 1500,
       refetchInterval: 15000,
     })),
@@ -517,14 +501,14 @@ export function CookDetailsPage() {
   const recent = useMemo(() => {
     const rows: (ActivityView & { project: string })[] = [];
     activity.forEach((r, i) => {
-      for (const a of r.data ?? []) rows.push({ ...a, project: stations[i]!.project });
+      for (const a of r.data?.items ?? []) rows.push({ ...a, project: stationPots[i]! });
     });
-    return rows.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 15);
-  }, [activity, stations]);
+    return rows.sort((a, b) => b.at.localeCompare(a.at)).slice(0, RECENT);
+  }, [activity, stationPots]);
 
   const crumb = <Crumb to="/cooks" parent="Cooks" here={name} />;
 
-  if (agents.isLoading) {
+  if (found.isLoading) {
     return (
       <>
         {crumb}
@@ -534,20 +518,20 @@ export function CookDetailsPage() {
       </>
     );
   }
-  if (agents.error || !cook) {
+  if (found.error || !cook) {
     return (
       <>
         {crumb}
         <PageShell eyebrow="Cook" title={name} className="pt-2">
-          <EmptyState title={agents.error ? "Could not reach the cooks" : "No such cook"} action={<Button asChild variant="outline"><Link to="/cooks">Back to Cooks</Link></Button>}>
-            {agents.error ? errorMessage(agents.error) : `${name} is not a cook you can see.`}
+          <EmptyState title={found.error ? "Could not reach the cooks" : "No such cook"} action={<Button asChild variant="outline"><Link to="/cooks">Back to Cooks</Link></Button>}>
+            {found.error ? errorMessage(found.error) : `${name} is not a cook you can see.`}
           </EmptyState>
         </PageShell>
       </>
     );
   }
 
-  const st = cookState(cook, now);
+  const st = principalState(cook, now);
   const current = held[0];
 
   async function rotate() {
@@ -588,7 +572,7 @@ export function CookDetailsPage() {
                 value={current ? <span className="font-mono font-bold text-foreground">{current.id}</span> : "nothing right now"}
                 {...(current ? { onClick: () => openTask(current.id) } : {})}
               />
-              <GroupRow label="Last seen" value={fmtAgo(cook.last_seen_at, now)} />
+              <GroupRow label="Last seen" value={fmtAgo(cook.last_seen_at ?? null, now)} />
               <GroupRow label="Runs in" value={`${KIND_LABEL[cook.agent_kind ?? "other"] ?? cook.agent_kind ?? "other"} · ${cook.runtime ?? "local"}`} />
               <GroupRow label="Owner" value={cook.owner ?? "none"} />
             </Group>
@@ -603,7 +587,7 @@ export function CookDetailsPage() {
 
             <TeamGroup a={cook} pots={pots} />
 
-            <CookRepoScopes cook={cook.name} pots={pots} scopes={cook.repo_scopes ?? []} />
+            <CookRepoScopes cook={cook.name} pots={pots} scopes={cook.repo_scopes} />
 
             <Group title="Connect" hint="The token is shown once. Rotating makes a new one and the old one stops working at once.">
               <GroupRow icon={<Plug />} label="MCP config" hint="Snippets for OpenCode, Claude Code, Codex, Copilot and Antigravity" onClick={() => setDialog("mcp")} />
@@ -612,21 +596,33 @@ export function CookDetailsPage() {
           </div>
 
           <div className="space-y-6">
-            <Group title="Sessions" aside={<span className="font-mono text-[11px] text-muted-foreground">{stations.length}</span>}>
+            <Group title="Sessions" aside={<span className="font-mono text-[11px] text-muted-foreground">{stations.length}{sessions.hasNextPage ? "+" : ""}</span>}>
               <div className="p-3.5">
-                {stationsQ.isLoading ? <RowSkeleton rows={2} /> : <StationList stations={stations} cook={cook.name} kind={cook.agent_kind} />}
+                {sessions.isLoading ? (
+                  <RowSkeleton rows={2} />
+                ) : (
+                  <>
+                    <StationList stations={stations} cook={cook.name} kind={cook.agent_kind ?? null} />
+                    <LoadMore source={sessions} />
+                  </>
+                )}
               </div>
             </Group>
 
-            {cloudRuns.length > 0 && (
-              <Group title="Cloud runs" hint="One station per run: what a run claims, comments and passes is attributed to it." aside={<span className="font-mono text-[11px] text-muted-foreground">{cloudRuns.length}{cloudQ.hasNextPage ? "+" : ""}</span>}>
+            {cloudRuns.items.length > 0 && (
+              <Group
+                title="Cloud runs"
+                hint="One station per run: what a run claims, comments and passes is attributed to it."
+                aside={<span className="font-mono text-[11px] text-muted-foreground">{cloudRuns.items.length}{cloudRuns.hasNextPage ? "+" : ""}</span>}
+              >
                 <div className="p-3.5">
-                  <CloudRunList stations={cloudRuns} hasMore={!!cloudQ.hasNextPage} loadingMore={cloudQ.isFetchingNextPage} onMore={() => void cloudQ.fetchNextPage()} />
+                  <CloudRunList stations={[...cloudRuns.items]} />
+                  <LoadMore source={cloudRuns} />
                 </div>
               </Group>
             )}
 
-            <WakeGroup agent={cook.name} runtime={cook.runtime} />
+            <WakeGroup agent={cook.name} runtime={cook.runtime ?? null} />
 
             <RestaurantLog cook={cook.name} />
 
@@ -667,7 +663,7 @@ export function CookDetailsPage() {
               </div>
             </Group>
 
-            <Group title="Recent activity" hint="What its stations' hooks reported last.">
+            <Group title="Recent activity" hint={`What its stations' hooks reported last (the latest ${RECENT}).`}>
               <div className="p-3.5">
                 {stations.length === 0 ? (
                   <Quiet>No stations, so no activity is reported.</Quiet>
@@ -719,14 +715,14 @@ export function CookDetailsPage() {
         </div>
       </PageShell>
 
-      <McpDialog open={dialog === "mcp"} onOpenChange={(o) => !o && setDialog(null)} name={cook.name} kind={cook.agent_kind} />
+      <McpDialog open={dialog === "mcp"} onOpenChange={(o) => !o && setDialog(null)} name={cook.name} kind={cook.agent_kind ?? null} />
       <TokenDialog
         open={!!token}
         onOpenChange={(o) => !o && setToken(null)}
         title={token?.title ?? ""}
         name={cook.name}
         token={token?.token ?? null}
-        kind={cook.agent_kind}
+        kind={cook.agent_kind ?? null}
         {...(token?.hint ? { hint: token.hint } : {})}
       />
       <ConfirmDialog
