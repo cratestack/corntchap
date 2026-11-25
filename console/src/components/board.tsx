@@ -183,7 +183,11 @@ function PhoneBoard({
               scroll="window"
               aria-label={`${meta.label}, ${col.length}`}
               className={cn("w-[85vw] shrink-0 snap-start p-2", id === "cancelled" && "opacity-80")}
-              header={null}
+              header={
+                <h2 className="sr-only">
+                  {meta.label}, {col.length}
+                </h2>
+              }
               items={col}
               itemKey={(t) => t.id}
               empty={<p className="px-2 py-8 text-center text-[13px] text-muted-foreground">{BOARD_EMPTY[id]}</p>}

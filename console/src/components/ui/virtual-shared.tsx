@@ -14,6 +14,8 @@ export type VirtualScroll = "own" | "window" | { parent: HTMLElement | null };
 export const OVERSCAN_PX = 900;
 
 export interface VirtualContext {
+  /** The list's accessible name (on the `role="list"` element; Virtuoso's root is a plain div). */
+  label?: string | undefined;
   itemClassName?: string | undefined;
   listClassName?: string | undefined;
   stickyClassName?: string | undefined;
@@ -30,8 +32,10 @@ export function scrollProps(scroll: VirtualScroll): { useWindowScroll?: boolean;
 }
 
 const List = forwardRef<HTMLDivElement, ListProps & { context: VirtualContext }>(function List({ context, children, ...rest }, ref) {
+  // Virtuoso renders this twice in a grouped list: the rows, and the sticky group header on top (no rows: not a list)
+  const top = (rest as Record<string, unknown>)["data-testid"] === "virtuoso-top-item-list";
   return (
-    <div ref={ref} role="list" {...rest} className={context.listClassName}>
+    <div ref={ref} role={top ? "presentation" : "list"} aria-label={top ? undefined : context.label} {...rest} className={context.listClassName}>
       {children}
     </div>
   );

@@ -1044,7 +1044,7 @@ function ActivityView({ events }: { events: ReturnType<typeof useLive>["events"]
             {events.length === 0 ? "Events show up here as cooks scoop, tick and serve." : plural(events.length, "event") + " hidden by the filters."}
           </EmptyState>
         ) : (
-          <EventFeed events={filtered} limit={200} />
+          <EventFeed events={filtered} />
         )}
       </div>
     </div>

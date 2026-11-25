@@ -41,7 +41,7 @@ export function VirtualList<T>({
   "aria-label": label,
   ref,
 }: VirtualListProps<T>) {
-  const context = useMemo<VirtualContext>(() => ({ itemClassName, footer }), [itemClassName, footer]);
+  const context = useMemo<VirtualContext>(() => ({ itemClassName, footer, label }), [itemClassName, footer, label]);
   if (items.length === 0 && empty) return <>{empty}</>;
   if (typeof scroll === "object" && !scroll.parent) return null;
   const list = (
@@ -56,7 +56,6 @@ export function VirtualList<T>({
       {...(defaultItemHeight ? { defaultItemHeight } : {})}
       {...(onEndReached ? { endReached: onEndReached } : {})}
       {...scrollProps(scroll)}
-      {...(label ? { "aria-label": label } : {})}
       {...(scroll === "own" ? { className: "scrollbar-thin overscroll-contain" } : className ? { className } : {})}
     />
   );
