@@ -441,9 +441,11 @@ pub async fn get_task_n(
     task_full_n(&mut c, t.id, comments_limit).await
 }
 
-pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
-    let sql = format!(
-        "select jsonb_build_object('key', pr.key, 'name', pr.name, 'repo_url', pr.repo_url,
+/// SQL: one pot as the console and `list_projects` show it, with its counts. Needs alias `pr`
+/// (projects); `$2` is the caller.
+fn project_summary_sql() -> String {
+    format!(
+        "jsonb_build_object('key', pr.key, 'name', pr.name, 'repo_url', pr.repo_url,
             'repos', {repos},
             'team', (select name from teams where id = pr.team_id),
             'lease_ttl_s', extract(epoch from pr.lease_ttl)::float8,
@@ -462,10 +464,16 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
                 where m.project_id = pr.id and m.author_id is distinct from $2 and m.relayed_by is distinct from $2
                   and (m.to_principal is null or m.to_principal = $2)
                   and m.seq > coalesce((select r.last_seq from pass_reads r where r.principal_id = $2 and r.project_id = pr.id
-                      and r.conversation = case when m.to_principal is null then 'pot' else m.author_id::text end), 0)))
-         from projects pr where {} order by pr.key",
-        access_sql("$1", "$2"),
+                      and r.conversation = case when m.to_principal is null then 'pot' else m.author_id::text end), 0)))",
         repos = crate::repos::repos_json_sql("pr.id"),
+    )
+}
+
+pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
+    let sql = format!(
+        "select {} from projects pr where {} order by pr.key",
+        project_summary_sql(),
+        access_sql("$1", "$2"),
     );
     let rows: Vec<Value> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
         .bind(p.is_super_admin())
@@ -473,6 +481,49 @@ pub async fn list_projects(db: &PgPool, p: &Principal) -> Result<Value> {
         .fetch_all(db)
         .await?;
     Ok(Value::Array(rows))
+}
+
+/// A page of the pots you can see (`potPage`, the `list_projects` tool), by key. `q` matches the key
+/// and the name (any case); `team` is a team's name.
+pub async fn pot_page(
+    db: &PgPool,
+    p: &Principal,
+    q: Option<&str>,
+    team: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "key",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
+    let team = team.map(str::trim).filter(|t| !t.is_empty());
+    let sql = format!(
+        "select {}, array[pr.key] from projects pr where {}
+           and ($3::text is null or position(lower($3) in lower(pr.key || ' ' || pr.name)) > 0)
+           and ($4::text is null or pr.team_id = (select id from teams where name = $4))
+           and ($5::text is null or pr.key > $5)
+         order by pr.key limit $6",
+        project_summary_sql(),
+        access_sql("$1", "$2"),
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(p.is_super_admin())
+        .bind(p.id)
+        .bind(q)
+        .bind(team)
+        .bind(paging.key(0))
+        .bind(paging.fetch())
+        .fetch_all(db)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
 }
 
 pub async fn list_tasks(
@@ -537,7 +588,8 @@ const NO_BLOCKERS_SQL: &str = "not exists (select 1 from task_deps d join tasks 
 /// The SQL predicate of a board bucket on `t`, and whether it sorts by priority (the tasks in play) or
 /// by last change (the closed ones). Buckets are the console's columns: `ready` (open with nothing in
 /// the way, or claimed with a lapsed lease), `claimed` (live lease), `waiting` (blocked, or open and
-/// waiting on dependencies or subtasks), `done`, `cancelled`, and `active` (the first three together).
+/// waiting on dependencies or subtasks), `done`, `cancelled`, `active` (the first three together) and
+/// `all` (every status, newest change first).
 fn bucket_sql(bucket: &str) -> Result<(String, bool)> {
     let live = "coalesce(t.lease_expires_at > now(), false)";
     Ok(match bucket {
@@ -555,23 +607,24 @@ fn bucket_sql(bucket: &str) -> Result<(String, bool)> {
         ),
         "done" => ("t.status = 'done'".into(), false),
         "cancelled" => ("t.status = 'cancelled'".into(), false),
+        "all" => ("true".into(), false),
         _ => {
-            return invalid("bucket is active, ready, claimed, waiting, done or cancelled");
+            return invalid("bucket is active, ready, claimed, waiting, done, cancelled or all");
         }
     })
 }
 
-/// One page of a project's tasks for the console board (`taskPage`; `list_tasks` stays the agents'
-/// list). `bucket` is a board column: `ready`, `claimed`, `waiting` (priority desc, number), `done` or
-/// `cancelled` (newest change first: updated_at desc, number desc), or `active` (the first three in
-/// one list). `status` (a bucket too) and `holder` (the claiming cook's name) narrow it further.
-/// `total` counts every match, all pages together.
+/// One page of a project's tasks (`taskPage`, the console's board and the `list_tasks` tool).
+/// `bucket` is a board column: `ready`, `claimed`, `waiting` (priority desc, number), `done` or
+/// `cancelled` (newest change first: updated_at desc, number desc), `active` (the first three in
+/// one list, the default) or `all` (every status, newest change first). `status` (a bucket too) and
+/// `holder` (the claiming cook's name) narrow it further. `total` counts every match, all pages together.
 #[allow(clippy::too_many_arguments)]
 pub async fn task_page(
     db: &PgPool,
     p: &Principal,
     project: &str,
-    bucket: &str,
+    bucket: Option<&str>,
     label: Option<&str>,
     menu: Option<&str>,
     owner: Option<&str>,
@@ -581,6 +634,11 @@ pub async fn task_page(
     status: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<Value> {
+    let bucket = bucket
+        .map(|b| b.trim().to_lowercase())
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "active".into());
+    let bucket = bucket.as_str();
     let (bucket_pred, active) = bucket_sql(bucket)?;
     let status = status.map(str::trim).filter(|s| !s.is_empty());
     let status_pred = match status {
@@ -620,7 +678,7 @@ pub async fn task_page(
     let holder = holder.map(str::trim).filter(|h| !h.is_empty());
     let filters = format!(
         "t.project_id = $1 and {bucket_pred} and {status_pred}
-           and ($2::text is null or $2 = any(t.labels))
+           and ($2::text is null or t.labels @> array[$2::text])
            and ($3::text is null or ($3 = '-' and t.menu_id is null)
                 or exists (select 1 from menus m where m.id = t.menu_id and m.key = $3))
            and ($4::text is null or ($4 = '-' and t.owner_id is null)
@@ -687,6 +745,102 @@ pub async fn task_page(
         out["next_cursor"] = json!(n);
     }
     Ok(out)
+}
+
+/// A page of the labels used in a pot with how many tasks carry each (`labelPage`), by label. `q`
+/// matches the label (any case); `bucket` is `active` (default: open, claimed and blocked tasks) or `all`.
+pub async fn label_page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    q: Option<&str>,
+    bucket: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let bucket = bucket
+        .map(|b| b.trim().to_lowercase())
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "active".into());
+    if !["active", "all"].contains(&bucket.as_str()) {
+        return invalid("bucket is active or all");
+    }
+    let paging = crate::paging::paging(
+        page,
+        "label",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(
+        "select jsonb_build_object('label', l.label, 'count', l.n), array[l.label]
+         from (select u.label, count(distinct t.id) as n
+               from tasks t cross join lateral unnest(t.labels) as u(label)
+               where t.project_id = $1 and ($2 = 'all' or t.status in ('open','claimed','blocked'))
+                 and ($3::text is null or position(lower($3) in lower(u.label)) > 0)
+               group by u.label) l
+         where $4::text is null or l.label > $4
+         order by l.label limit $5",
+    )
+    .bind(pr.id)
+    .bind(&bucket)
+    .bind(q)
+    .bind(paging.key(0))
+    .bind(paging.fetch())
+    .fetch_all(&mut *c)
+    .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
+/// A page of a task's comments (`commentPage`), newest first (created_at, id).
+pub async fn comment_page(
+    db: &PgPool,
+    p: &Principal,
+    task: &str,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "-created_at,id",
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let t = task_by_ref(&mut c, p, task).await?;
+    // the id is compared as text (a uuid's canonical text sorts as the uuid does) so a forged
+    // cursor is a mismatch, not a failed cast
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(
+        "select jsonb_build_object('author', (select name from principals where id = cm.author_id),
+            'author_kind', (select kind from principals where id = cm.author_id),
+            'body', cm.body, 'at', cm.created_at,
+            'station', (select s.ref from stations s where s.id = cm.station_id),
+            'station_label', (select coalesce(s.label, s.directory, s.session_ref) from stations s where s.id = cm.station_id),
+            'station_url', (select s.session_url from stations s where s.id = cm.station_id)),
+            array[cm.created_at::text, cm.id::text]
+         from comments cm
+         where cm.task_id = $1
+           and ($2::text is null or cm.created_at < $2::text::timestamptz
+                or (cm.created_at = $2::text::timestamptz and cm.id::text collate \"C\" < $3::text collate \"C\"))
+         order by cm.created_at desc, cm.id desc limit $4",
+    )
+    .bind(t.id)
+    .bind(paging.key(0))
+    .bind(paging.key(1))
+    .bind(paging.fetch())
+    .fetch_all(&mut *c)
+    .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
 }
 
 pub struct NewTask {

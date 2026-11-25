@@ -26,7 +26,6 @@ create index if not exists pot_views_page on pot_views (project_id, position, ke
 -- the direct messages a person wrote (passConversationPage)
 create index if not exists pass_author_direct on pass_messages (project_id, author_id, seq desc)
   where to_principal is not null;
--- a task's comments and the questions put to one person, newest first (commentPage, questionMinePage)
+-- a task's comments and the questions one chef asked, newest first (commentPage, questionMinePage)
 create index if not exists comments_page on comments (task_id, created_at desc, id);
-create index if not exists questions_to_page on questions (to_principal, created_at desc, id)
-  where to_principal is not null;
+create index if not exists questions_asked_page on questions (asked_by, created_at desc, id);

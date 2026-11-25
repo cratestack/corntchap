@@ -116,7 +116,9 @@ impl World {
 }
 
 fn ids(v: &Value) -> Vec<String> {
-    v.as_array()
+    v.get("items")
+        .unwrap_or(v)
+        .as_array()
         .unwrap()
         .iter()
         .map(|t| t["id"].as_str().unwrap().to_string())
@@ -266,8 +268,8 @@ async fn list_tasks_filters_by_owner() {
     assert!(list(&w.alice, Some("ghost")).await.is_empty());
     // every task shows its owner
     let all = tool(app, &w.alice, "list_tasks", json!({"project": "PAY"})).await;
-    assert_eq!(all[1]["owner"], "bob");
-    assert!(all[2]["owner"].is_null());
+    assert_eq!(all["items"][1]["owner"], "bob");
+    assert!(all["items"][2]["owner"].is_null());
     // REST
     let (st, v) = app.get(&w.bob, "/projects/PAY/tasks?owner=me").await;
     assert_eq!(st, 200);

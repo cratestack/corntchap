@@ -59,7 +59,7 @@ pub enum ViewCmd {
 pub async fn run(c: ViewCmd, api: &Api) -> Result<()> {
     match c {
         ViewCmd::List { pot, json } => {
-            let v = api.procedure("viewList", json!({"project": pot})).await?;
+            let v = all_pages(api, "savedViewPage", json!({"project": pot})).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
@@ -73,12 +73,12 @@ pub async fn run(c: ViewCmd, api: &Api) -> Result<()> {
             order_sql,
             json,
         } => {
-            let v = api
-                .procedure(
-                    "viewRun",
-                    json!({"project": pot, "key": key, "where": where_sql, "orderBy": order_sql}),
-                )
-                .await?;
+            let v = all_pages(
+                api,
+                "viewPage",
+                json!({"project": pot, "key": key, "where": where_sql, "orderBy": order_sql}),
+            )
+            .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&v)?);
             } else {
@@ -115,6 +115,25 @@ pub async fn run(c: ViewCmd, api: &Api) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Every item of a paged procedure, page after page (at most `MAX_ROWS`).
+async fn all_pages(api: &Api, name: &str, args: Value) -> Result<Value> {
+    const MAX_ROWS: usize = 500;
+    let mut items: Vec<Value> = vec![];
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut a = args.clone();
+        a["page"] = json!({"limit": 200, "cursor": cursor});
+        let page = api.procedure(name, a).await?;
+        items.extend(page["items"].as_array().cloned().unwrap_or_default());
+        cursor = page["nextCursor"].as_str().map(String::from);
+        if cursor.is_none() || items.len() >= MAX_ROWS {
+            break;
+        }
+    }
+    items.truncate(MAX_ROWS);
+    Ok(Value::Array(items))
 }
 
 fn views_table(v: &Value) -> String {

@@ -785,6 +785,53 @@ pub async fn mine(db: &PgPool, p: &Principal, status: Option<&str>) -> Result<Va
     Ok(Value::Array(rows))
 }
 
+/// A page of the questions the caller asked (`questionMinePage`, the `my_questions` tool), newest
+/// first (created_at, id). `status` is open, answered, dismissed or all (default).
+pub async fn mine_page(
+    db: &PgPool,
+    p: &Principal,
+    status: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let status = status
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "all".into());
+    if !["open", "answered", "dismissed", "all"].contains(&status.as_str()) {
+        return invalid("status: open, answered, dismissed or all");
+    }
+    let paging = crate::paging::paging(
+        page,
+        "-created_at,id",
+        2,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    // the id is compared as text (a uuid's canonical text sorts as the uuid does) so a forged cursor
+    // is a mismatch, not a failed cast
+    let sql = format!(
+        "select {QUESTION_JSON}, array[q.created_at::text, q.id::text]
+         from questions q join projects pr on pr.id = q.project_id
+         where q.asked_by = $1 and ($2 = 'all' or q.status = $2)
+           and ($3::text is null or q.created_at < $3::text::timestamptz
+                or (q.created_at = $3::text::timestamptz and q.id::text collate \"C\" < $4::text collate \"C\"))
+         order by q.created_at desc, q.id desc limit $5"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(p.id)
+        .bind(&status)
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.fetch())
+        .fetch_all(db)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
+}
+
 pub async fn get(db: &PgPool, p: &Principal, r: &str) -> Result<Value> {
     let mut c = db.acquire().await?;
     let q = load(&mut c, p, r, false).await?;

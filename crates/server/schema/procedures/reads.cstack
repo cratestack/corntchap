@@ -8,12 +8,19 @@ procedure whoami(project: String?): WhoamiView
   @allow(auth() != null)
   @mcp(tool: "whoami", description: "Who you are: name, teams, projects and the leases you currently hold. With a project (on a pot's MCP URL it is that pot), also the start of the pot's guide; what_now says what to do.")
 
-/// The projects you can see, with task counts.
+/// The projects you can see, with task counts, all at once (navigation, badges and lookups; not an MCP tool).
 procedure projectOverview(): ProjectSummary[]
   @allow(auth() != null)
-  @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts.")
 
-/// Tasks in a project.
+/// A page of the projects you can see, with task counts, by key.
+/// @param q Only pots whose key or name contains this (any case).
+/// @param team Only pots of this team (its name).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure potPage(q: String?, team: String?, page: CursorPageInput?): CursorPage<ProjectSummary>
+  @allow(auth() != null)
+  @mcp(tool: "list_projects", description: "Projects you can see, with ready/open/claimed/done counts, by key, a page at a time (items, nextCursor). Narrow with q (key or name) or team.")
+
+/// Tasks in a project, all at once, for the console's pickers (not an MCP tool).
 /// @param project Project key, e.g. PAY.
 /// @param status Only tasks in this status: open, claimed, blocked, done or cancelled.
 /// @param label Only tasks carrying this label.
@@ -22,11 +29,10 @@ procedure projectOverview(): ProjectSummary[]
 /// @param owner Only tasks owned by this handle; me for yours; - for tasks nobody owns.
 procedure projectTasks(project: String, status: String?, label: String?, readyOnly: Boolean?, menu: String?, owner: String?): TaskView[]
   @allow(auth() != null)
-  @mcp(tool: "list_tasks", description: "Tasks in a project with open item counts, bodies and results cut to 280 characters (get_task has them whole). Optional status/label/owner filters (owner: a handle, me, or - for nobody); readyOnly limits to claimable tasks.")
 
-/// A page of a project's tasks, for the console's board (not an MCP tool: `list_tasks` is the agents' list).
+/// A page of a project's tasks (the console's board and the `list_tasks` tool).
 /// @param project Project key, e.g. PAY.
-/// @param bucket A board column: ready (open with nothing in the way, or a lapsed lease), claimed (on the fire), waiting (blocked or waiting on other tasks): priority, then number; done (served) or cancelled (tossed): newest change first; or active (ready, claimed and waiting together).
+/// @param bucket A board column: ready (open with nothing in the way, or a lapsed lease), claimed (on the fire), waiting (blocked or waiting on other tasks): priority, then number; done (served) or cancelled (tossed): newest change first; active (ready, claimed and waiting together; the default); or all (every status, newest change first).
 /// @param label Only tasks carrying this label.
 /// @param menu Only tasks on this menu (key); - for tasks on no menu.
 /// @param owner Only tasks owned by this handle; me for yours; - for tasks nobody owns.
@@ -35,7 +41,22 @@ procedure projectTasks(project: String, status: String?, label: String?, readyOn
 /// @param holder Only tasks held by this cook (the claimed_by name).
 /// @param status Only this board column: ready, claimed, waiting, done or cancelled.
 /// @param page limit (default 25, at most 200) and the cursor of the previous page.
-procedure taskPage(project: String, bucket: String, label: String?, menu: String?, owner: String?, repo: String?, q: String?, holder: String?, status: String?, page: CursorPageInput): TaskPage
+procedure taskPage(project: String, bucket: String?, label: String?, menu: String?, owner: String?, repo: String?, q: String?, holder: String?, status: String?, page: CursorPageInput?): TaskPage
+  @allow(auth() != null)
+  @mcp(tool: "list_tasks", description: "Tasks in a project, a page at a time: items (with open item counts, bodies and results cut to 280 characters; get_task has them whole), total (all matches) and next_cursor (pass it as page.cursor for the next page). bucket picks the tasks: active (default: ready, claimed and waiting together; priority, then number), ready (claimable now), claimed (live lease), waiting (blocked or waiting on other tasks), done, cancelled (newest change first) or all (every status, newest change first). Filters: label, menu (a key, or - for none), owner (a handle, me, or - for nobody), repo, holder (the claiming cook), q (id, title or body text).")
+
+/// A page of a task's comments, newest first.
+/// @param task Task id, e.g. PAY-42.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure commentPage(task: String, page: CursorPageInput): CursorPage<TaskCommentView>
+  @allow(auth() != null)
+
+/// A page of the labels tasks carry in a pot, with how many tasks carry each, by label.
+/// @param project Project key, e.g. PAY.
+/// @param q Only labels containing this (any case).
+/// @param bucket active (default: open, claimed and blocked tasks) or all.
+/// @param page limit (default 25, at most 200) and cursor.
+procedure labelPage(project: String, q: String?, bucket: String?, page: CursorPageInput): CursorPage<LabelCount>
   @allow(auth() != null)
 
 /// One task in full.

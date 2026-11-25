@@ -21,18 +21,12 @@ mutation procedure questionAsk(title: String?, description: String?, kind: Strin
   @allow(auth() != null)
   @mcp(tool: "ask", description: "Ask a question you cannot answer yourself (a product decision, a missing credential, an ambiguity) into the pot's question pool. Write it well: a short title (one line, the question itself), the context in the description (markdown: what you found, what each option means, what you would pick), and answer proposals so a person can answer in one tap. kind: cards for a quick choice of 2 to 4 options with short labels and no descriptions (yes/no, A or B); single for options that need a sentence each (give each choice a description); multiple for several that may apply (checkboxes, optional min/max); free for an open question. allowOther lets the answerer type their own answer next to the choices. Address it with `to` to one cook to wake it with the question (it answers with answer_question), or to a person; a fireAndForget cook (list_cooks) is refused: give it a task. A fireAndForget cook cannot use wait=true: it blocks the task instead. People answer in the console, or your owner answers in a chat through their own agent. With wait=true on the task you hold, the task is parked for you and the answer wakes you with a fresh lease; stop working on it until then.")
 
-/// A pot's question pool.
-/// @param project Pot key, e.g. PAY.
-/// @param status open (default), answered, dismissed or all.
-procedure questionList(project: String, status: String?): QuestionView[]
-  @allow(auth() != null)
-  @mcp(tool: "list_questions", description: "The pot's question pool: open questions by default, oldest first. In a chat with your owner, offer to go through them (pick_question).")
-
-/// Questions you asked.
+/// A page of the questions you asked, newest first.
 /// @param status open, answered, dismissed or all (default).
-procedure questionMine(status: String?): QuestionView[]
+/// @param page limit (default 25, at most 200) and cursor.
+procedure questionMinePage(status: String?, page: CursorPageInput?): CursorPage<QuestionView>
   @allow(auth() != null)
-  @mcp(tool: "my_questions", description: "Questions you asked and their answers.")
+  @mcp(tool: "my_questions", description: "Questions you asked and their answers, newest first, a page at a time (items, nextCursor).")
 
 /// One question with its thread.
 /// @param id Question id, e.g. PAY-Q3.
@@ -75,9 +69,10 @@ mutation procedure questionDismiss(id: String, reason: String?): QuestionView
   @allow(auth() != null)
   @mcp(tool: "dismiss_question", description: "Close a question without an answer (people, or the cook that asked it). A parked task goes back to its cook.")
 
-/// A page of a pot's question pool, for the console (not an MCP tool).
+/// A page of a pot's question pool.
 /// @param project Pot key, e.g. PAY.
 /// @param status open (default, oldest first), answered, dismissed or all (newest first).
 /// @param page limit (default 25, at most 200) and cursor.
-procedure questionPage(project: String, status: String?, page: CursorPageInput): CursorPage<QuestionView>
+procedure questionPage(project: String, status: String?, page: CursorPageInput?): CursorPage<QuestionView>
   @allow(auth() != null)
+  @mcp(tool: "list_questions", description: "The pot's question pool: open questions by default, oldest first (status answered, dismissed or all: newest first), a page at a time (items, nextCursor). In a chat with your owner, offer to go through them (pick_question).")

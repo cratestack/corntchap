@@ -38,7 +38,8 @@ async fn list_tasks_cuts_long_bodies_and_get_task_keeps_them() {
             .await,
     );
     let body = |t: &str| {
-        list.as_array()
+        list["items"]
+            .as_array()
             .unwrap()
             .iter()
             .find(|x| x["title"] == t)

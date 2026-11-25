@@ -593,8 +593,14 @@ async fn a_pr_finds_its_task_by_branch_title_or_by_hand() {
     assert_eq!(t["prs"].as_array().unwrap().len(), 2);
     assert_eq!(t["pr"]["count"], 2, "{t}");
     // the board JSON has the compact summary
-    let list = tool(&w.app, &w.alice, "list_tasks", json!({"project": "SHOP"})).await;
-    let four = list
+    let list = tool(
+        &w.app,
+        &w.alice,
+        "list_tasks",
+        json!({"project": "SHOP", "bucket": "all"}),
+    )
+    .await;
+    let four = list["items"]
         .as_array()
         .unwrap()
         .iter()

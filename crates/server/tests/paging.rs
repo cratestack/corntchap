@@ -455,10 +455,7 @@ async fn question_review_and_memory_pages() {
             json!({"project": "PAY", "page": {}}),
         )
         .await;
-    let (st2, _) = w
-        .proc(&w.bob, "questionList", json!({"project": "PAY"}))
-        .await;
-    assert_eq!(st, st2);
+    assert_eq!(st, 404, "another team's pot");
 
     // reviews: waiting ones first, then newest first
     let alice: uuid::Uuid = sqlx::query_scalar("select id from principals where name = 'alice'")
@@ -683,8 +680,7 @@ async fn cloud_run_and_view_pages() {
     let (st, _) = w
         .proc(&w.bob, "viewPage", json!({"project": "PAY", "page": {}}))
         .await;
-    let (st2, _) = w.proc(&w.bob, "viewRun", json!({"project": "PAY"})).await;
-    assert_eq!(st, st2);
+    assert_eq!(st, 404, "another team's pot");
 }
 
 #[tokio::test]

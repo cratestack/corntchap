@@ -359,7 +359,7 @@ async fn the_guide_round_trips_and_is_set_by_owners_and_admins() {
     // what_now returns it whole, list_projects too (the console's About page)
     assert_eq!(w.now(&st).await["guide"], guide);
     let pots = tool(&w.app, &w.bob, "list_projects", json!({})).await;
-    assert_eq!(pots[0]["guide"], guide);
+    assert_eq!(pots["items"][0]["guide"], guide);
     // whoami with a project carries it; without, not
     let me = tool(&w.app, &w.c1, "whoami", json!({"project": "PAY"})).await;
     assert_eq!(me["guide"], guide);

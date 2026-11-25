@@ -14,7 +14,8 @@ fn refused(r: &Value, what: &str) -> String {
     r["content"][0]["text"].as_str().unwrap_or("").to_string()
 }
 fn ids(v: &Value) -> Vec<String> {
-    v.as_array()
+    v["items"]
+        .as_array()
         .unwrap()
         .iter()
         .map(|t| t["id"].as_str().unwrap().to_string())
@@ -121,7 +122,7 @@ async fn sql_views() {
         "run saved",
     );
     assert_eq!(ids(&run), ["PAY-1"]);
-    assert_eq!(run[0]["title"], "refund screen");
+    assert_eq!(run["items"][0]["title"], "refund screen");
     // same key: updated, not duplicated
     ok(
         &app.mcp(&alice, "save_view", json!({"project": "PAY", "name": "Urgent on the MVP", "where": "'urgent' = any(labels)"}))
@@ -133,8 +134,8 @@ async fn sql_views() {
             .await,
         "list",
     );
-    assert_eq!(list.as_array().unwrap().len(), 1);
-    assert_eq!(list[0]["where"], "'urgent' = ANY(labels)");
+    assert_eq!(list["items"].as_array().unwrap().len(), 1);
+    assert_eq!(list["items"][0]["where"], "'urgent' = ANY(labels)");
 
     // --- what a view's SQL cannot do ---
     for (bad, why) in [

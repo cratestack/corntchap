@@ -373,3 +373,9 @@ type SplitResult {
   /// The subtasks created now (none when every repository already had its part).
   subtasks TaskView[]
 }
+
+/// A label used in a pot, with how many tasks carry it.
+type LabelCount {
+  label String
+  count Int
+}

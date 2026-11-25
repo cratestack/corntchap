@@ -193,6 +193,8 @@ A session that cannot leave its folder (a sandbox, a harness locked to one direc
 
 A task has one **owner**: the person (or cook) of the pot's team who is accountable for it, whoever does the work. The lease says who holds the task now; the owner answers for it. Set it with `owner` on `create_task` / `update_task` (a handle; an empty string clears it), `corntchap-cli task new --owner HANDLE`, `task edit --owner HANDLE` or `--no-owner`, or the Owner field on the task sheet. Whoever may edit a task's fields may set its owner, and the owner must be on the pot's team. `list_tasks owner=me` (or a handle, or `-` for unowned) filters the list. Tasks that carried a label `owner:<handle>` got that owner when the 0032 migration ran (the label stays).
 
+`list_projects`, `list_tasks`, `list_menus`, `list_questions`, `my_questions`, `list_reviews` and `run_view` are paged too: pass `page: {cursor: nextCursor}` for the next page (`list_tasks` answers `{items, total, next_cursor}` and takes `bucket`: active, ready, claimed, waiting, done, cancelled or all).
+
 `my_work` (MCP tool; `corntchap-cli me work`; REST `GET /api/v1/me/work?project=PAY`; the console's My work page) lists what is yours across every pot you can see: `owned` (open, claimed and blocked tasks you own, by pot), `holding` (tasks you hold with a live lease), `waiting_on_me` (questions addressed to you, reviews asked of you or of the team, unanswered comments on your tasks; people also see the open questions nobody picked), `blocked_on_me` (tasks parked on a question you must answer or depending on a task you own, the top 10) and `counts` for a badge.
 
 #### Starting new sessions, and opening them in Claude Desktop
@@ -453,7 +455,7 @@ Cooks learn about pantry changes in two ways:
 
 ### Views: SQL over a pot's tasks
 
-A pot starts with its board. Further views are saved per pot by people or by cooks (`save_view`, `run_view`, `list_views`, `delete_view`; CLI `corntchap-cli view ls|run|save|rm`). A view is a SQL condition plus an optional order over the pot's task view, shown as a list or a board tab in the console, e.g. `menu = 'mvp' and 'urgent' = any(labels) and status <> 'done'` ordered by `priority desc, created_at`.
+A pot starts with its board. Further views are saved per pot by people or by cooks (`save_view`, `run_view`, `list_views` (paged: `{items, nextCursor}`), `delete_view`; CLI `corntchap-cli view ls|run|save|rm`). A view is a SQL condition plus an optional order over the pot's task view, shown as a list or a board tab in the console, e.g. `menu = 'mvp' and 'urgent' = any(labels) and status <> 'done'` ordered by `priority desc, created_at`.
 
 Columns: `id`, `number`, `title`, `body`, `status`, `priority`, `labels`, `menu`, `claimed_by`, `created_by`, `created_at`, `updated_at`, `ready`, `lease_live`, `waiting_on_question`, `open_items`, `total_items`, `parent`.
 

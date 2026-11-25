@@ -71,16 +71,17 @@ async fn count(db: &PgPool, sql: String, p: &Principal, project: Option<&str>) -
 }
 
 /// The tasks blocked on me: SQL with the select list `sel` (an object, or `1` for a count).
-fn blocked_sql(question_sel: &str, dep_sel: &str, access: &str, tail: &str) -> String {
+fn blocked_sql(question_sel: &str, dep_sel: &str, extra: &str, access: &str, tail: &str) -> String {
+    let out = if extra.is_empty() { "obj" } else { "*" };
     format!(
-        "select obj from (
-           select {question_sel} as obj, t.updated_at as at
+        "select {out} from (
+           select {question_sel} as obj, t.updated_at as at{extra}
            from questions q join tasks t on t.id = q.task_id join projects pr on pr.id = t.project_id
              cross join lateral (select {TASK_JSON} as j) x
            where q.status = 'open' and q.to_principal = $2 and t.status = 'blocked'
              and {access} and ($3::text is null or pr.key = $3)
            union all
-           select {dep_sel} as obj, t.updated_at as at
+           select {dep_sel} as obj, t.updated_at as at{extra}
            from tasks ot join projects op on op.id = ot.project_id
              join task_deps d on d.depends_on = ot.id
              join tasks t on t.id = d.task_id join projects pr on pr.id = t.project_id
@@ -279,6 +280,7 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
                 &format!(
                     "{WORK_TASK} || jsonb_build_object('via', 'dependency', 'because', op.key || '-' || ot.number)"
                 ),
+                "",
                 &access,
                 &format!("order by at desc limit {BLOCKED_TOP}"),
             ),
@@ -291,7 +293,7 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
         db,
         format!(
             "select count(*) from ({}) c",
-            blocked_sql("1", "1", &access, "")
+            blocked_sql("1", "1", "", &access, "")
         ),
         p,
         project,
@@ -319,4 +321,91 @@ pub async fn my_work(db: &PgPool, p: &Principal, project: Option<&str>) -> Resul
         "blocked_on_me": blocked_on_me,
         "counts": Value::Object(counts),
     }))
+}
+
+/// A page of one section of "my work" (`myWorkPage`): `owned` (open, claimed and blocked tasks I
+/// own), `holding` (tasks I hold with a live lease) or `blocked` (tasks parked on a question I must
+/// answer, or depending on a task I own). Highest priority first, then pot key and number; a task
+/// that is blocked both ways shows once, as a question. `project` limits it to one pot.
+pub async fn page(
+    db: &PgPool,
+    p: &Principal,
+    section: &str,
+    project: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let section = section.trim().to_lowercase();
+    if !["owned", "holding", "blocked"].contains(&section.as_str()) {
+        return crate::error::invalid("section is owned, holding or blocked");
+    }
+    let paging = crate::paging::paging(
+        page,
+        &format!("-priority,key,number:{section}"),
+        3,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let project = project
+        .map(|k| k.trim().to_uppercase())
+        .filter(|k| !k.is_empty());
+    if let Some(k) = &project {
+        // an unknown or unseen pot is an error, not an empty page
+        let mut c = db.acquire().await?;
+        project_by_key(&mut c, p, k).await?;
+    }
+    let access = access_sql("$1", "$2");
+    let scope = "($3::text is null or pr.key = $3)";
+    // after the last row: higher priority, or the same priority and a later (pot, number)
+    let after = "($4::text is null or t.priority < $4::text::bigint
+        or (t.priority = $4::text::bigint and (pr.key, t.number) > ($5::text, $6::text::bigint)))";
+    let sql = match section.as_str() {
+        "blocked" => {
+            let inner = blocked_sql(
+                &format!(
+                    "{WORK_TASK} || jsonb_build_object('via', 'question', 'because', pr.key || '-Q' || q.number)"
+                ),
+                &format!(
+                    "{WORK_TASK} || jsonb_build_object('via', 'dependency', 'because', op.key || '-' || ot.number)"
+                ),
+                ", t.id as tid, t.priority as pri, pr.key as pkey, t.number as num",
+                &access,
+                "",
+            );
+            format!(
+                "select (u.obj - 'pot_name'), array[u.pri::text, u.pkey, u.num::text]
+                 from (select distinct on (b.tid) b.* from ({inner}) b order by b.tid, b.obj->>'via' desc) u
+                 where ($4::text is null or u.pri < $4::text::bigint
+                        or (u.pri = $4::text::bigint and (u.pkey, u.num) > ($5::text, $6::text::bigint)))
+                 order by u.pri desc, u.pkey, u.num limit $7"
+            )
+        }
+        _ => {
+            let cond = if section == "owned" {
+                "t.owner_id = $2 and t.status in ('open','claimed','blocked')"
+            } else {
+                "t.claimed_by = $2 and t.status = 'claimed' and t.lease_expires_at > now()"
+            };
+            format!(
+                "select ({WORK_TASK} - 'pot_name'), array[t.priority::text, pr.key, t.number::text]
+                 {} where {cond} and {access} and {scope} and {after}
+                 order by t.priority desc, pr.key, t.number limit $7",
+                task_from("")
+            )
+        }
+    };
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(p.is_super_admin())
+        .bind(p.id)
+        .bind(project.as_deref())
+        .bind(paging.key(0))
+        .bind(paging.key(1))
+        .bind(paging.key(2))
+        .bind(paging.fetch())
+        .fetch_all(db)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
 }

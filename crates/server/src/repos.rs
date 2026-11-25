@@ -99,15 +99,56 @@ pub fn scope_sql(agent: &str) -> String {
     )
 }
 
+/// SQL: one repository of a pot with what it depends on. Needs alias `r` (project_repos).
+const REPO_JSON: &str = "jsonb_build_object('name', r.name, 'url', r.url, 'default_branch', r.default_branch,
+              'depends_on', coalesce((select jsonb_agg(jsonb_build_object('name', u.name, 'mode', l.mode) order by u.name)
+                   from repo_links l join project_repos u on u.id = l.depends_on_id where l.repo_id = r.id), '[]'::jsonb))";
+
 /// SQL: the JSON array of a pot's repositories (with what each depends on), first added first;
 /// `project` is the SQL expression of the pot's id.
 pub fn repos_json_sql(project: &str) -> String {
     format!(
-        "coalesce((select jsonb_agg(jsonb_build_object('name', r.name, 'url', r.url, 'default_branch', r.default_branch,
-              'depends_on', coalesce((select jsonb_agg(jsonb_build_object('name', u.name, 'mode', l.mode) order by u.name)
-                   from repo_links l join project_repos u on u.id = l.depends_on_id where l.repo_id = r.id), '[]'::jsonb))
-              order by r.seq) from project_repos r where r.project_id = {project}), '[]'::jsonb)"
+        "coalesce((select jsonb_agg({REPO_JSON} order by r.seq) from project_repos r where r.project_id = {project}), '[]'::jsonb)"
     )
+}
+
+/// A page of a pot's repositories (`repoPage`), by name. `q` matches the name and the url (any case).
+pub async fn page(
+    db: &PgPool,
+    p: &Principal,
+    project: &str,
+    q: Option<&str>,
+    page: &cratestack::CursorPageInput,
+) -> Result<(Vec<Value>, Option<String>)> {
+    let paging = crate::paging::paging(
+        page,
+        "name",
+        1,
+        crate::paging::DEFAULT_LIMIT,
+        crate::paging::MAX_LIMIT,
+    )?;
+    let mut c = db.acquire().await?;
+    let pr = project_by_key(&mut c, p, &project.trim().to_uppercase()).await?;
+    let q = q.map(str::trim).filter(|q| !q.is_empty());
+    let sql = format!(
+        "select {REPO_JSON}, array[r.name] from project_repos r
+         where r.project_id = $1
+           and ($2::text is null or position(lower($2) in lower(r.name || ' ' || r.url)) > 0)
+           and ($3::text is null or r.name > $3)
+         order by r.name limit $4"
+    );
+    let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(pr.id)
+        .bind(q)
+        .bind(paging.key(0))
+        .bind(paging.fetch())
+        .fetch_all(&mut *c)
+        .await?;
+    let rows = rows
+        .into_iter()
+        .map(|(v, k)| (v, k.into_iter().map(Some).collect()))
+        .collect();
+    Ok(crate::paging::finish(rows, &paging))
 }
 
 /// The pot's repositories, first added first.

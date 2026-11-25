@@ -282,7 +282,7 @@ async fn stations_and_the_question_pool() {
             .await,
         "pool",
     );
-    assert_eq!(pool.as_array().unwrap().len(), 1);
+    assert_eq!(pool["items"].as_array().unwrap().len(), 1);
     // wait is only for a task you hold
     let e = refused(
         &app.mcp(
@@ -548,7 +548,7 @@ async fn stations_and_the_question_pool() {
 
     // --- my_questions and the feed ---
     let mine = ok(&app.mcp(&c1, "my_questions", json!({})).await, "mine");
-    assert_eq!(mine.as_array().unwrap().len(), 5);
+    assert_eq!(mine["items"].as_array().unwrap().len(), 5);
     let feed = ok(
         &app.mcp(
             &alice,

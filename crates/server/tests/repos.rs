@@ -224,7 +224,7 @@ async fn repositories_are_managed_by_owners_and_read_by_members() {
     )
     .await;
     let pots = tool(app, &w.bob, "list_projects", json!({})).await;
-    let ops = pots
+    let ops = pots["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -270,7 +270,7 @@ async fn repositories_are_managed_by_owners_and_read_by_members() {
 
     // a member reads them but cannot change anything
     let pots = tool(app, &w.bob, "list_projects", json!({})).await;
-    let pay = pots
+    let pay = pots["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -303,7 +303,7 @@ async fn repositories_are_managed_by_owners_and_read_by_members() {
     .await;
     assert_eq!(r["repos"].as_array().unwrap().len(), 1);
     let pots = tool(app, &w.alice, "list_projects", json!({})).await;
-    let pay = pots
+    let pay = pots["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -376,7 +376,8 @@ async fn tasks_name_repositories_that_the_pot_has() {
     .await;
     let l = tool(&w.app, &w.bob, "list_tasks", json!({"project": "PAY"})).await;
     assert!(
-        l.as_array()
+        l["items"]
+            .as_array()
             .unwrap()
             .iter()
             .any(|t| t["repos"] == json!(["web"]))
@@ -843,10 +844,10 @@ async fn serving_a_task_tells_the_cooks_of_dependent_repositories() {
         &w.app,
         &w.alice,
         "list_tasks",
-        json!({"project": "PAY", "status": "open"}),
+        json!({"project": "PAY", "bucket": "active"}),
     )
     .await;
-    let f = follow
+    let f = follow["items"]
         .as_array()
         .unwrap()
         .iter()

@@ -128,7 +128,8 @@ async fn menus_group_tasks_and_track_progress() {
     .await;
     assert!(err.contains("no menu nope"), "{err}");
     let ids = |v: &Value| -> Vec<String> {
-        v.as_array()
+        v["items"]
+            .as_array()
             .unwrap()
             .iter()
             .map(|t| t["id"].as_str().unwrap().to_string())
@@ -172,7 +173,7 @@ async fn menus_group_tasks_and_track_progress() {
 
     // progress
     let menus = tool(&app, a1, "list_menus", json!({"project": "PAY"})).await;
-    let m = &menus[0];
+    let m = &menus["items"][0];
     assert_eq!(
         (&m["key"], &m["total"], &m["done"], &m["open"]),
         (&json!("mvp"), &json!(2), &json!(1), &json!(1)),
@@ -211,8 +212,7 @@ async fn menus_group_tasks_and_track_progress() {
         served["served_at"].is_string() && served["due_on"].is_null(),
         "{served}"
     );
-    let open: Vec<String> = tool(&app, a1, "list_menus", json!({"project": "PAY"}))
-        .await
+    let open: Vec<String> = tool(&app, a1, "list_menus", json!({"project": "PAY"})).await["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -223,10 +223,10 @@ async fn menus_group_tasks_and_track_progress() {
         &app,
         a1,
         "list_menus",
-        json!({"project": "PAY", "includeServed": true}),
+        json!({"project": "PAY", "status": "all"}),
     )
     .await;
-    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert_eq!(all["items"].as_array().unwrap().len(), 2);
     let err = tool_err(
         &app,
         a1,

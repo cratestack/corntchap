@@ -64,3 +64,10 @@ mutation procedure cookSetRepos(project: String, repos: String?, cook: String?):
 mutation procedure forgeRepoDismiss(repo: String): OkResult
   @allow(auth() != null)
   @mcp(tool: "dismiss_forge_repo", description: "Admins only: take a repository off the list of those sending GitHub events that no pot follows (it comes back if it sends more). To follow it instead, add it to a pot with add_repos.")
+
+/// A page of a pot's repositories, by name.
+/// @param project Pot key, e.g. PAY.
+/// @param q Only repositories whose name or url contains this (any case).
+/// @param page limit (default 25, at most 200) and cursor.
+procedure repoPage(project: String, q: String?, page: CursorPageInput): CursorPage<RepoView>
+  @allow(auth() != null)

@@ -551,7 +551,7 @@ async fn pots_rename_and_delete() {
         (&r["key"], &r["name"], &r["previous"]),
         (&json!("PAY"), &json!("Payments v2"), &json!("Payments"))
     );
-    let pots = ok(&app.mcp(&w.alice, "list_projects", json!({})).await, "list");
+    let pots = ok(&app.mcp(&w.alice, "list_projects", json!({})).await, "list")["items"].clone();
     assert_eq!(pots[0]["name"], "Payments v2");
     assert_eq!(pots[0]["key"], "PAY");
     refused(
