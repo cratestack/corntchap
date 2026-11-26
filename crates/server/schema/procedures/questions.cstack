@@ -17,9 +17,10 @@ part of "../corntchap.cstack"
 /// @param to Address it to one person (login) or cook; default the pot's people. A cook is woken with the question (answer_question); a fire-and-forget cloud cook cannot be asked: it is refused.
 /// @param wait Park the task you hold until the answer: it stays yours (and your station's), the answer wakes you with a fresh lease. Stop working on it after asking.
 /// @param station Your station id (from the wake prompt), so the answer wakes this very session.
-mutation procedure questionAsk(title: String?, description: String?, kind: String?, choices: String?, allowOther: Boolean?, min: Int?, max: Int?, question: String?, project: String?, task: String?, options: String?, to: String?, wait: Boolean?, station: String?): QuestionView
+/// @param blocks With task: the task waits on the answer (it is not ready for claim_next until the question is answered or dismissed). Does not park the task: that is wait.
+mutation procedure questionAsk(title: String?, description: String?, kind: String?, choices: String?, allowOther: Boolean?, min: Int?, max: Int?, question: String?, project: String?, task: String?, options: String?, to: String?, wait: Boolean?, station: String?, blocks: Boolean?): QuestionView
   @allow(auth() != null)
-  @mcp(tool: "ask", description: "Ask a question you cannot answer yourself (a product decision, a missing credential, an ambiguity) into the pot's question pool. Write it well: a short title (one line, the question itself), the context in the description (markdown: what you found, what each option means, what you would pick), and answer proposals so a person can answer in one tap. kind: cards for a quick choice of 2 to 4 options with short labels and no descriptions (yes/no, A or B); single for options that need a sentence each (give each choice a description); multiple for several that may apply (checkboxes, optional min/max); free for an open question. allowOther lets the answerer type their own answer next to the choices. Address it with `to` to one cook to wake it with the question (it answers with answer_question), or to a person; a fireAndForget cook (list_cooks) is refused: give it a task. A fireAndForget cook cannot use wait=true: it blocks the task instead. People answer in the console, or your owner answers in a chat through their own agent. With wait=true on the task you hold, the task is parked for you and the answer wakes you with a fresh lease; stop working on it until then.")
+  @mcp(tool: "ask", description: "Ask a question you cannot answer yourself (a product decision, a missing credential, an ambiguity) into the pot's question pool. Write it well: a short title (one line, the question itself), the context in the description (markdown: what you found, what each option means, what you would pick), and answer proposals so a person can answer in one tap. kind: cards for a quick choice of 2 to 4 options with short labels and no descriptions (yes/no, A or B); single for options that need a sentence each (give each choice a description); multiple for several that may apply (checkboxes, optional min/max); free for an open question. allowOther lets the answerer type their own answer next to the choices. Address it with `to` to one cook to wake it with the question (it answers with answer_question), or to a person; a fireAndForget cook (list_cooks) is refused: give it a task. A fireAndForget cook cannot use wait=true: it blocks the task instead. People answer in the console, or your owner answers in a chat through their own agent. With wait=true on the task you hold, the task is parked for you and the answer wakes you with a fresh lease; stop working on it until then. With blocks=true on a task, the task is not handed out (it is not ready) until the question is answered, and you are woken when it is.")
 
 /// A page of the questions you asked, newest first.
 /// @param status open, answered, dismissed or all (default).
@@ -73,7 +74,23 @@ mutation procedure questionDismiss(id: String, reason: String?): QuestionView
 /// A page of a pot's question pool.
 /// @param project Pot key, e.g. PAY.
 /// @param status open (default, oldest first), answered, dismissed or all (newest first).
+/// @param q Only questions whose id or title contains this text (any case).
 /// @param page limit (default 25, at most 200) and cursor.
-procedure questionPage(project: String, status: String?, page: CursorPageInput?): CursorPage<QuestionView>
+procedure questionPage(project: String, status: String?, q: String?, page: CursorPageInput?): CursorPage<QuestionView>
   @allow(auth() != null)
-  @mcp(tool: "list_questions", description: "The pot's question pool: open questions by default, oldest first (status answered, dismissed or all: newest first), a page at a time (items, nextCursor). In a chat with your owner, offer to go through them (pick_question).")
+  @mcp(tool: "list_questions", description: "The pot's question pool: open questions by default, oldest first (status answered, dismissed or all: newest first), a page at a time (items, nextCursor); q narrows by id or title. In a chat with your owner, offer to go through them (pick_question).")
+
+/// Link a question to a task.
+/// @param question Question id, e.g. PAY-Q3.
+/// @param task Task id of the same pot, e.g. PAY-34.
+/// @param blocks The task cannot go on without the answer: it is not ready until the question is answered or dismissed. Default false (you only want to be told).
+mutation procedure questionLink(question: String, task: String, blocks: Boolean?): QuestionView
+  @allow(auth() != null)
+  @mcp(tool: "link_question", description: "Link an open question (yours or anyone's, e.g. a decision a person was asked for) to a task of the same pot, so the task's cooks are woken (reason `answer`) when it is answered or dismissed: the cook that linked it, the one that holds or last held the task, and its owner. blocks=true when the task cannot go on without the answer: it is then not ready (claim_next and wait_for_work skip it, the board shows it waiting) until the question is answered or dismissed, and it comes back as ready. Anyone who may edit the task (people, cooks granted plan) or the cook holding it may link. Linking again changes blocks. The question's own task (ask with task) is linked already.")
+
+/// Take a question off a task.
+/// @param question Question id, e.g. PAY-Q3.
+/// @param task Task id, e.g. PAY-34.
+mutation procedure questionUnlink(question: String, task: String): QuestionView
+  @allow(auth() != null)
+  @mcp(tool: "unlink_question", description: "Take a question off a task (whoever linked it, whoever may edit the task, or the cook holding it). A blocking link ends: the task may be ready again. The question a task was asked on cannot be unlinked.")

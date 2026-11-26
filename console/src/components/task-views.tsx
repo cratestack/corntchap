@@ -7,6 +7,7 @@ import { useIsPhone } from "@/lib/media";
 import { MenuChip } from "./menus";
 import { PrChip } from "./forge-prs";
 import { ReviewChip } from "./reviews";
+import { QuestionBlockedChip } from "./question-links";
 import { VirtualList } from "./ui/virtual-list";
 import { Avatar, BUCKET_DOT, IdChip, LabelChip, LeaseTimer, ProgressBar, RepoChip } from "./bits";
 
@@ -101,6 +102,7 @@ function PhoneRow({ task, selected, onOpen, showMenu }: { task: TaskView; select
           {menuName && <MenuChip name={menuName} />}
           <PrChip pr={task.pr} />
           <ReviewChip review={task.review} />
+          <QuestionBlockedChip task={task} />
           {task.repos.map((r) => (
             <RepoChip key={r}>{r}</RepoChip>
           ))}
@@ -157,6 +159,7 @@ export function TaskRow({ task, selected, onOpen, showMenu }: { task: TaskView; 
           {menuName && <MenuChip name={menuName} />}
           <PrChip pr={task.pr} />
           <ReviewChip review={task.review} />
+          <QuestionBlockedChip task={task} />
           {task.repos.map((r) => (
             <RepoChip key={r}>{r}</RepoChip>
           ))}
@@ -266,10 +269,11 @@ export function TaskCard({ task, selected, onOpen, showMenu }: { task: TaskView;
       </div>
       <p className={cn("mt-1 line-clamp-3 text-[14px] leading-snug font-medium", task.status === "cancelled" && "line-through")}>{task.title}</p>
       {note && <p className="mt-1 line-clamp-1 text-[12px] text-muted-foreground">{note}</p>}
-      {(task.repos.length > 0 || task.pr || task.review) && (
+      {(task.repos.length > 0 || task.pr || task.review || task.question_blocked) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           <PrChip pr={task.pr} />
           <ReviewChip review={task.review} />
+          <QuestionBlockedChip task={task} />
           {task.repos.map((r) => (
             <RepoChip key={r}>{r}</RepoChip>
           ))}

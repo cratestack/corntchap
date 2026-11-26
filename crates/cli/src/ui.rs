@@ -806,6 +806,18 @@ pub fn task_detail(v: &Value) -> String {
             ));
         }
     }
+    if let Some(qs) = v["questions"].as_array().filter(|q| !q.is_empty()) {
+        o.push_str(&format!("\n{}\n", bold("Questions")));
+        for x in qs {
+            o.push_str(&format!(
+                "  {} [{}]{} {}\n",
+                s(x, "id"),
+                s(x, "status"),
+                if x["blocks"] == true { " blocks" } else { "" },
+                s(x, "title")
+            ));
+        }
+    }
     if let Some(c) = v["comments"].as_array().filter(|c| !c.is_empty()) {
         o.push_str(&format!("\n{}\n", bold("Comments")));
         for x in c {
