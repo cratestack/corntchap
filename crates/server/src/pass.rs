@@ -41,9 +41,11 @@ const MSG_JSON: &str = r#"jsonb_build_object(
 const VISIBLE: &str = "m.project_id = $1 and (m.to_principal is null or m.author_id = $2 or m.relayed_by = $2 or m.to_principal = $2)";
 
 /// The conversation a visible message belongs to, for principal `$2`: 'pot', or the other chef.
+/// SQL: the conversation a message belongs to, seen by $2: `pot`, or the other chef's id. A direct
+/// message whose author was deleted (`author_id` set null) belongs to `gone`, never to null.
 const CONVERSATION: &str = "case when m.to_principal is null then 'pot'
      when m.author_id = $2 or m.relayed_by = $2 then m.to_principal::text
-     else m.author_id::text end";
+     else coalesce(m.author_id::text, 'gone') end";
 
 pub struct Post {
     pub project: String,
@@ -551,6 +553,7 @@ async fn unread(c: &mut PgConnection, me: Uuid, project: Uuid) -> Result<Value> 
                                    and c.author_id is distinct from $2 and c.relayed_by is distinct from $2)
          from conv c left join pass_reads r
            on r.principal_id = $2 and r.project_id = $1 and r.conversation = c.conversation
+         where c.conversation <> 'gone'
          group by c.conversation order by max(c.seq) desc"
     );
     let rows: Vec<(String, Option<String>, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
