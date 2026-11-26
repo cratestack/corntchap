@@ -380,3 +380,44 @@ async fn models_are_resources_under_policies() {
         "{r}"
     );
 }
+
+/// tools/list on the base URL, on both protocol paths, is valid JSON Schema (no `"required": null`).
+#[tokio::test]
+async fn tool_schemas_are_valid_json_schema_on_both_protocol_paths() {
+    let app = common::start(false).await;
+    let (_, tok) = admin::init_admin(&app.state.db, Some("octo"))
+        .await
+        .unwrap();
+    let admin_tok = tok.unwrap();
+    let l = Legacy {
+        app: &app,
+        token: admin_tok.clone(),
+    };
+    let old = l.rpc(Some("2025-06-18"), "tools/list", json!({})).await;
+    if let Ok(dir) = std::env::var("DUMP_TOOLS") {
+        std::fs::write(format!("{dir}/legacy.json"), old["result"].to_string()).unwrap();
+    }
+    common::assert_tool_schemas_valid("2025-06-18 /mcp", &old["result"]);
+
+    let meta = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {}});
+    let new: Value = app
+        .http
+        .post(format!("{}/mcp", app.base))
+        .bearer_auth(&admin_tok)
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "tools/list")
+        .header("accept", "application/json, text/event-stream")
+        .json(
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {"_meta": meta}}),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    if let Ok(dir) = std::env::var("DUMP_TOOLS") {
+        std::fs::write(format!("{dir}/modern.json"), new["result"].to_string()).unwrap();
+    }
+    common::assert_tool_schemas_valid("2026-07-28 /mcp", &new["result"]);
+}
