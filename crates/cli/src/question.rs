@@ -65,8 +65,28 @@ pub enum QuestionCmd {
         /// Park the task you hold until the answer.
         #[arg(long)]
         wait: bool,
+        /// With --task: the task waits on the answer (it is not ready until the question is answered or dismissed).
+        #[arg(long)]
+        blocks: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Link a question to a task of its pot: the task's cooks are told when it is answered.
+    Link {
+        /// Question id, e.g. PAY-Q3.
+        id: String,
+        /// Task id, e.g. PAY-34.
+        task: String,
+        /// The task cannot go on without the answer: it is not ready until then.
+        #[arg(long)]
+        blocks: bool,
+    },
+    /// Take a question off a task.
+    Unlink {
+        /// Question id, e.g. PAY-Q3.
+        id: String,
+        /// Task id, e.g. PAY-34.
+        task: String,
     },
     /// Answer a question: pick choices (ids or labels), type text, or give the plain answer.
     Answer {
@@ -120,6 +140,7 @@ pub fn ask_body(
     task: Option<&str>,
     to: Option<&str>,
     wait: bool,
+    blocks: bool,
 ) -> Value {
     let mut m = Map::new();
     m.insert("title".into(), json!(title));
@@ -152,6 +173,9 @@ pub fn ask_body(
     }
     if wait {
         m.insert("wait".into(), json!(true));
+    }
+    if blocks {
+        m.insert("blocks".into(), json!(true));
     }
     Value::Object(m)
 }
@@ -272,6 +296,21 @@ pub fn question_detail(q: &Value) -> String {
             out.push_str(&dim(&format!("by {by}\n")));
         }
     }
+    let tasks: Vec<String> = q["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| {
+            format!(
+                "{}{}",
+                s(t, "id"),
+                if t["blocks"] == true { " (blocks)" } else { "" }
+            )
+        })
+        .collect();
+    if !tasks.is_empty() {
+        out.push_str(&format!("\n\ntasks: {}", tasks.join(", ")));
+    }
     for n in q["notes"].as_array().into_iter().flatten() {
         out.push_str(&format!("\n{}: {}", s(n, "author"), s(n, "body")));
     }
@@ -300,6 +339,7 @@ pub async fn run(cmd: QuestionCmd, api: &Api) -> Result<()> {
             task,
             to,
             wait,
+            blocks,
             json,
         } => {
             let b = ask_body(
@@ -313,6 +353,7 @@ pub async fn run(cmd: QuestionCmd, api: &Api) -> Result<()> {
                 task.as_deref(),
                 to.as_deref(),
                 wait,
+                blocks,
             );
             let v = api
                 .post(&format!("/projects/{}/questions", pot.to_uppercase()), b)
@@ -339,6 +380,25 @@ pub async fn run(cmd: QuestionCmd, api: &Api) -> Result<()> {
                 )
                 .await?;
             ok_line(format!("{} answered: {}", s(&v, "id"), s(&v, "answer")));
+        }
+        QuestionCmd::Link { id, task, blocks } => {
+            let v = api
+                .post(
+                    &format!("/questions/{id}/link"),
+                    json!({"task": task, "blocks": blocks}),
+                )
+                .await?;
+            ok_line(format!(
+                "{} linked to {task}{}",
+                s(&v, "id"),
+                if blocks { " (blocks it)" } else { "" }
+            ));
+        }
+        QuestionCmd::Unlink { id, task } => {
+            let v = api
+                .post(&format!("/questions/{id}/unlink"), json!({"task": task}))
+                .await?;
+            ok_line(format!("{} unlinked from {task}", s(&v, "id")));
         }
         QuestionCmd::Dismiss { id, reason } => {
             let b = json!({"reason": reason.unwrap_or_default()});
@@ -376,6 +436,7 @@ mod tests {
             None,
             None,
             false,
+            false,
         );
         assert_eq!(
             b,
@@ -392,7 +453,9 @@ mod tests {
             Some("PAY-1"),
             Some("sel"),
             true,
+            true,
         );
+        assert_eq!(b["blocks"], true);
         assert_eq!(b["allow_other"], true);
         assert_eq!((b["min"].as_i64(), b["max"].as_i64()), (Some(1), Some(2)));
         assert_eq!(b["wait"], true);

@@ -454,6 +454,10 @@ const TRIGGERS: &[&str] = &[
     "task.cancelled",
     "task.restored",
     "task.updated",
+    // an answer (or a dismissal) can make a task that waited on a question ready
+    "question.answered",
+    "question.dismissed",
+    "question.unlinked",
     // a parked pull request (failing checks, changes requested, conflicts) is work again
     "forge.checks",
     "forge.review",
@@ -641,6 +645,7 @@ impl Dispatcher {
                and exists (select 1 from tasks t where t.project_id = pr.id
                       and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
                       and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
+                      and not exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id where ql.task_id = t.id and ql.blocks and qq.status = 'open')
                       and (wt.labels is null or cardinality(wt.labels) = 0 or t.labels && wt.labels)
                       -- a cook scoped to some repositories is woken only for tasks about them (or about none)
                       and {scope}

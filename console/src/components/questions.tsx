@@ -41,6 +41,7 @@ import { Markdown } from "./markdown";
 import { Attachments } from "./files";
 import { AnswerControls, AnswerSummary, kindHint, kindOf } from "./question-answer";
 import { ReviewsList } from "./reviews";
+import { QuestionTasks } from "./question-links";
 
 export { AnswerControls } from "./question-answer";
 
@@ -365,6 +366,8 @@ function QuestionCard({
 
       <Description q={q} />
 
+      <QuestionTasks q={q} />
+
       {/* an empty drop zone on every card is noise on a phone: there it shows only once files exist */}
       <div className={cn(q.files.length === 0 && "max-md:hidden")}>
         <Attachments compact target={{ pot: projectOfTask(q.id), question: q.id }} files={q.files} />
@@ -436,6 +439,7 @@ function ClosedCard({ q, highlight }: { q: QuestionView; highlight: boolean }) {
       </div>
       <h3 className="font-display text-[16px] leading-snug font-extrabold text-balance">{q.title}</h3>
       <Description q={q} />
+      <QuestionTasks q={q} open={false} />
       {q.files.length > 0 && <Attachments compact target={{ pot: projectOfTask(q.id), question: q.id }} files={q.files} />}
       <div className={cn("space-y-1.5 rounded-lg border px-3 py-2.5", dismissed ? "border-border bg-muted/40" : "border-success/40 bg-success/10")}>
         <SectionLabel className={dismissed ? "" : "!text-success"}>{dismissed ? "Dismissed" : "Answer"}</SectionLabel>

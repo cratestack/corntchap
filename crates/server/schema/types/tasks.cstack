@@ -118,6 +118,8 @@ type TaskView {
   lease_live Boolean?
   /// Open, with every dependency and subtask done: claim_next may hand it out.
   ready Boolean?
+  /// An open question linked with blocks=true keeps the task from being ready (see `questions`).
+  question_blocked Boolean?
   /// Unticked checklist items.
   open_items Int
   total_items Int
@@ -184,6 +186,8 @@ type TaskDetail {
   lease_live Boolean?
   /// Open, with every dependency and subtask done: claim_next may hand it out.
   ready Boolean?
+  /// An open question linked with blocks=true keeps the task from being ready (see `questions`).
+  question_blocked Boolean?
   /// Unticked checklist items.
   open_items Int
   total_items Int
@@ -213,6 +217,26 @@ type TaskDetail {
   subtasks TaskLinkView[]
   /// Files attached to the task (get_file for a download URL; links: /files/<id>/<name>).
   files FileRef[]
+  /// Every question linked to the task: the one it was asked on (implicit) and those linked with link_question.
+  questions TaskQuestionView[]
+}
+
+/// A question as a task shows it.
+type TaskQuestionView {
+  /// Question id, e.g. PAY-Q3.
+  id String
+  title String
+  /// open, answered or dismissed.
+  status String
+  /// The task waits on the answer while the question is open.
+  blocks Boolean
+  /// The question was asked on this task (not linked by hand); it never blocks.
+  implicit Boolean
+  /// Who linked it (or asked it, when implicit).
+  linked_by String?
+  /// The answer as text, once answered (or the reason it was dismissed).
+  answer String?
+  answered_by String?
 }
 
 type LeaseView {

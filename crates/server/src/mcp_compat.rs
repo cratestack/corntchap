@@ -79,6 +79,9 @@ pot's question pool with ask (wait=true on the task you hold parks it for you an
 with a fresh lease; do not ask and then block, a blocked task waits for a person). When you are chatting with your owner, check list_questions and offer to go \
 through them: pick_question, ask them, then answer_question with their words. \
 A question addressed to a cook (ask with `to`) wakes it: answer it with answer_question. \
+When a task depends on a question someone else asked (or you asked on another task), tie it with link_question \
+(question, task; blocks=true when you cannot go on without it): you are woken with reason `answer` when it is answered \
+or dismissed, and a task blocked by a question is not ready (claim_next skips it) until then, when it comes back as ready. \
 fireAndForget cooks (list_cooks, list_team_members) take ready work, open a PR and stop: don't message, ask or assign reviews to them; give them work with a task (their owner may DM them). \
 When your work on a task is ready for a second pair of eyes, ask for a review with request_review (the task, \
 a reviewer from the pot's team, and a note saying what to look at: the pull request, the branch); the task keeps \

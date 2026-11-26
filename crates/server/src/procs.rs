@@ -1926,6 +1926,7 @@ impl ProcedureRegistry for Procedures {
                     to: a.to,
                     wait: a.wait.unwrap_or(false),
                     station: a.station,
+                    blocks: a.blocks.unwrap_or(false),
                 },
             )
             .await,
@@ -1946,6 +1947,7 @@ impl ProcedureRegistry for Procedures {
                 &p,
                 &a.project,
                 a.status.as_deref(),
+                a.q.as_deref(),
                 &a.page.unwrap_or_default(),
             ))
             .await
@@ -2045,6 +2047,37 @@ impl ProcedureRegistry for Procedures {
         let p = principal(ctx)?;
         let db = &self.state.db;
         typed(questions::note(db, &p, &a.id, &a.note).await)
+    }
+
+    async fn question_link(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_link::Args,
+        _z: question_link::Authorized,
+    ) -> Result<question_link::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(
+            crate::question_links::link(
+                &self.state.db,
+                &p,
+                &a.question,
+                &a.task,
+                a.blocks.unwrap_or(false),
+            )
+            .await,
+        )
+    }
+
+    async fn question_unlink(
+        &self,
+        _db: &Db,
+        ctx: &CratestackContext,
+        a: question_unlink::Args,
+        _z: question_unlink::Authorized,
+    ) -> Result<question_unlink::Output, CratestackError> {
+        let p = principal(ctx)?;
+        typed(crate::question_links::unlink(&self.state.db, &p, &a.question, &a.task).await)
     }
 
     async fn question_dismiss(

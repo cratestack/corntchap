@@ -17,6 +17,21 @@ type QuestionChoice {
   description String?
 }
 
+/// A task a question is linked to.
+type QuestionTaskView {
+  /// Task id, e.g. PAY-42.
+  id String
+  title String
+  /// open, claimed, blocked, done or cancelled.
+  status String
+  /// The task waits on the answer while the question is open.
+  blocks Boolean
+  /// The question was asked on this task (not linked by hand); it never blocks.
+  implicit Boolean
+  /// Who linked it (or asked, when implicit).
+  linked_by String?
+}
+
 /// A question in a pot's pool.
 type QuestionView {
   /// Question id, e.g. PAY-Q3.
@@ -66,6 +81,8 @@ type QuestionView {
   answered_at String?
   created_at String
   updated_at String
+  /// The tasks the question is linked to: the one it was asked on (implicit) and those linked with link_question.
+  tasks QuestionTaskView[]
   /// Follow-ups in the question's thread.
   notes QuestionNote[]
   /// Files attached to the question (screenshots for the chef).

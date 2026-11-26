@@ -137,7 +137,7 @@ async fn load(c: &mut PgConnection, p: &Principal, r: &str, lock: bool) -> Resul
 }
 
 /// The cook responsible for a task: the one holding it, parked on it, or the last that claimed it.
-async fn responsible(c: &mut PgConnection, task: Uuid) -> Result<Option<Uuid>> {
+pub(crate) async fn responsible(c: &mut PgConnection, task: Uuid) -> Result<Option<Uuid>> {
     Ok(sqlx::query_scalar(
         "select coalesce(t.reserved_for, t.claimed_by,
                 (select e.actor_id from events e where e.task_id = t.id and e.kind = 'task.claimed'
@@ -161,7 +161,7 @@ async fn held(c: &mut PgConnection, p: &Principal, task: Uuid) -> Result<bool> {
     .await?)
 }
 
-async fn is_agent(c: &mut PgConnection, id: Uuid) -> Result<bool> {
+pub(crate) async fn is_agent(c: &mut PgConnection, id: Uuid) -> Result<bool> {
     Ok(sqlx::query_scalar(
         "select kind = 'agent' and disabled_at is null from principals where id = $1",
     )

@@ -103,7 +103,8 @@ const VIEW_ROWS: &str = r#"select t.id as _tid, pr.key || '-' || t.number as id,
     t.created_at, t.updated_at,
     (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
         where d.task_id = t.id and dt.status not in ('done','cancelled'))
-      and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))) as ready,
+      and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
+      and not exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id where ql.task_id = t.id and ql.blocks and qq.status = 'open')) as ready,
     (t.status = 'claimed' and t.lease_expires_at > now()) as lease_live,
     (t.status = 'blocked' and t.reserved_for is not null) as waiting_on_question,
     (select count(*) from items i where i.task_id = t.id and not i.done)::int as open_items,

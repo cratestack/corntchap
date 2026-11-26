@@ -96,6 +96,8 @@ pub fn routes() -> Router<AppState> {
         .route("/questions/{id}/note", post(questions_note))
         .route("/questions/{id}/dismiss", post(questions_dismiss))
         .route("/questions/{id}/release", post(questions_release))
+        .route("/questions/{id}/link", post(questions_link))
+        .route("/questions/{id}/unlink", post(questions_unlink))
         .route("/questions/pick", post(questions_pick))
         .route("/projects/{key}/reviews", get(reviews_list))
         .route("/tasks/{id}/review-request", post(reviews_request))
@@ -686,6 +688,7 @@ async fn questions_ask(
         to: s(&b, "to"),
         wait: b["wait"].as_bool().unwrap_or(false),
         station: s(&b, "station"),
+        blocks: b["blocks"].as_bool().unwrap_or(false),
     };
     ok(questions::ask(&st.db, &p.worker()?, a).await?)
 }
@@ -735,6 +738,29 @@ async fn questions_dismiss(
         true,
     )
     .await?)
+}
+async fn questions_link(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::question_links::link(
+        &st.db,
+        &p.worker()?,
+        &id,
+        &req_s(&b, "task")?,
+        b["blocks"].as_bool().unwrap_or(false),
+    )
+    .await?)
+}
+async fn questions_unlink(
+    State(st): State<AppState>,
+    Authn(p): Auth,
+    Path(id): Path<String>,
+    Json(b): Json<Value>,
+) -> J {
+    ok(crate::question_links::unlink(&st.db, &p.worker()?, &id, &req_s(&b, "task")?).await?)
 }
 async fn questions_release(
     State(st): State<AppState>,

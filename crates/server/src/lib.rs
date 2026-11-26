@@ -21,6 +21,7 @@ pub mod paging;
 pub mod pantry;
 pub mod pass;
 pub mod procs;
+pub mod question_links;
 pub mod questions;
 pub mod repos;
 pub mod rest;

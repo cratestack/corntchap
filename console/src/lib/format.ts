@@ -92,7 +92,8 @@ export function bucketOf(t: Pick<TaskView, "status" | "ready" | "lease_live">): 
 export function taskNote(t: TaskView): string | null {
   if (t.status === "blocked") return t.result ? `blocked: ${t.result}` : "blocked, waiting for a human to unblock";
   if (t.status === "open" && !t.ready) {
-    return t.depends_on.length ? `waits on ${t.depends_on.join(", ")}` : "waits on its subtasks";
+    if (t.depends_on.length) return `waits on ${t.depends_on.join(", ")}`;
+    return t.question_blocked ? "waits on an answer to a question" : "waits on its subtasks";
   }
   if (t.status === "claimed" && !t.lease_live) return "lease ran out, up for scooping again";
   if (t.status === "done" && t.result) return t.result;

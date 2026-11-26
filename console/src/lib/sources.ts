@@ -34,6 +34,8 @@ export const useUsageCooksSource = (f: F<"usageCookPage"> & Q = {}) => useListQu
 export const usePotsSource = (f: F<"potPage"> & Q = {}) => useListQuery("potPage", own(f), f);
 export const useTasksSource = (project: string, f: Omit<F<"taskPage">, "project"> & Q = {}) =>
   useListQuery("taskPage", { project, ...own(f) }, f);
+export const useQuestionsSource = (project: string, f: Omit<F<"questionPage">, "project"> & Q = {}) =>
+  useListQuery("questionPage", { project, ...own(f) }, f);
 export const useMenusSource = (project: string, f: Omit<F<"menuPage">, "project"> & Q = {}) => useListQuery("menuPage", { project, ...own(f) }, f);
 export const useSavedViewsSource = (project: string, q = "", opts: O = {}) => useListQuery("savedViewPage", { project }, { q, ...opts });
 export const useLabelsSource = (project: string, f: { q?: string; bucket?: string | null; enabled?: boolean } = {}) =>

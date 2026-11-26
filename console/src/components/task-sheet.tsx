@@ -37,6 +37,7 @@ import { RepoPicker } from "./repos";
 import { OwnerPicker } from "./owner-picker";
 import { TaskPrs } from "./forge-prs";
 import { TaskReviews } from "./reviews";
+import { TaskQuestions } from "./question-links";
 import { RefreshButton } from "./refresh-button";
 import { Markdown } from "./markdown";
 import { TagInput } from "./tag-input";
@@ -311,6 +312,8 @@ function TaskDetailBody({ id }: { id: string }) {
               <TaskPrs task={t} />
 
               <TaskReviews task={t} />
+
+              <TaskQuestions task={t} />
 
               <section aria-labelledby="ck">
                 <div className="mb-2 flex items-center justify-between">

@@ -32,6 +32,16 @@ const QUESTION_JSON: &str = r#"jsonb_build_object(
   'answered_by', (select name from principals where id = q.answered_by),
   'relayed_by', (select name from principals where id = q.relayed_by),
   'answered_at', q.answered_at, 'created_at', q.created_at, 'updated_at', q.updated_at,
+  'tasks', coalesce((select jsonb_agg(jsonb_build_object(
+      'id', tp.key || '-' || tt.number, 'title', tt.title, 'status', tt.status,
+      'blocks', l.blocks, 'implicit', l.implicit,
+      'linked_by', (select name from principals where id = l.linked_by)) order by tt.number)
+      from (
+        select task_id, blocks, linked_by, false as implicit from question_links where question_id = q.id
+        union all
+        select q.task_id, false, q.asked_by, true where q.task_id is not null
+          and not exists (select 1 from question_links x where x.question_id = q.id and x.task_id = q.task_id)
+      ) l join tasks tt on tt.id = l.task_id join projects tp on tp.id = tt.project_id), '[]'::jsonb),
   'notes', coalesce((select jsonb_agg(jsonb_build_object('author', (select name from principals where id = n.author_id),
       'body', n.body, 'at', n.created_at) order by n.created_at) from question_notes n where n.question_id = q.id), '[]'::jsonb),
   'files', coalesce((select jsonb_agg(jsonb_build_object('id', pr.key || '-F' || f.number, 'name', f.name,
@@ -53,23 +63,23 @@ pub fn parse_ref(s: &str) -> Result<(String, i64)> {
     Ok((k.to_uppercase(), n))
 }
 
-struct Q {
-    id: Uuid,
-    project_id: Uuid,
-    key: String,
-    number: i64,
-    team_id: Uuid,
-    task_id: Option<Uuid>,
-    asked_by: Option<Uuid>,
-    station_id: Option<Uuid>,
-    to_principal: Option<Uuid>,
-    status: String,
-    wait: bool,
-    picked_by: Option<Uuid>,
-    pick_expires_at: Option<DateTime<Utc>>,
+pub(crate) struct Q {
+    pub(crate) id: Uuid,
+    pub(crate) project_id: Uuid,
+    pub(crate) key: String,
+    pub(crate) number: i64,
+    pub(crate) team_id: Uuid,
+    pub(crate) task_id: Option<Uuid>,
+    pub(crate) asked_by: Option<Uuid>,
+    pub(crate) station_id: Option<Uuid>,
+    pub(crate) to_principal: Option<Uuid>,
+    pub(crate) status: String,
+    pub(crate) wait: bool,
+    pub(crate) picked_by: Option<Uuid>,
+    pub(crate) pick_expires_at: Option<DateTime<Utc>>,
 }
 
-async fn load(c: &mut PgConnection, p: &Principal, r: &str, lock: bool) -> Result<Q> {
+pub(crate) async fn load(c: &mut PgConnection, p: &Principal, r: &str, lock: bool) -> Result<Q> {
     let (key, number) = parse_ref(r)?;
     let pr = project_by_key(c, p, &key).await?;
     let sql = format!(
@@ -124,7 +134,7 @@ async fn load(c: &mut PgConnection, p: &Principal, r: &str, lock: bool) -> Resul
     })
 }
 
-async fn view(c: &mut PgConnection, id: Uuid) -> Result<Value> {
+pub(crate) async fn view(c: &mut PgConnection, id: Uuid) -> Result<Value> {
     let sql = format!(
         "select {QUESTION_JSON} from questions q join projects pr on pr.id = q.project_id where q.id = $1"
     );
@@ -193,6 +203,8 @@ pub struct Ask {
     pub to: Option<String>,
     pub wait: bool,
     pub station: Option<String>,
+    /// With `task`: the task waits on the answer (a blocking link, see `question_links`).
+    pub blocks: bool,
 }
 
 /// A long first line is cut near this many characters, at a word boundary, to make a title.
@@ -514,6 +526,9 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
         .await?
         .flatten();
     }
+    if a.blocks && task.is_none() {
+        return invalid("blocks needs the task that waits on the answer (task)");
+    }
     let mut wait = a.wait;
     if wait {
         let Some(t) = &task else {
@@ -571,6 +586,18 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
     .fetch_one(&mut *tx)
     .await?;
     let qref = format!("{}-Q{number}", pr.key);
+    if a.blocks
+        && let Some(t) = &task
+    {
+        sqlx::query(
+            "insert into question_links (question_id, task_id, linked_by, blocks) values ($1,$2,$3,true)",
+        )
+        .bind(id)
+        .bind(t.id)
+        .bind(p.id)
+        .execute(&mut *tx)
+        .await?;
+    }
     if wait && let Some(t) = &task {
         // Park: the task waits for the answer and stays with this cook (and station).
         sqlx::query(
@@ -600,7 +627,7 @@ pub async fn ask(db: &PgPool, p: &Principal, a: Ask) -> Result<Value> {
         task.as_ref().map(|t| t.id),
         "question.asked",
         Some(p.id),
-        json!({"question": qref, "title": short(&title), "kind": sh.kind, "to": a.to}),
+        json!({"question": qref, "title": short(&title), "kind": sh.kind, "to": a.to, "blocks": a.blocks}),
     )
     .await?;
     // Asked of a cook: it is woken (its main station, or the session holding the task). A
@@ -721,6 +748,7 @@ pub async fn page(
     p: &Principal,
     project: &str,
     status: Option<&str>,
+    q: Option<&str>,
     page: &cratestack::CursorPageInput,
 ) -> Result<(Vec<Value>, Option<String>)> {
     let status = status
@@ -750,6 +778,7 @@ pub async fn page(
          from questions q join projects pr on pr.id = q.project_id
          where q.project_id = $1 and ($2 = 'all' or q.status = $2)
            and ($3::text is null or (q.created_at, q.number) {cmp} ($3::text::timestamptz, $4::text::bigint))
+           and ($6::text is null or position(lower($6) in lower(pr.key || '-Q' || q.number || ' ' || q.title)) > 0)
          order by q.created_at {dir}, q.number {dir} limit $5"
     );
     let rows: Vec<(Value, Vec<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
@@ -758,6 +787,7 @@ pub async fn page(
         .bind(paging.key(0))
         .bind(paging.key(1))
         .bind(paging.fetch())
+        .bind(q.map(str::trim).filter(|q| !q.is_empty()))
         .fetch_all(&mut *c)
         .await?;
     let rows = rows
@@ -1212,7 +1242,6 @@ pub async fn answer(
         check_answer(&kind, &choices, allow_other, min, max, &reply)?
     };
     let stored: Option<&str> = Some(given.rendered.as_str()).filter(|s| !s.is_empty());
-    let text = given.rendered.as_str();
     sqlx::query(
         "update questions set status = $2, answer = $3, answer_choices = $6, answer_text = $7,
            answered_by = $4, relayed_by = $5, answered_at = now(),
@@ -1301,21 +1330,14 @@ pub async fn answer(
                 .fetch_one(&mut *tx)
                 .await?;
         if is_agent {
-            let mut prompt = if dismiss {
-                format!(
-                    "Your question {qref} was dismissed by {who}{}.",
-                    stored.map(|s| format!(": {s}")).unwrap_or_default()
-                )
-            } else {
-                let mut s = format!("Your question {qref} was answered by {who}:\n\n{text}\n");
-                if !given.choices.is_empty() {
-                    s.push_str(&format!("\nChosen (ids): {}\n", given.choices.join(", ")));
-                }
-                if let Some(other) = given.text.as_deref().filter(|_| !free) {
-                    s.push_str(&format!("Other (typed): {other}\n"));
-                }
-                s
-            };
+            let mut prompt = answer_prompt(
+                &format!("Your question {qref}"),
+                &who,
+                dismiss,
+                stored,
+                &given,
+                free,
+            );
             if let Some((task, epoch)) = &resumed {
                 prompt.push_str(&format!(
                     "\nYou hold {task} again with lease epoch {epoch}: continue it (pass that epoch to check_item, complete, ...)."
@@ -1334,9 +1356,47 @@ pub async fn answer(
             .await?;
         }
     }
+    // Wake the cooks of the tasks the question is linked to (explicit links and the task it was
+    // asked on): the cook that linked it, the holder or last holder, the owner. The asker has had
+    // its own wake above; nobody who answered is told their own answer.
+    let mut skip = vec![p.id, answered_by];
+    skip.extend(q.asked_by);
+    skip.extend(relayed_by);
+    let title: String = sqlx::query_scalar("select title from questions where id = $1")
+        .bind(q.id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let body = answer_prompt("", &who, dismiss, stored, &given, free);
+    crate::question_links::notify(&mut tx, &q, &title, &skip, body.trim_start()).await?;
     let out = view(&mut tx, q.id).await?;
     tx.commit().await?;
     Ok(out)
+}
+
+/// The answer as a cook reads it: "<subject> was answered by <who>:" and the answer, with the
+/// chosen ids and typed text; or "was dismissed by <who>: <reason>".
+fn answer_prompt(
+    subject: &str,
+    who: &str,
+    dismiss: bool,
+    stored: Option<&str>,
+    given: &Given,
+    free: bool,
+) -> String {
+    if dismiss {
+        return format!(
+            "{subject} was dismissed by {who}{}.",
+            stored.map(|s| format!(": {s}")).unwrap_or_default()
+        );
+    }
+    let mut s = format!("{subject} was answered by {who}:\n\n{}\n", given.rendered);
+    if !given.choices.is_empty() {
+        s.push_str(&format!("\nChosen (ids): {}\n", given.choices.join(", ")));
+    }
+    if let Some(other) = given.text.as_deref().filter(|_| !free) {
+        s.push_str(&format!("Other (typed): {other}\n"));
+    }
+    s
 }
 
 /// A follow-up in a question's thread. A person's note to an open question wakes the cook that

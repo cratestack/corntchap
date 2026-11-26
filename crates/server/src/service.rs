@@ -77,7 +77,8 @@ pub const NO_OPEN_PR_SQL: &str = "not exists (select 1 from forge_prs fp where f
 /// before the routing and cooldown rules).
 pub const READY_SQL: &str = "t.status = 'open'
   and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled'))
-  and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))";
+  and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
+  and not exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id where ql.task_id = t.id and ql.blocks and qq.status = 'open')";
 
 /// SQL predicate on `t` (tasks): what `claim_next`, `wait_for_work` and work wakes hand `agent`
 /// beyond the routing rules: not a task it released a moment ago, not one it keeps giving back, not
@@ -161,7 +162,10 @@ pub const TASK_JSON: &str = r#"jsonb_build_object(
   'lease_epoch', t.lease_epoch, 'lease_expires_at', t.lease_expires_at,
   'lease_live', (t.status = 'claimed' and t.lease_expires_at > now()),
   'ready', (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
-       where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))),
+       where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
+       and not exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id where ql.task_id = t.id and ql.blocks and qq.status = 'open')),
+  'question_blocked', exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id
+       where ql.task_id = t.id and ql.blocks and qq.status = 'open'),
   'open_items', (select count(*) from items i where i.task_id = t.id and not i.done),
   'total_items', (select count(*) from items i where i.task_id = t.id),
   'menu', (select m.key from menus m where m.id = t.menu_id),
@@ -423,6 +427,10 @@ pub(crate) async fn task_full_n(
     o.insert("files".into(), files);
     o.insert("prs".into(), crate::forge::link::prs_of(c, id).await?);
     o.insert("reviews".into(), crate::reviews::of_task(c, id).await?);
+    o.insert(
+        "questions".into(),
+        crate::question_links::of_task(c, id).await?,
+    );
     Ok(t)
 }
 
@@ -580,7 +588,8 @@ pub async fn list_tasks(
            and ($6::text is null or ($6 = '-' and t.owner_id is null)
                 or t.owner_id = (select id from principals where name = $6))
            and (not $4 or (t.status = 'open' and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
-                 where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))))
+                 where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
+                 and not exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id where ql.task_id = t.id and ql.blocks and qq.status = 'open')))
          order by t.priority desc, t.number",
         body = cut_sql("t.body"),
         result = cut_sql("t.result"),
@@ -604,7 +613,7 @@ pub async fn list_tasks(
 }
 
 /// SQL: a task `t` has no unfinished dependency or subtask (the `ready` of a task view).
-const NO_BLOCKERS_SQL: &str = "not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))";
+const NO_BLOCKERS_SQL: &str = "not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled')) and not exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id where ql.task_id = t.id and ql.blocks and qq.status = 'open')";
 
 /// The SQL predicate of a board bucket on `t`, and whether it sorts by priority (the tasks in play) or
 /// by last change (the closed ones). Buckets are the console's columns: `ready` (open with nothing in
@@ -1329,6 +1338,7 @@ pub async fn claim_next(
              and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
              and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on
                              where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
+             and not exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id where ql.task_id = t.id and ql.blocks and qq.status = 'open')
              and (cardinality($4::text[]) = 0 or t.labels && $4::text[])
              and ($5::text is null or exists (select 1 from menus m where m.id = t.menu_id and m.key = $5))
              and ($7::text is null or cardinality(t.repos) = 0 or $7 = any(t.repos))
@@ -1682,6 +1692,18 @@ pub async fn claim_task(
         warning = Some(match warning {
             Some(w) => format!("{w} {pr}"),
             None => pr,
+        });
+    }
+    let waiting = crate::question_links::open_blocking(&mut tx, t.id).await?;
+    if !waiting.is_empty() {
+        let q = format!(
+            "{r} waits on {}: claim_next would not hand it out. Work on what does not depend on the answer, or release \
+             it; you are woken (reason `answer`) when it is answered.",
+            waiting.join(", ")
+        );
+        warning = Some(match warning {
+            Some(w) => format!("{w} {q}"),
+            None => q,
         });
     }
     let news = crate::pantry::news(&mut tx, p.id, t.project_id).await?;
@@ -2604,6 +2626,7 @@ pub async fn ready_for(db: &PgPool, p: &Principal, project: Option<&str>) -> Res
          where ($1::uuid is null or pr.id = $1) and {} and {} and {}
            and (t.status = 'open' or (t.status = 'claimed' and t.lease_expires_at < now()))
            and not exists (select 1 from task_deps d join tasks dt on dt.id = d.depends_on where d.task_id = t.id and dt.status not in ('done','cancelled')) and not exists (select 1 from tasks sc where sc.parent_id = t.id and sc.status not in ('done','cancelled'))
+           and not exists (select 1 from question_links ql join questions qq on qq.id = ql.question_id where ql.task_id = t.id and ql.blocks and qq.status = 'open')
          order by t.priority desc, t.created_at limit 20",
         access_sql("$2", "$3"),
         crate::repos::scope_sql("$3"),
