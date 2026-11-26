@@ -226,7 +226,12 @@ fn usage_pot(args: &Value) -> Option<String> {
 /// model APIs (Anthropic, OpenAI, the AI SDK) take only the input side, so they are not counted.
 fn catalog_chars(result: &Value) -> u64 {
     let mut r = result.clone();
-    for t in r["tools"].as_array_mut().into_iter().flatten() {
+    for t in r
+        .get_mut("tools")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
         if let Some(o) = t.as_object_mut() {
             o.remove("outputSchema");
             o.remove("_meta");
@@ -306,7 +311,9 @@ fn pot_tool(t: &mut Value, key: &str) {
     schema["properties"]["project"]["description"] = json!(format!(
         "Pot key; on this MCP URL it is {key}, so leave it out."
     ));
-    if let Some(req) = schema["required"].as_array_mut() {
+    // `get_mut`: indexing a `&mut Value` with a missing key inserts `null`, and `"required": null`
+    // is invalid JSON Schema (clients reject the whole tool).
+    if let Some(req) = schema.get_mut("required").and_then(Value::as_array_mut) {
         req.retain(|r| r != "project");
     }
 }
@@ -596,7 +603,12 @@ impl<T: McpTools> Compat<T> {
             };
             match method.as_str() {
                 "tools/list" => {
-                    for t in result["tools"].as_array_mut().into_iter().flatten() {
+                    for t in result
+                        .get_mut("tools")
+                        .and_then(Value::as_array_mut)
+                        .into_iter()
+                        .flatten()
+                    {
                         if t["name"].as_str().is_some_and(|n| UI_TOOLS.contains(&n)) {
                             t["_meta"] = ui_meta();
                         }
@@ -609,7 +621,7 @@ impl<T: McpTools> Compat<T> {
                     result["resources"] = json!([ui_resource_entry()]);
                 }
                 "resources/list" => {
-                    if let Some(list) = result["resources"].as_array_mut() {
+                    if let Some(list) = result.get_mut("resources").and_then(Value::as_array_mut) {
                         list.push(ui_resource_entry());
                     }
                 }
@@ -782,7 +794,12 @@ impl<T: McpTools> Compat<T> {
                     Err(m) => return Some(rpc_error(id, -32602, m)),
                 };
                 if let Some(p) = current_pot() {
-                    for t in l["tools"].as_array_mut().into_iter().flatten() {
+                    for t in l
+                        .get_mut("tools")
+                        .and_then(Value::as_array_mut)
+                        .into_iter()
+                        .flatten()
+                    {
                         pot_tool(t, &p.key);
                     }
                 }

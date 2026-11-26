@@ -475,3 +475,100 @@ impl TestApp {
         cookie.split(';').next().unwrap().to_string()
     }
 }
+
+/// Structural JSON Schema 2020-12 check of a tool's `inputSchema` / `outputSchema`: no null-valued
+/// keywords, and every keyword the MCP clients' validators read has the type the meta-schema gives it.
+pub fn schema_problems(path: &str, s: &Value, out: &mut Vec<String>) {
+    let o = match s {
+        Value::Bool(_) => return,
+        Value::Object(o) => o,
+        other => {
+            out.push(format!("{path}: schema is {other}"));
+            return;
+        }
+    };
+    let is_strs = |v: &Value| v.as_array().is_some_and(|a| a.iter().all(Value::is_string));
+    for (k, v) in o {
+        let p = format!("{path}/{k}");
+        if v.is_null() && !matches!(k.as_str(), "default" | "const" | "examples" | "enum") {
+            out.push(format!("{p}: null"));
+            continue;
+        }
+        match k.as_str() {
+            "required" if !is_strs(v) => out.push(format!("{p}: not an array of strings: {v}")),
+            "type" if !(v.is_string() || is_strs(v)) => {
+                out.push(format!("{p}: type must be string or array of strings: {v}"))
+            }
+            "description" | "title" | "$ref" | "$id" | "$schema" | "format" | "pattern"
+                if !v.is_string() =>
+            {
+                out.push(format!("{p}: not a string: {v}"))
+            }
+            "enum" if !v.is_array() => out.push(format!("{p}: not an array: {v}")),
+            "properties" | "$defs" | "definitions" | "patternProperties" => match v.as_object() {
+                Some(m) => m
+                    .iter()
+                    .for_each(|(n, c)| schema_problems(&format!("{p}/{n}"), c, out)),
+                None => out.push(format!("{p}: not an object: {v}")),
+            },
+            "anyOf" | "oneOf" | "allOf" | "prefixItems" => match v.as_array() {
+                Some(a) if !a.is_empty() => a
+                    .iter()
+                    .enumerate()
+                    .for_each(|(i, c)| schema_problems(&format!("{p}/{i}"), c, out)),
+                _ => out.push(format!("{p}: not a non-empty array: {v}")),
+            },
+            "items"
+            | "additionalProperties"
+            | "not"
+            | "if"
+            | "then"
+            | "else"
+            | "contains"
+            | "propertyNames" => schema_problems(&p, v, out),
+            "minimum" | "maximum" | "exclusiveMinimum" | "exclusiveMaximum" | "multipleOf" => {
+                if !v.is_number() {
+                    out.push(format!("{p}: not a number: {v}"));
+                } else if o.get("type").is_some_and(|t| t == "integer")
+                    && !(v.is_i64() || v.is_u64())
+                {
+                    out.push(format!("{p}: integer bound is not an exact integer: {v}"));
+                }
+            }
+            "minLength" | "maxLength" | "minItems" | "maxItems" | "minProperties"
+            | "maxProperties"
+                if !v.is_u64() =>
+            {
+                out.push(format!("{p}: not a non-negative integer: {v}"))
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Every tool of a `tools/list` result, input and output schema, is structurally valid.
+pub fn assert_tool_schemas_valid(label: &str, list: &Value) {
+    let tools = list["tools"].as_array().expect("tools array");
+    assert!(!tools.is_empty(), "{label}: no tools");
+    let mut bad = Vec::new();
+    for t in tools {
+        let name = t["name"].as_str().unwrap_or("?");
+        for side in ["inputSchema", "outputSchema"] {
+            match t.get(side) {
+                None if side == "outputSchema" => {}
+                None => bad.push(format!("{name}: no {side}")),
+                Some(s) => {
+                    if side == "inputSchema" && s["type"] != "object" {
+                        bad.push(format!("{name}/{side}: root type is not object"));
+                    }
+                    schema_problems(&format!("{name}/{side}"), s, &mut bad);
+                }
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{label}: invalid tool schemas:\n{}",
+        bad.join("\n")
+    );
+}

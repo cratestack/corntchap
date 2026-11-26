@@ -396,6 +396,10 @@ async fn an_mcp_client_signs_in_with_oauth_and_is_bound_to_its_pot() {
     .await;
     assert!(x.to_string().contains("OPS-1 is in pot OPS"), "{x}");
     let (_, tl, _) = mcp(&app, "/mcp/PAY", &access, "tools/list", json!({})).await;
+    if let Ok(dir) = std::env::var("DUMP_TOOLS") {
+        std::fs::write(format!("{dir}/pot.json"), tl["result"].to_string()).unwrap();
+    }
+    common::assert_tool_schemas_valid("/mcp/PAY", &tl["result"]);
     let lt = tl["result"]["tools"]
         .as_array()
         .unwrap()
